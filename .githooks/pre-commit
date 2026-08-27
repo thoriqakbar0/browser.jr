@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+if ! command -v debtmap >/dev/null 2>&1; then
+    echo "pre-commit: debtmap is required; install it with cargo install debtmap" >&2
+    exit 127
+fi
+
+exec debtmap validate . --config .debtmap.toml --format terminal
