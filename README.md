@@ -1,21 +1,59 @@
-# browser.jr product description
+# browser.jr
 
-A behavior specification for browser.jr, a small browser engine built for fast, programmable interface verification.
+A browser engine package for programmable interface verification.
+
+browser.jr loads a local page, computes supported layout evidence, and applies deterministic design rules. The CLI and Rust package share one session model.
+
+## Current status
+
+Evidence date: 31 August 2026.
+
+The Rust implementation loads bounded loopback HTTP pages. It parses static HTML and a stated inline-CSS subset. Parent-aware block flow and fixed pixel geometry support horizontal-overflow lint.
+
+One project rule is available. `--max-width <element> <css-px>` checks an explicit width limit without inventing a design preference. Missing or unsupported evidence blocks the affected rule.
+
+`snapshot <url> --interactive` reports a stated native HTML and ARIA role subset. It assigns ordered references for agent use.
+
+Grid inspection, user-agent comparison, watch mode, JavaScript execution, and the REPL are decided but unimplemented. Numeric budgets remain open.
+
+## Quick start
+
+Start the page's development server, then run:
+
+```sh
+./browser.jr lint http://localhost:3000
+```
+
+Set a viewport and a project width limit when the page needs them:
+
+```sh
+./browser.jr lint http://localhost:3000 \
+  --viewport 1280 \
+  --max-width content 720
+```
+
+Capture the supported interactive semantic elements:
+
+```sh
+./browser.jr snapshot http://localhost:3000 --interactive
+```
+
+The element argument is a semantic element identifier. An HTML `id` supplies that identifier when present.
 
 ## Purpose
 
-browser.jr loads a local web page and lints its rendered design. It reports measurable problems such as overflow, clipping, broken grids, unsafe tap targets, and inconsistent alignment. It can repeat the same checks across viewports and user-agent profiles.
+browser.jr checks rendered evidence for measurable interface defects.
 
-The engine is a new implementation. It is not defined as a wrapper around an existing browser. The package and the interactive REPL use the same engine and inspection model.
+The engine is a new implementation. It is not defined as a wrapper around an existing browser.
 
-The primary experience is `browser.jr lint <url>` against a running development server. Watch mode keeps the engine beside the developer's normal edit-and-refresh loop. The REPL and package expose the same observations for investigation, custom checks, and AI control.
+The primary experience is `browser.jr lint <url>` against a running development server. Package callers use the same typed observations.
 
-This repository contains the intended behavior and an early Rust implementation slice. `./browser.jr help` and `./browser.jr --version` run locally. Page loading and design lint execution remain unavailable. No size budget, speed budget, or compatibility result exists yet.
+This repository owns the product description and its implementation. Product documents distinguish current evidence, decided behavior, and open questions.
 
 ### What this is not
 
 - It is not a general consumer browser. Tabs, bookmarks, accounts, extensions, and browsing history are outside the first scope.
-- It is not API reference documentation. API reference will come from the exported package types and REPL help after implementation begins.
+- It is not API reference documentation. Exported package types own implemented API details.
 - It is not a claim of full web-platform compatibility. Each supported feature needs a test and a stated compatibility boundary.
 - It is not organized by package or module. Each behavior is described where the user meets it.
 
@@ -29,7 +67,41 @@ This repository contains the intended behavior and an early Rust implementation 
 - End each feature document with open questions and its evidence state.
 - State surprising or inconsistent behavior plainly.
 
-## The work to be done
+## Managing the product description
+
+Each product fact has one owner. Other documents link to that owner instead of copying the same rule.
+
+| Fact | Owner |
+| --- | --- |
+| Product identity, scope, current status, and coverage | This `README.md` |
+| Observable behavior for one feature | The matching feature document |
+| Shared terms | [`glossary.md`](glossary.md) |
+| Internal ownership and data flow | [`architecture.md`](architecture.md) |
+| Writing order and evidence rules | [`goal.md`](goal.md) |
+| Runtime proof | [`verification/`](verification/README.md) |
+| Confirmed conflicts and defects | [`bug-triage.md`](bug-triage.md) |
+
+Use these evidence labels consistently:
+
+- `implemented` means code and an automated test support the claim.
+- `verified` means the running product passed the important hand checks.
+- `decided` means the product owner defined behavior that code may not support yet.
+- `open` means no product decision or sufficient evidence exists.
+
+These labels describe behavior claims. The coverage table uses `not started`, `drafted`, and `verified` to describe document completion.
+
+When behavior changes:
+
+1. Update the document that owns the behavior.
+2. Update `glossary.md` when the change adds or changes a term.
+3. Update this README when scope, current status, structure, or coverage changes.
+4. Add or update the matching verification claim.
+5. Record conflicting runtime evidence in `bug-triage.md`.
+6. Change a status to `verified` only after the required hand checks pass or reach triage.
+
+Runtime checks, automated tests, and code provide evidence for current behavior. An explicit product decision defines intended behavior. Record any conflict in `bug-triage.md`. Label intended but unimplemented behavior instead of describing it as current.
+
+## Product document plan
 
 Each document describes one user-visible behavior. The set starts with the CLI, then defines the shared page model, design lint, inspection, and automation.
 
@@ -71,11 +143,11 @@ If a behavior has no implementation, write only intended behavior supplied by th
 
 ### Verification
 
-Drafting reads code and tests. Verification watches the running engine. The future `verification/` directory will hold one observable claim per checklist row.
+Drafting reads code and tests. Verification watches the running engine. The `verification/` directory holds one observable claim per checklist row.
 
 A document becomes `drafted` after code evidence or an explicit product decision defines its behavior. It becomes `verified` only after all important checklist items pass or have a recorded triage decision.
 
-`bug-triage.md` will collect behavior that code or runtime checks show to be inconsistent or defective. Missing implementation is planned work, not a bug.
+`bug-triage.md` records behavior that conflicts with a product decision or runtime evidence. Missing implementation belongs in the coverage table, not bug triage.
 
 ### Order of work
 
@@ -85,6 +157,8 @@ A document becomes `drafted` after code evidence or an explicit product decision
 4. **Remaining behavior.** Add automation, lifecycle, diagnostics, compatibility boundaries, and verification checklists.
 
 ### Scope decisions
+
+These decisions define intended scope. The [current status](#current-status) section records implementation evidence.
 
 - **Primary surface.** `browser.jr lint <url>` checks a live local page. Watch mode repeats checks during development.
 - **Product identity.** browser.jr is a new browser engine and package. Existing engines may inform conformance tests but do not define its architecture.
@@ -102,12 +176,12 @@ A document becomes `drafted` after code evidence or an explicit product decision
 ## Structure
 
 ```text
-README.md                              this file
+README.md                              product entry point, status, scope, and document ownership
 architecture.md                        proposed internal architecture and rationale
-goal.md                                standing drafting instructions
+goal.md                                product-description workflow and evidence rules
 AGENTS.md                              agent entry point
 glossary.md                            shared vocabulary
-bug-triage.md                          confirmed defects and product decisions
+bug-triage.md                          confirmed conflicts and defects
 Cargo.toml                             Rust package and binary configuration
 .debtmap.toml                          Rust technical-debt analysis settings
 .githooks/pre-commit                   tracked Debtmap commit gate
@@ -117,19 +191,22 @@ src/
   lib.rs                               package boundary
   main.rs                              binary entry point
   cli.rs                               argument parsing and local exits
-  session.rs                           typed request execution
+  loading.rs                           bounded loopback HTTP page loading
+  page.rs                              HTML semantics, ancestry, and horizontal box extraction
+  session.rs                           typed page, snapshot, and rule requests
   layout.rs                            field program, clean layout, and width invalidation
   non_empty.rs                         non-empty evidence and result collections
-  snapshot.rs                          immutable structured evidence
-  rules.rs                             horizontal-overflow evaluation
+  snapshot.rs                          immutable layout and interactive evidence
+  rules.rs                             built-in overflow and project width evaluation
 
 tests/
   cli.rs                               compiled-process behavior
-  package.rs                           public session and rule behavior
+  package.rs                           public page, snapshot, and rule behavior
 
 verification/
   README.md                            hand-verification protocol
   design-lint.md                       checks for the primary lint workflow
+  capture-snapshot.md                  checks for interactive semantic snapshots
   foundations.md                       checks for the shared models
   loading-and-inspection.md            checks for the core workflow
   automation-and-lifecycle.md          checks for scripting and failures
@@ -192,7 +269,7 @@ Status is one of `not started`, `drafted`, or `verified`.
 | `bug-triage.md` | drafted |
 | `verification/README.md` | drafted |
 | `verification/design-lint.md` | drafted |
-| `verification/` remaining 3 checklists | not started |
+| `verification/` remaining 2 checklists | not started |
 | `foundations/evaluation.md` | not started |
 | `foundations/session.md` | not started |
 | `foundations/page-and-document.md` | not started |
@@ -203,14 +280,14 @@ Status is one of `not started`, `drafted`, or `verified`.
 | `repl/simple-expression.md` | not started |
 | `repl/help-and-discovery.md` | not started |
 | `repl/output.md` | not started |
-| `loading/open-page.md` | not started |
+| `loading/open-page.md` | drafted |
 | `loading/navigation.md` | not started |
 | `loading/network-control.md` | not started |
 | `inspection/query-elements.md` | not started |
 | `inspection/inspect-layout.md` | not started |
 | `inspection/inspect-grid.md` | not started |
 | `inspection/compare-user-agents.md` | not started |
-| `inspection/capture-snapshot.md` | not started |
+| `inspection/capture-snapshot.md` | drafted |
 | `verification-features/design-lint.md` | drafted |
 | `verification-features/evaluate-check.md` | not started |
 | `verification-features/diagnostics.md` | not started |
@@ -228,12 +305,10 @@ Status is one of `not started`, `drafted`, or `verified`.
 
 The source repository is this repository at `/Users/thor/work/browser.jr`. It contains the early implementation described below.
 
-- `README.md`: product scope, interaction shape, and planned behavior documents
+- `README.md`: product scope, interaction shape, and behavior documents
 - `architecture.md`: proposed ownership, data model, module boundaries, and verification order
 - `glossary.md`: current vocabulary and unresolved terms
-- `goal.md`: evidence rules and future reading order
-
-The current implementation proves CLI discovery, a synthetic clean-layout rule path, and one ordered width mutation. Page loading, CSS layout, watch mode, and compatibility remain open.
+- `goal.md`: evidence rules and reading order
 
 ## Development
 
@@ -257,4 +332,4 @@ Enable the tracked pre-commit hook once per checkout:
 git config core.hooksPath .githooks
 ```
 
-The hook runs `debtmap validate . --config .debtmap.toml --format terminal` before each commit.
+The hook checks Debtmap configuration, Rust formatting, Clippy warnings, and tests. It rejects debt density above 30 per 1,000 lines.

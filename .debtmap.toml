@@ -1,15 +1,16 @@
 [thresholds]
-complexity = 10
-duplication = 50
+complexity = 8
+duplication = 20
 max_file_length = 500
-max_function_length = 50
+max_function_length = 30
+min_score_threshold = 2.0
 
 [thresholds.validation]
-max_average_complexity = 10.0
-max_debt_density = 50.0
-max_codebase_risk_score = 7.0
+max_average_complexity = 7.0
+max_debt_density = 30.0
+max_codebase_risk_score = 5.0
 min_coverage_percentage = 0.0
-max_total_debt_score = 10000
+max_total_debt_score = 100
 
 [languages]
 enabled = ["rust"]
@@ -21,6 +22,3 @@ detect_duplication = true
 
 [ignore]
 patterns = ["target/**"]
-
-[output]
-default_format = "terminal"

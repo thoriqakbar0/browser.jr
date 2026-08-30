@@ -1,16 +1,24 @@
 mod cli;
 mod layout;
+mod loading;
 mod non_empty;
+mod page;
 mod rules;
 mod session;
 mod snapshot;
 
 pub use cli::{ExitStatus, run_cli};
 pub use layout::{ElementInput, LayoutError, LayoutInput, LayoutMutation, SemanticElementId};
+pub use loading::LoadError;
 pub use non_empty::NonEmpty;
-pub use rules::{Comparison, Finding, RuleConstraint, RuleResult};
-pub use session::{ApplyMutation, LintLayout, Session, SessionError, SessionRequest};
-pub use snapshot::{EvidenceRef, SnapshotId};
+pub use rules::{Comparison, Finding, RuleConstraint, RuleResult, WidthFinding};
+pub use session::{
+    ApplyMutation, CaptureInteractiveSnapshot, CheckElementWidth, LintLayout, OpenPage, OpenedPage,
+    Session, SessionError, SessionRequest,
+};
+pub use snapshot::{
+    EvidenceRef, InteractiveElement, InteractiveElementRef, InteractiveSnapshot, SnapshotId,
+};
 
 #[cfg(test)]
 mod tests {

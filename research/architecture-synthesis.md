@@ -2,6 +2,8 @@
 
 Date: 28 August 2026.
 
+Implementation evidence updated: 30 August 2026.
+
 This note records the architecture arena that produced the [architecture draft](../architecture.md). It is a design record, not runtime evidence.
 
 ## Candidates
@@ -73,4 +75,4 @@ The remaining risk is first-slice size. The implementation must begin with one f
 
 The synthesis was reviewed against `README.md`, `goal.md`, `glossary.md`, and the design-lint documents. It keeps unavailable evidence from becoming a pass and carries target-matrix context into findings.
 
-The initial runtime exercises typed requests, clean layout, immutable evidence, one overflow rule, and clean-equivalent width invalidation. It does not load pages or prove general incremental equivalence.
+The runtime now loads bounded loopback HTML and computes a stated horizontal layout subset. It exercises typed requests, immutable evidence, overflow and project width rules, and clean-equivalent width invalidation. General incremental equivalence remains unproved.

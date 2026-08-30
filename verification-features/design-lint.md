@@ -1,12 +1,20 @@
 # Design lint
 
+Status: drafted.
+
+One-shot loopback lint and `max-element-width` have implementation evidence dated 29 August 2026.
+
+Watch mode, target matrices, user-agent profiles, project configuration, and machine-readable output are decided but unimplemented.
+
 ## Summary
 
-Design lint checks a live web page for measurable design defects. The developer supplies a page URL. browser.jr loads the page, computes rendered state, applies built-in and project rules, then reports findings with evidence.
+Design lint compares rendered evidence with built-in and project rules. Each finding reports the measured value, expectation, and supporting snapshot.
 
-The primary entry point is `browser.jr lint <url>`. The developer can run it once or keep it active in watch mode. Machine-readable output lets continuous integration and AI agents consume the same results.
+The implemented entry point is one-shot `browser.jr lint <url>`. Watch mode and machine-readable output remain unimplemented.
 
-Design lint does not judge taste. A built-in rule may report horizontal overflow because the rendered box crosses the viewport. A project rule may report a 12px gap because the project allows only 8px and 16px gaps.
+Design lint does not judge taste. The built-in rule reports a rendered box that crosses the viewport. The project width rule checks a limit supplied by the caller.
+
+The current CLI supports one project rule. `--max-width <element> <css-px>` compares one semantic element with an explicit caller-owned limit. browser.jr does not invent a readability width.
 
 ## The simple case
 
@@ -49,7 +57,7 @@ Help and version requests finish without loading a page. Invalid arguments and i
 
 An immediate exit does not create a snapshot or finding. It reports whether the invocation completed locally or rejected its input.
 
-The exact output streams and exit statuses remain open until the CLI foundation defines them.
+The current one-shot slice uses stdout for pass and findings. It uses stderr for invalid, blocked, and load failures.
 
 ### Begin running
 
@@ -67,6 +75,8 @@ Built-in objective rules may check overflow, clipping, overlap, tap-target size,
 
 Project rules may compare observations with design tokens or component-specific expectations. A project rule cannot alter the evidence produced for another rule.
 
+The current `max-element-width` rule uses geometry from the same snapshot as horizontal overflow. It passes at or below the limit and fails above it. A missing or unsupported target blocks only that comparison.
+
 The terminal may stream progress. It must not report a final pass before all enabled rules and target matrix entries finish.
 
 Watch mode keeps the invocation active. After a relevant page change settles, browser.jr starts a new run and replaces the displayed current result. Previous results remain distinguishable in machine-readable output.
@@ -81,7 +91,7 @@ A one-shot invocation finishes after every target matrix entry produces findings
 
 Every finding includes its rule, severity, affected element, target matrix entry, expectation, observed value, and evidence. Missing required evidence blocks the rule instead of producing a false pass.
 
-A lint error and a tool failure are different outcomes. Their exact exit statuses remain owned by the future CLI foundation.
+A clean result exits zero. Findings exit one. Invalid input exits two. Blocked and tool failures exit three.
 
 Watch mode finishes after graceful cancellation. It preserves the last complete result and discards an incomplete replacement run.
 
@@ -116,7 +126,7 @@ After graceful cancellation, the developer returns to the shell. Watch mode keep
 
 **Configuration precedence.** Explicit flags override project configuration. Defaults apply only when neither supplies a value. Exact file format and discovery remain open.
 
-**Output and exit status.** Human-readable output favors diagnosis. Machine-readable output keeps stable fields and no terminal decoration. Exact exit statuses remain open.
+**Output and exit status.** Current human output uses statuses zero through three. Machine-readable output remains open.
 
 **Resource limits.** Each run needs bounds for page count, time, memory, and document complexity. Hitting a bound blocks the affected result.
 
@@ -144,16 +154,18 @@ After graceful cancellation, the developer returns to the shell. Watch mode keep
 - Watch mode receives changes faster than runs finish.
 - The page is empty but valid.
 - Every rule is disabled.
+- A project width limit names an element that the page does not contain.
+- A project width limit is zero.
 
 ## Open questions and verification
 
 - Define the page-readiness and change-settling conditions.
-- Define default viewports and user-agent profiles.
+- Decide whether 1280 CSS pixels remains the default viewport.
 - Define configuration discovery, format, and reload behavior.
 - Define rule severities, suppression, and deduplication.
-- Define the exit-status contract for clean, finding, blocked, and tool-failure outcomes.
+- Define user-agent profiles and target matrices.
 - Define one-shot behavior when the document changes during a run.
 - Define resource budgets before claiming that browser.jr is small or fast.
-- Verify every intended behavior after the Rust engine and design lint execution exist.
+- Verify each unimplemented behavior when its runnable slice lands.
 
-Specified from product decisions on 2026-08-27. The initial source implements CLI discovery and synthetic layout checks, not live design lint.
+Specified from product decisions on 2026-08-27. The loopback static-HTML and explicit width-limit slices passed compiled-process checks on 2026-08-29.

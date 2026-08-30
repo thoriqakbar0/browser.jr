@@ -3,6 +3,7 @@ use crate::non_empty::NonEmpty;
 use crate::snapshot::{EvidenceRef, ObservationCell, Snapshot};
 
 pub(crate) const HORIZONTAL_OVERFLOW: &str = "horizontal-overflow";
+pub(crate) const MAX_ELEMENT_WIDTH: &str = "max-element-width";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Finding {
@@ -17,24 +18,34 @@ pub struct Finding {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuleConstraint {
     Unsupported { element: String, reason: String },
+    MissingElement { element: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Comparison {
+pub enum Comparison<F = Finding> {
     Pass,
-    Fail(NonEmpty<Finding>),
+    Fail(NonEmpty<F>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RuleResult {
+pub enum RuleResult<F = Finding> {
     Compared {
         rule: &'static str,
-        comparison: Comparison,
+        comparison: Comparison<F>,
     },
     Blocked {
         rule: &'static str,
         causes: NonEmpty<RuleConstraint>,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WidthFinding {
+    pub affected_element: SemanticElementId,
+    pub viewport_width: u64,
+    pub maximum_width: u64,
+    pub observed_width: u64,
+    pub evidence: NonEmpty<EvidenceRef>,
 }
 
 pub(crate) fn evaluate_horizontal_overflow(snapshot: &Snapshot) -> RuleResult {
@@ -82,5 +93,58 @@ pub(crate) fn evaluate_horizontal_overflow(snapshot: &Snapshot) -> RuleResult {
             rule: HORIZONTAL_OVERFLOW,
             comparison: Comparison::Pass,
         }
+    }
+}
+
+pub(crate) fn evaluate_max_element_width(
+    snapshot: &Snapshot,
+    element: &str,
+    maximum_width: u64,
+) -> RuleResult<WidthFinding> {
+    let observation = snapshot
+        .geometry
+        .iter()
+        .find(|observation| match observation {
+            ObservationCell::Available(observation) => {
+                observation.value.element.as_str() == element
+            }
+            ObservationCell::Unsupported {
+                element: observed_element,
+                ..
+            } => observed_element.as_str() == element,
+        });
+
+    match observation {
+        Some(ObservationCell::Available(observation)) => {
+            let geometry = &observation.value;
+            let comparison = if geometry.width > maximum_width {
+                Comparison::Fail(NonEmpty::one(WidthFinding {
+                    affected_element: geometry.element.clone(),
+                    viewport_width: snapshot.viewport_width,
+                    maximum_width,
+                    observed_width: geometry.width,
+                    evidence: observation.evidence.clone(),
+                }))
+            } else {
+                Comparison::Pass
+            };
+            RuleResult::Compared {
+                rule: MAX_ELEMENT_WIDTH,
+                comparison,
+            }
+        }
+        Some(ObservationCell::Unsupported { element, reason }) => RuleResult::Blocked {
+            rule: MAX_ELEMENT_WIDTH,
+            causes: NonEmpty::one(RuleConstraint::Unsupported {
+                element: element.as_str().into(),
+                reason: reason.clone(),
+            }),
+        },
+        None => RuleResult::Blocked {
+            rule: MAX_ELEMENT_WIDTH,
+            causes: NonEmpty::one(RuleConstraint::MissingElement {
+                element: element.into(),
+            }),
+        },
     }
 }

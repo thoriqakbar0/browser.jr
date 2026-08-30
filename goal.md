@@ -1,20 +1,50 @@
-# Goal: complete the browser.jr product description
+# Goal: maintain the browser.jr product description
 
 You are working in the `browser.jr` repository. Read `README.md` and `glossary.md` first. The README defines the product, document template, fixed interaction shape, structure, and coverage table.
 
-The repository is at `/Users/thor/work/browser.jr`. It contains an early Rust implementation. Treat unimplemented product intent as requirements, not runtime evidence.
+The repository is at `/Users/thor/work/browser.jr`. Read the README's dated status before describing implementation.
+
+Treat unimplemented intent as decided behavior, not runtime evidence.
+
+## Document ownership
+
+- `README.md` owns product identity, scope, current status, document structure, and coverage.
+- Each feature document owns its observable behavior.
+- `glossary.md` owns shared terms.
+- `architecture.md` owns internal design and must not redefine user-visible behavior.
+- `verification/` records runtime proof and must not define desired behavior.
+- `bug-triage.md` records confirmed conflicts between intent and evidence.
+
+Link to the owner when another document needs the same fact. Do not maintain two copies of one rule.
 
 ## Source of truth
 
-Use sources in this order once implementation begins:
+Use these sources for current behavior, in order:
 
-1. Session state, the evaluator, and the page lifecycle.
-2. Parsing, style, layout, and user-agent behavior.
-3. Behavior, regression, and web-platform conformance tests.
-4. REPL commands, package exports, help output, and diagnostics.
-5. Defaults, thresholds, resource budgets, and compatibility declarations.
+1. Running-product checks with recorded inputs and environment.
+2. Behavior, regression, and web-platform conformance tests.
+3. Session, evaluator, page, parsing, style, layout, and rule code.
+4. CLI help, diagnostics, and package exports.
+
+Use explicit product decisions in the owning document for intended behavior. When current evidence conflicts with intent, preserve both and add a `bug-triage.md` entry.
 
 If a behavior has no implementation, record it under "Open questions and verification." Do not invent syntax, defaults, numeric limits, or compatibility.
+
+An explicit product decision may define unimplemented behavior. Label it as decided and unverified.
+
+## Change workflow
+
+1. Identify the document that owns the changed behavior.
+2. Read its implementation path, tests, and current verification rows.
+3. Update the owner document before summaries and indexes.
+4. Update shared terms only in `glossary.md`.
+5. Update README status, scope, structure, or coverage when affected.
+6. Add or revise one observable verification claim.
+7. Record conflicting evidence in `bug-triage.md`.
+8. Run links, tests, and the relevant hand checks.
+9. Record the evidence date and commit when one exists.
+
+Use `implemented`, `verified`, `decided`, and `open` as evidence labels. The README defines their meanings.
 
 ## Writing rules
 
@@ -30,31 +60,14 @@ If a behavior has no implementation, record it under "Open questions and verific
 - End with open questions and the current evidence state.
 - Never write "verified against" until a source commit exists and the behavior was checked.
 
-## Things already established
+## Product decisions
 
-- browser.jr is a new browser engine, not a predefined wrapper around another engine.
-- The product is a small package for fast, programmable interface verification.
-- Grid inspection and user-agent comparison are first-class examples.
-- `browser.jr lint <url>` is the primary developer workflow.
-- Watch mode repeats design lint during the edit-and-refresh loop.
-- The REPL investigates findings and supports custom checks.
-- AI agents and package callers use the same session and evaluation model.
-- The CLI unit of interaction is an invocation.
-- The five phases are invoke, exit immediately, begin running, while running, and finish.
-- Built-in rules report measurable defects. Project rules express local design decisions.
-- Findings identify the rule, severity, target, viewport, expected value, observed value, and evidence.
-- The browser, layout, and lint core use Rust.
-- An existing embedded JavaScript runtime may power the REPL.
-- The first version uses structured layout evidence, not pixel comparison.
-- Watch mode uses Spineless Traversal for incremental layout invalidation.
-- A clean full layout remains the correctness oracle and recovery path.
-- Performance and package size need numeric budgets before they become testable claims.
-- Unsupported web behavior must be visible. It cannot silently produce a claimed valid result.
+The README's scope decisions own product intent. Feature documents own detailed behavior. Do not copy either set into this workflow file.
 
 ## Order of work
 
-1. Write `cli/help.md` as the pilot after a runnable binary exists.
-2. Write foundations in README order. Add proven rules to this file.
+1. Keep the completed `cli/help.md` pilot synchronized with the runnable binary.
+2. Write foundations in README order.
 3. Write the loading and inspection documents after their complete state handling can be traced.
 4. Write verification, automation, and cross-cutting documents.
 5. Build verification checklists from observable claims.
@@ -64,10 +77,11 @@ If a behavior has no implementation, record it under "Open questions and verific
 ## Working rules
 
 - Keep the README structure and coverage table synchronized.
+- Keep each product fact in one owning document.
 - Preserve stable checklist and triage identifiers after their first use.
 - Keep changes focused on described behavior.
 - Record unknowns and continue with supported facts.
-- Treat this repository as both the future source and the description location.
+- Keep the implementation and product documents in this repository.
 - Commit, push, file issues, deploy, or release only when Thoriq asks.
 
-The description is complete when every planned document exists, links resolve, vocabulary agrees, and verification status matches current evidence.
+The description is complete when every coverage-table document exists, links resolve, vocabulary agrees, and verification status matches recorded evidence.

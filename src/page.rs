@@ -1,0 +1,872 @@
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
+
+use html5ever::tendril::StrTendril;
+use html5ever::tokenizer::{
+    BufferQueue, CharacterTokens, EndTag, ParseError, StartTag, TagToken, Token, TokenSink,
+    TokenSinkResult, Tokenizer,
+};
+
+use crate::{ElementInput, LayoutInput};
+
+#[derive(Debug)]
+struct ElementSource {
+    id: String,
+    tag: String,
+    attributes: BTreeMap<String, String>,
+    parent: Option<usize>,
+    text: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InteractiveElementSource {
+    pub(crate) element: String,
+    pub(crate) role: String,
+    pub(crate) name: String,
+}
+
+#[derive(Debug)]
+struct OpenElement {
+    tag: String,
+    content_index: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ContainingBlock {
+    x: i64,
+    width: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ResolvedBox {
+    border_x: i64,
+    border_width: u64,
+    content_x: i64,
+    content_width: u64,
+}
+
+#[derive(Default)]
+struct PageSink {
+    elements: RefCell<Vec<ElementSource>>,
+    stack: RefCell<Vec<OpenElement>>,
+    next_ordinal: Cell<usize>,
+    has_stylesheet: Cell<bool>,
+    parse_error: RefCell<Option<String>>,
+}
+
+impl TokenSink for PageSink {
+    type Handle = ();
+
+    fn process_token(&self, token: Token, _line_number: u64) -> TokenSinkResult<Self::Handle> {
+        match token {
+            TagToken(tag) if tag.kind == StartTag => self.start_tag(tag),
+            TagToken(tag) if tag.kind == EndTag => self.end_tag(tag.name.as_ref()),
+            CharacterTokens(text) => self.append_text(text.as_ref()),
+            ParseError(error) => {
+                let mut first_error = self.parse_error.borrow_mut();
+                if first_error.is_none() {
+                    *first_error = Some(error.to_string());
+                }
+            }
+            _ => {}
+        }
+        TokenSinkResult::Continue
+    }
+}
+
+impl PageSink {
+    fn start_tag(&self, tag: html5ever::tokenizer::Tag) {
+        let tag_name = tag.name.to_string();
+        let attributes = tag
+            .attrs
+            .iter()
+            .map(|attribute| {
+                (
+                    attribute.name.local.to_string(),
+                    attribute.value.to_string(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        if tag_name == "style"
+            || (tag_name == "link"
+                && attributes.get("rel").is_some_and(|value| {
+                    value
+                        .split_ascii_whitespace()
+                        .any(|part| part.eq_ignore_ascii_case("stylesheet"))
+                }))
+        {
+            self.has_stylesheet.set(true);
+        }
+
+        let content_index = if is_content_element(&tag_name) {
+            let ordinal = self.next_ordinal.get() + 1;
+            self.next_ordinal.set(ordinal);
+            let id = attributes
+                .get("id")
+                .cloned()
+                .unwrap_or_else(|| format!("{tag_name}[{ordinal}]"));
+            let parent = self
+                .stack
+                .borrow()
+                .iter()
+                .rev()
+                .find_map(|open| open.content_index);
+            let mut elements = self.elements.borrow_mut();
+            let index = elements.len();
+            elements.push(ElementSource {
+                id,
+                tag: tag_name.clone(),
+                attributes: attributes.clone(),
+                parent,
+                text: String::new(),
+            });
+            Some(index)
+        } else {
+            None
+        };
+
+        if !is_void_element(&tag_name) && !tag.self_closing {
+            self.stack.borrow_mut().push(OpenElement {
+                tag: tag_name,
+                content_index,
+            });
+        }
+    }
+
+    fn end_tag(&self, tag_name: &str) {
+        let mut stack = self.stack.borrow_mut();
+        if let Some(index) = stack.iter().rposition(|open| open.tag == tag_name) {
+            stack.truncate(index);
+        }
+    }
+
+    fn append_text(&self, text: &str) {
+        let content_indices = self
+            .stack
+            .borrow()
+            .iter()
+            .filter_map(|open| open.content_index)
+            .collect::<Vec<_>>();
+        let mut elements = self.elements.borrow_mut();
+        for index in content_indices {
+            elements[index].text.push_str(text);
+        }
+    }
+}
+
+fn parse_element_sources(html: &str) -> (Vec<ElementSource>, bool, Option<String>) {
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from(html));
+    let tokenizer = Tokenizer::new(PageSink::default(), Default::default());
+    let _ = tokenizer.feed(&input);
+    tokenizer.end();
+
+    (
+        tokenizer.sink.elements.into_inner(),
+        tokenizer.sink.has_stylesheet.get(),
+        tokenizer.sink.parse_error.into_inner(),
+    )
+}
+
+pub(crate) fn layout_input_from_html(html: &str, viewport_width: u64) -> LayoutInput {
+    let (sources, has_stylesheet, parse_error) = parse_element_sources(html);
+    let mut resolved = Vec::<Result<ResolvedBox, String>>::with_capacity(sources.len());
+    let mut elements = Vec::with_capacity(sources.len() + usize::from(parse_error.is_some()));
+
+    for source in sources {
+        let parent = source
+            .parent
+            .map(|index| resolved[index].as_ref().copied().map_err(Clone::clone))
+            .transpose()
+            .map(|parent| {
+                parent.map_or(
+                    ContainingBlock {
+                        x: 0,
+                        width: viewport_width,
+                    },
+                    |parent| ContainingBlock {
+                        x: parent.content_x,
+                        width: parent.content_width,
+                    },
+                )
+            });
+        let layout = if has_stylesheet {
+            Err("linked and embedded stylesheets are not implemented".into())
+        } else {
+            parent.and_then(|parent| resolve_horizontal_box(&source, parent, viewport_width))
+        };
+
+        match &layout {
+            Ok(layout) => elements.push(ElementInput::supported(
+                source.id,
+                layout.border_x,
+                layout.border_width,
+            )),
+            Err(reason) => elements.push(ElementInput::unsupported(source.id, reason.clone())),
+        }
+        resolved.push(layout);
+    }
+
+    if let Some(error) = parse_error {
+        elements.push(ElementInput::unsupported(
+            "document",
+            format!("HTML tokenization reported: {error}"),
+        ));
+    }
+    if elements.is_empty() {
+        elements.push(ElementInput::unsupported(
+            "document",
+            "the page has no measurable content elements",
+        ));
+    }
+
+    LayoutInput {
+        viewport_width,
+        elements,
+    }
+}
+
+pub(crate) fn interactive_elements_from_html(html: &str) -> Vec<InteractiveElementSource> {
+    let (sources, _, _) = parse_element_sources(html);
+    sources
+        .iter()
+        .filter_map(|source| {
+            let role = interactive_role(source)?;
+            Some(InteractiveElementSource {
+                element: source.id.clone(),
+                role,
+                name: accessible_name(source, &sources),
+            })
+        })
+        .collect()
+}
+
+fn interactive_role(source: &ElementSource) -> Option<String> {
+    explicit_interactive_role(source).or_else(|| native_interactive_role(source))
+}
+
+fn explicit_interactive_role(source: &ElementSource) -> Option<String> {
+    source.attributes.get("role").and_then(|roles| {
+        roles
+            .split_ascii_whitespace()
+            .map(str::to_ascii_lowercase)
+            .find(|role| is_interactive_role(role))
+    })
+}
+
+fn native_interactive_role(source: &ElementSource) -> Option<String> {
+    match source.tag.as_str() {
+        "a" if source.attributes.contains_key("href") => Some("link".into()),
+        "button" => Some("button".into()),
+        "select" => Some("combobox".into()),
+        "textarea" => Some("textbox".into()),
+        "input" => input_role(input_type(source)),
+        _ => None,
+    }
+}
+
+fn input_role(input_type: Option<String>) -> Option<String> {
+    match input_type.as_deref() {
+        Some("hidden") => None,
+        Some("checkbox") => Some("checkbox".into()),
+        Some("radio") => Some("radio".into()),
+        Some("range") => Some("slider".into()),
+        Some("number") => Some("spinbutton".into()),
+        Some("search") => Some("searchbox".into()),
+        Some("button" | "image" | "reset" | "submit") => Some("button".into()),
+        _ => Some("textbox".into()),
+    }
+}
+
+fn is_interactive_role(role: &str) -> bool {
+    matches!(
+        role,
+        "button"
+            | "checkbox"
+            | "combobox"
+            | "link"
+            | "listbox"
+            | "menuitem"
+            | "option"
+            | "radio"
+            | "searchbox"
+            | "slider"
+            | "spinbutton"
+            | "switch"
+            | "tab"
+            | "textbox"
+            | "treeitem"
+    )
+}
+
+fn accessible_name(source: &ElementSource, sources: &[ElementSource]) -> String {
+    if let Some(name) = labelled_name(source, sources) {
+        return name;
+    }
+
+    if source.tag == "input" {
+        return input_accessible_name(source);
+    }
+    if matches!(source.tag.as_str(), "select" | "textarea") {
+        return title_name(source);
+    }
+
+    let text = collapse_whitespace(&source.text);
+    if !text.is_empty() {
+        return text;
+    }
+    title_name(source)
+}
+
+fn labelled_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
+    non_empty_attribute(source, "aria-label")
+        .map(collapse_whitespace)
+        .or_else(|| explicit_label_name(source, sources))
+        .or_else(|| ancestor_label_name(source, sources))
+}
+
+fn explicit_label_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
+    let id = source.attributes.get("id")?;
+    sources
+        .iter()
+        .find(|candidate| {
+            candidate.tag == "label"
+                && candidate
+                    .attributes
+                    .get("for")
+                    .is_some_and(|target| target == id)
+        })
+        .map(|label| collapse_whitespace(&label.text))
+}
+
+fn ancestor_label_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
+    let mut parent = source.parent;
+    while let Some(index) = parent {
+        let ancestor = &sources[index];
+        if ancestor.tag == "label" {
+            return Some(collapse_whitespace(&ancestor.text));
+        }
+        parent = ancestor.parent;
+    }
+    None
+}
+
+fn input_accessible_name(source: &ElementSource) -> String {
+    let input_type = input_type(source);
+    if input_type.as_deref() == Some("image") {
+        return attribute_name(source, "alt");
+    }
+    if matches!(input_type.as_deref(), Some("button" | "reset" | "submit")) {
+        let value = attribute_name(source, "value");
+        if !value.is_empty() {
+            return value;
+        }
+    }
+    match input_type.as_deref() {
+        Some("submit") => "Submit".into(),
+        Some("reset") => "Reset".into(),
+        _ => title_name(source),
+    }
+}
+
+fn input_type(source: &ElementSource) -> Option<String> {
+    source
+        .attributes
+        .get("type")
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn attribute_name(source: &ElementSource, attribute: &str) -> String {
+    non_empty_attribute(source, attribute)
+        .map(collapse_whitespace)
+        .unwrap_or_default()
+}
+
+fn title_name(source: &ElementSource) -> String {
+    attribute_name(source, "title")
+}
+
+fn non_empty_attribute<'a>(source: &'a ElementSource, name: &str) -> Option<&'a str> {
+    source
+        .attributes
+        .get(name)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn resolve_horizontal_box(
+    source: &ElementSource,
+    parent: ContainingBlock,
+    viewport_width: u64,
+) -> Result<ResolvedBox, String> {
+    let properties = parse_style(
+        source
+            .attributes
+            .get("style")
+            .map(String::as_str)
+            .unwrap_or_default(),
+    );
+    reject_unsupported_geometry(&properties)?;
+
+    match properties.get("position").map(String::as_str) {
+        Some("fixed") => resolve_fixed_box(source, &properties, viewport_width),
+        None | Some("static") => resolve_normal_box(source, &properties, parent),
+        Some(value) => Err(format!("position:{value} layout is not implemented")),
+    }
+}
+
+fn resolve_fixed_box(
+    source: &ElementSource,
+    properties: &BTreeMap<String, String>,
+    viewport_width: u64,
+) -> Result<ResolvedBox, String> {
+    let left = required_length(properties, "left")?;
+    let width = required_non_negative_length(properties, "width")?;
+    resolve_box_model(
+        source,
+        properties,
+        ContainingBlock {
+            x: 0,
+            width: viewport_width,
+        },
+        left,
+        0,
+        Some(width),
+    )
+}
+
+fn resolve_normal_box(
+    source: &ElementSource,
+    properties: &BTreeMap<String, String>,
+    parent: ContainingBlock,
+) -> Result<ResolvedBox, String> {
+    if !is_block_element(&source.tag) {
+        return Err(format!(
+            "normal-flow {} layout is not implemented",
+            source.tag
+        ));
+    }
+    let default_margin = if source.tag == "body" { 8 } else { 0 };
+    let margin_left = optional_length(properties, "margin-left")?.unwrap_or(default_margin);
+    let margin_right = optional_length(properties, "margin-right")?.unwrap_or(default_margin);
+    let width = optional_non_negative_length(properties, "width")?;
+    let layout = resolve_box_model(source, properties, parent, margin_left, margin_right, width)?;
+    if width.is_none() {
+        let occupied = checked_add_i64_u64(layout.border_x, layout.border_width, &source.id)?;
+        let occupied = occupied
+            .checked_add(margin_right)
+            .ok_or_else(|| format!("horizontal coordinates overflow for {}", source.id))?;
+        let parent_right = checked_add_i64_u64(parent.x, parent.width, &source.id)?;
+        if occupied != parent_right {
+            return Err(format!(
+                "auto width could not fill the containing block for {}",
+                source.id
+            ));
+        }
+    }
+    Ok(layout)
+}
+
+fn resolve_box_model(
+    source: &ElementSource,
+    properties: &BTreeMap<String, String>,
+    parent: ContainingBlock,
+    offset: i64,
+    trailing_offset: i64,
+    specified_width: Option<u64>,
+) -> Result<ResolvedBox, String> {
+    let padding_left = non_negative_length(properties, "padding-left")?;
+    let padding_right = non_negative_length(properties, "padding-right")?;
+    let border_left = border_width(properties, "left")?;
+    let border_right = border_width(properties, "right")?;
+    let additions = padding_left
+        .checked_add(padding_right)
+        .and_then(|value| value.checked_add(border_left))
+        .and_then(|value| value.checked_add(border_right))
+        .ok_or_else(|| format!("horizontal size overflows for {}", source.id))?;
+    let available = subtract_offsets(parent.width, offset, trailing_offset, &source.id)?;
+    let border_box = properties
+        .get("box-sizing")
+        .is_some_and(|value| value == "border-box");
+    let border_width = match (specified_width, border_box) {
+        (Some(width), true) if width < additions => {
+            return Err(format!(
+                "border-box width is smaller than its edges for {}",
+                source.id
+            ));
+        }
+        (Some(width), true) => width,
+        (Some(width), false) => width
+            .checked_add(additions)
+            .ok_or_else(|| format!("horizontal size overflows for {}", source.id))?,
+        (None, _) => available,
+    };
+    let content_width = border_width
+        .checked_sub(additions)
+        .ok_or_else(|| format!("horizontal edges exceed available width for {}", source.id))?;
+    let border_x = parent
+        .x
+        .checked_add(offset)
+        .ok_or_else(|| format!("horizontal coordinates overflow for {}", source.id))?;
+    let content_x = border_x
+        .checked_add(
+            i64::try_from(border_left + padding_left)
+                .map_err(|_| format!("horizontal coordinates overflow for {}", source.id))?,
+        )
+        .ok_or_else(|| format!("horizontal coordinates overflow for {}", source.id))?;
+
+    Ok(ResolvedBox {
+        border_x,
+        border_width,
+        content_x,
+        content_width,
+    })
+}
+
+fn subtract_offsets(width: u64, left: i64, right: i64, id: &str) -> Result<u64, String> {
+    let remaining = i128::from(width) - i128::from(left) - i128::from(right);
+    u64::try_from(remaining).map_err(|_| format!("horizontal offsets exceed width for {id}"))
+}
+
+fn checked_add_i64_u64(left: i64, right: u64, id: &str) -> Result<i64, String> {
+    left.checked_add(
+        i64::try_from(right).map_err(|_| format!("horizontal coordinates overflow for {id}"))?,
+    )
+    .ok_or_else(|| format!("horizontal coordinates overflow for {id}"))
+}
+
+fn parse_style(style: &str) -> BTreeMap<String, String> {
+    style
+        .split(';')
+        .filter_map(|declaration| declaration.split_once(':'))
+        .map(|(name, value)| {
+            (
+                name.trim().to_ascii_lowercase(),
+                value.trim().to_ascii_lowercase(),
+            )
+        })
+        .collect()
+}
+
+fn reject_unsupported_geometry(properties: &BTreeMap<String, String>) -> Result<(), String> {
+    for unsupported in [
+        "right",
+        "inset",
+        "margin",
+        "padding",
+        "border",
+        "border-left",
+        "border-right",
+        "transform",
+        "min-width",
+        "max-width",
+        "float",
+        "columns",
+        "column-width",
+    ] {
+        if properties.contains_key(unsupported) {
+            return Err(format!("inline {unsupported} geometry is not implemented"));
+        }
+    }
+    if let Some(display) = properties.get("display")
+        && display != "block"
+    {
+        return Err(format!("display:{display} layout is not implemented"));
+    }
+    if let Some(box_sizing) = properties.get("box-sizing")
+        && box_sizing != "border-box"
+        && box_sizing != "content-box"
+    {
+        return Err(format!("box-sizing:{box_sizing} is not implemented"));
+    }
+    Ok(())
+}
+
+fn required_length(properties: &BTreeMap<String, String>, name: &str) -> Result<i64, String> {
+    properties
+        .get(name)
+        .and_then(|value| parse_px_i64(value))
+        .ok_or_else(|| format!("inline {name} must be an integer px value"))
+}
+
+fn required_non_negative_length(
+    properties: &BTreeMap<String, String>,
+    name: &str,
+) -> Result<u64, String> {
+    optional_non_negative_length(properties, name)?
+        .ok_or_else(|| format!("inline {name} must be a non-negative integer px value"))
+}
+
+fn optional_non_negative_length(
+    properties: &BTreeMap<String, String>,
+    name: &str,
+) -> Result<Option<u64>, String> {
+    optional_length(properties, name)?
+        .map(|value| {
+            u64::try_from(value)
+                .map_err(|_| format!("inline {name} must be a non-negative integer px value"))
+        })
+        .transpose()
+}
+
+fn non_negative_length(properties: &BTreeMap<String, String>, name: &str) -> Result<u64, String> {
+    Ok(optional_non_negative_length(properties, name)?.unwrap_or(0))
+}
+
+fn border_width(properties: &BTreeMap<String, String>, side: &str) -> Result<u64, String> {
+    let width_name = format!("border-{side}-width");
+    let style_name = format!("border-{side}-style");
+    let width = optional_non_negative_length(properties, &width_name)?;
+    match (width, properties.get(&style_name).map(String::as_str)) {
+        (None, None | Some("none") | Some("hidden")) => Ok(0),
+        (Some(_), None | Some("none") | Some("hidden")) => Ok(0),
+        (Some(width), Some(_)) => Ok(width),
+        (None, Some(_)) => Err(format!(
+            "inline {width_name} must be explicit when {style_name} paints a border"
+        )),
+    }
+}
+
+fn optional_length(
+    properties: &BTreeMap<String, String>,
+    name: &str,
+) -> Result<Option<i64>, String> {
+    properties
+        .get(name)
+        .map(|value| {
+            parse_px_i64(value).ok_or_else(|| format!("inline {name} must be an integer px value"))
+        })
+        .transpose()
+}
+
+fn parse_px_i64(value: &str) -> Option<i64> {
+    if value == "0" {
+        return Some(0);
+    }
+    value.strip_suffix("px")?.trim().parse().ok()
+}
+
+fn is_content_element(tag_name: &str) -> bool {
+    !matches!(
+        tag_name,
+        "html"
+            | "head"
+            | "base"
+            | "link"
+            | "meta"
+            | "title"
+            | "style"
+            | "script"
+            | "noscript"
+            | "template"
+    )
+}
+
+fn is_block_element(tag_name: &str) -> bool {
+    matches!(
+        tag_name,
+        "body"
+            | "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "div"
+            | "dl"
+            | "fieldset"
+            | "footer"
+            | "form"
+            | "header"
+            | "main"
+            | "nav"
+            | "section"
+    )
+}
+
+fn is_void_element(tag_name: &str) -> bool {
+    matches!(
+        tag_name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{interactive_elements_from_html, layout_input_from_html};
+    use crate::{Comparison, LintLayout, RuleConstraint, RuleResult, Session};
+
+    fn lint(html: &str) -> RuleResult {
+        Session::new()
+            .execute(LintLayout {
+                input: layout_input_from_html(html, 320),
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn extracts_fixed_pixel_geometry() {
+        let result = lint(r#"<div id="hero" style="position:fixed;left:280px;width:80px"></div>"#);
+
+        match result {
+            RuleResult::Compared {
+                comparison: Comparison::Fail(findings),
+                ..
+            } => assert_eq!(findings[0].affected_element.as_str(), "hero"),
+            other => panic!("expected overflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normal_block_fills_its_parent() {
+        let result = lint(r#"<main id="content"></main>"#);
+
+        assert!(matches!(
+            result,
+            RuleResult::Compared {
+                comparison: Comparison::Pass,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn nested_block_uses_parent_content_box() {
+        let result = lint(
+            r#"<main id="shell" style="padding-left:20px;width:300px"><section id="wide" style="width:301px"></section></main>"#,
+        );
+
+        match result {
+            RuleResult::Compared {
+                comparison: Comparison::Fail(findings),
+                ..
+            } => {
+                assert_eq!(findings.len(), 1);
+                assert_eq!(findings[0].affected_element.as_str(), "wide");
+                assert_eq!(findings[0].observed_left, 20);
+                assert_eq!(findings[0].observed_right, 321);
+            }
+            other => panic!("expected nested overflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn body_uses_its_default_horizontal_margin() {
+        let result = lint(r#"<body><main id="wide" style="width:313px"></main></body>"#);
+
+        match result {
+            RuleResult::Compared {
+                comparison: Comparison::Fail(findings),
+                ..
+            } => {
+                assert_eq!(findings[0].affected_element.as_str(), "wide");
+                assert_eq!(findings[0].observed_left, 8);
+                assert_eq!(findings[0].observed_right, 321);
+            }
+            other => panic!("expected body-margin overflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn border_width_without_border_style_does_not_expand_the_box() {
+        let result =
+            lint(r#"<main id="content" style="width:320px;border-left-width:1px"></main>"#);
+
+        assert!(matches!(
+            result,
+            RuleResult::Compared {
+                comparison: Comparison::Pass,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn inline_flow_blocks_instead_of_passing() {
+        let result = lint(r#"<span id="label"></span>"#);
+
+        assert!(matches!(
+            result,
+            RuleResult::Blocked {
+                causes,
+                ..
+            } if matches!(&causes[0], RuleConstraint::Unsupported { element, .. } if element == "label")
+        ));
+    }
+
+    #[test]
+    fn absolute_positioning_blocks_without_false_geometry() {
+        let result = lint(r#"<div id="hero" style="position:absolute;left:0;width:20px"></div>"#);
+
+        assert!(matches!(result, RuleResult::Blocked { .. }));
+    }
+
+    #[test]
+    fn stylesheets_block_inline_geometry() {
+        let result = lint(
+            r#"<style>#hero { width: 20px }</style><div id="hero" style="position:fixed;left:0;width:20px"></div>"#,
+        );
+
+        assert!(matches!(result, RuleResult::Blocked { .. }));
+    }
+
+    #[test]
+    fn interactive_elements_use_native_roles_and_accessible_names() {
+        let elements = interactive_elements_from_html(
+            r#"
+                <label for="email">Email address</label>
+                <input id="email">
+                <button id="save"><span>Save changes</span></button>
+                <a id="docs" href="/docs" aria-label="Read documentation">Docs</a>
+                <input id="secret" type="hidden">
+            "#,
+        );
+
+        assert_eq!(elements.len(), 3);
+        assert_eq!(elements[0].element, "email");
+        assert_eq!(elements[0].role, "textbox");
+        assert_eq!(elements[0].name, "Email address");
+        assert_eq!(elements[1].role, "button");
+        assert_eq!(elements[1].name, "Save changes");
+        assert_eq!(elements[2].role, "link");
+        assert_eq!(elements[2].name, "Read documentation");
+    }
+
+    #[test]
+    fn explicit_interactive_role_is_included() {
+        let elements = interactive_elements_from_html(
+            r#"<div id="toggle" role="unsupported SWITCH" aria-label="Dark mode"></div>"#,
+        );
+
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].role, "switch");
+        assert_eq!(elements[0].name, "Dark mode");
+    }
+
+    #[test]
+    fn form_values_do_not_become_accessible_names() {
+        let elements = interactive_elements_from_html(
+            r#"<select><option>One</option></select><textarea>draft</textarea><input type="submit">"#,
+        );
+
+        assert_eq!(elements[0].name, "");
+        assert_eq!(elements[1].name, "");
+        assert_eq!(elements[2].name, "Submit");
+    }
+}

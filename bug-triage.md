@@ -1,8 +1,10 @@
 # Bug triage
 
-No suspected defects exist yet. The early runtime slice passes its automated checks.
+Evidence date: 30 August 2026.
 
-Missing behavior belongs in the coverage table. Failed live-page behavior will become a triage entry after page loading exists.
+No suspected defects exist yet. The current runtime slice passes its automated checks.
+
+Missing behavior belongs in the coverage table. A live-page result that conflicts with decided behavior becomes a triage entry.
 
 ## Summary
 

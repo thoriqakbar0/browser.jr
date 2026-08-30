@@ -9,4 +9,9 @@ if ! command -v debtmap >/dev/null 2>&1; then
     exit 127
 fi
 
+debtmap config check --config .debtmap.toml
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets
+
 exec debtmap validate . --config .debtmap.toml --format terminal

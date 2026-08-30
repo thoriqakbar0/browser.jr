@@ -2,9 +2,9 @@
 
 ## Summary
 
-CLI help shows the available browser.jr invocation shape without loading a page. Run `./browser.jr help` or `./browser.jr --help` from the repository.
+CLI help shows the available browser.jr invocation shape. Run `./browser.jr help` or `./browser.jr --help` from the repository.
 
-The output names the planned lint command and states which behavior remains unavailable.
+The output names static-HTML lint, interactive snapshot, and their supported subsets.
 
 ## The simple case
 
@@ -20,11 +20,11 @@ stateDiagram-v2
     parsing --> showing_help : help or no arguments
     parsing --> showing_version : version
     parsing --> rejected : invalid input
-    parsing --> unavailable : lint requested
+    parsing --> loading : valid lint or snapshot request
     showing_help --> finished
     showing_version --> finished
     rejected --> finished
-    unavailable --> finished
+    loading --> finished
 ```
 
 ### Invoke
@@ -33,11 +33,11 @@ The shell starts `browser.jr`. The CLI reads all arguments before selecting a lo
 
 ### Exit immediately
 
-Help and version write to stdout. Invalid arguments and unavailable lint execution write to stderr.
+Help and version write to stdout. Invalid arguments write to stderr.
 
 ### Begin running
 
-Help never begins page-loading work.
+Help never begins page-loading work. A valid lint or snapshot command does.
 
 ### While running
 
@@ -45,13 +45,13 @@ No long-running work occurs.
 
 ### Finish
 
-Help and version exit with status zero. Invalid input exits with status two. Unavailable lint execution exits with status three.
+Help and version exit with status zero. Invalid input exits with status two.
 
 ## Variants
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | `help`, `-h`, and `--help` select help. `-V` and `--version` select version. | Nothing can change. The command exits immediately. |
+| Flags and options | Help and version use their listed forms. Lint accepts viewport and width flags. Snapshot accepts `-i` or `--interactive`. | Nothing can change. The command exits immediately. |
 | Project configuration | Help does not read project configuration. | Nothing can change. |
 | Target matrix | Help does not create a target matrix. | Nothing can change. |
 | Output channel | Help and version use stdout. Errors use stderr. | A write failure prevents successful delivery. |
@@ -74,30 +74,36 @@ Help and version exit with status zero. Invalid input exits with status two. Una
 
 **Configuration precedence.** Help does not read project configuration.
 
-**Output and exit status.** Help and version use stdout. Invalid and unavailable commands use stderr.
+**Output and exit status.** Help and version use stdout. Invalid commands use stderr.
 
 **Resource limits.** Help allocates only its argument list and fixed output text.
 
 **Network and storage.** Help does not use the network or persistent storage.
 
-**Rendering compatibility.** Help does not parse or render web content.
+**Rendering compatibility.** Help names the horizontal geometry and interactive semantic subsets.
 
 **Isolation.** Help does not execute page or project code.
 
-**Accessibility inspection.** Help does not inspect a page.
+**Accessibility inspection.** Help names interactive snapshot support. Help does not inspect a page.
 
 ## Edge cases
 
 - No arguments shows help.
 - `lint` without a URL reports invalid input.
-- `lint <url>` reports that page loading is unavailable.
+- `lint <url>` loads a loopback HTTP page with a 1280 CSS pixel viewport.
+- `lint <url> --viewport <css-px>` sets a positive viewport width.
+- `lint <url> --max-width <element> <css-px>` checks one semantic element against a non-negative project limit.
+- `snapshot <url> --interactive` reports supported interactive semantic elements.
+- `snapshot <url> -i` selects the same implemented projection.
+- `snapshot <url>` reports invalid input because no default projection exists.
+- A missing or unsupported width target blocks `max-element-width`.
 - Extra or unknown arguments report invalid input.
 - A closed stdout prevents successful help delivery.
 
 ## Open questions and verification
 
 - Decide whether an installed package exposes the dotted command through a symlink or launcher.
-- Decide whether status three remains the unavailable-result contract.
+- Decide whether 1280 CSS pixels remains the default viewport.
 - Add installed-package checks after packaging exists.
 
-Drafted from the local Rust implementation on 2026-08-28. Unit tests and direct command checks cover the current behavior.
+Drafted from the local Rust implementation on 2026-08-31. Unit and compiled-process tests cover current behavior.

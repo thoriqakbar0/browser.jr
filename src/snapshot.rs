@@ -1,5 +1,6 @@
 use crate::layout::{LayoutObservation, LayoutSnapshot, SemanticElementId};
 use crate::non_empty::NonEmpty;
+use crate::page::InteractiveElementSource;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SnapshotId(u64);
@@ -22,6 +23,70 @@ impl SnapshotId {
 pub struct EvidenceRef {
     pub snapshot: SnapshotId,
     pub element: SemanticElementId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InteractiveElementRef {
+    document_epoch: u64,
+    ordinal: u64,
+}
+
+impl InteractiveElementRef {
+    pub(crate) const fn new(document_epoch: u64, ordinal: u64) -> Self {
+        Self {
+            document_epoch,
+            ordinal,
+        }
+    }
+
+    pub const fn ordinal(self) -> u64 {
+        self.ordinal
+    }
+}
+
+impl std::fmt::Display for InteractiveElementRef {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "@e{}", self.ordinal)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveElement {
+    pub reference: InteractiveElementRef,
+    pub element: String,
+    pub role: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveSnapshot {
+    pub id: SnapshotId,
+    pub url: String,
+    pub elements: Vec<InteractiveElement>,
+}
+
+impl InteractiveSnapshot {
+    pub(crate) fn from_document(
+        id: SnapshotId,
+        document_epoch: u64,
+        url: String,
+        elements: &[InteractiveElementSource],
+    ) -> Self {
+        let elements = elements
+            .iter()
+            .enumerate()
+            .map(|(index, source)| InteractiveElement {
+                reference: InteractiveElementRef::new(
+                    document_epoch,
+                    u64::try_from(index + 1).expect("interactive element count exceeds u64"),
+                ),
+                element: source.element.clone(),
+                role: source.role.clone(),
+                name: source.name.clone(),
+            })
+            .collect();
+        Self { id, url, elements }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -8,11 +8,11 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Engine.** The code that loads a page, interprets supported web content, computes rendered state, and exposes that state for inspection.
 
-**REPL.** The interactive read-evaluate-print loop that accepts JavaScript expressions against one session. It is the primary human interface.
+**REPL.** A decided but unimplemented read-evaluate-print loop. Its intended job is to investigate findings and run custom checks in one session.
 
 **Caller.** The person, AI agent, or program that submits an evaluation. Caller identity must not change evaluation semantics.
 
-**CLI.** The command-line interface. Its primary command runs design lint against a page URL.
+**CLI.** The primary developer interface. `lint` checks layout. `snapshot --interactive` reports supported semantic controls.
 
 ## Sessions and pages
 
@@ -32,7 +32,11 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Grid observation.** A layout observation for a CSS grid. It may include tracks, gaps, placement, alignment, and overflow once support is defined.
 
-**Snapshot.** An immutable capture of selected rendered state at a known point in a page's lifetime. Its contents and storage format remain open.
+**Snapshot.** An immutable capture of selected page evidence at a known point in the page's lifetime.
+
+**Interactive snapshot.** A snapshot containing the supported interactive roles, names, semantic identifiers, and ordered references.
+
+**Interactive element reference.** A session-owned target identity such as `@e1`. Repeated captures preserve it until another document opens.
 
 **Evidence.** The structured observations and diagnostics that support a check result.
 
@@ -60,7 +64,7 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Objective rule.** A rule for measurable failure such as overflow, clipping, unreadable contrast, or an undersized tap target.
 
-**Project rule.** A rule supplied by the project, such as allowed spacing values or an expected grid gap.
+**Project rule.** A rule supplied by the project. The implemented `max-element-width` rule compares one semantic element with an explicit width limit.
 
 ## Compatibility
 
@@ -71,6 +75,8 @@ The vocabulary used across these documents. Each definition states intended mean
 **Unsupported behavior.** Web behavior outside the engine's stated compatibility boundary. The engine reports it instead of silently claiming a valid result.
 
 ## Evaluations
+
+These terms describe decided but unimplemented REPL behavior.
 
 **Evaluation.** One JavaScript expression submitted to a session and its resulting value, error, or interruption.
 
@@ -114,10 +120,10 @@ The vocabulary used across these documents. Each definition states intended mean
 
 ## Output
 
-**Human-readable output.** REPL output meant for a person. Its formatting may include concise summaries and diagnostics.
+**Human-readable output.** Text meant for a person. The CLI emits it now. The intended REPL will use the same result terms.
 
-**Machine-readable output.** Structured output with a stable schema for programs and AI agents. The encoding remains open.
+**Machine-readable output.** Decided but unimplemented structured output for programs and AI agents. The encoding remains open.
 
-**Watch mode.** A long-running lint invocation that checks the target again after relevant page changes settle.
+**Watch mode.** A decided but unimplemented lint invocation that checks the target again after relevant page changes settle.
 
-**Exit status.** The process result used by shells and continuous integration. Exact status values remain open.
+**Exit status.** The process result used by shells and continuous integration. The CLI uses zero for pass and one for findings. It uses two for invalid input and three for blocked or unavailable results.

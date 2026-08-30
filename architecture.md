@@ -1,22 +1,22 @@
 # Architecture draft
 
-Status: proposed internal architecture, 28 August 2026.
+Status: proposed internal architecture, 28 August 2026. Implementation evidence updated 31 August 2026.
 
-The initial source has a runnable CLI, one synthetic clean-layout rule path, and one ordered width mutation. Many Rust types in this document remain design sketches and do not define the final package API.
+The current source loads loopback HTML, computes a horizontal layout subset, evaluates two rules, and supports one ordered width mutation. A session can also retain one static page and capture its interactive semantic subset. Many Rust types below remain design sketches. They do not define the package API.
 
-This document explains how the planned engine fits together. The [product description](README.md) remains the source for user-visible scope. The [research note](research/browser-engine-and-design-lint-papers.md) records external evidence.
+This document owns internal responsibilities and data flow. The [product description](README.md) owns user-visible scope. The [research note](research/browser-engine-and-design-lint-papers.md) records external evidence.
 
 ## Problem
 
-browser.jr must give the CLI, REPL, package, and AI callers the same layout evidence. The engine must compute real CSS layout without becoming a full visual browser. It must report unsupported behavior instead of turning missing evidence into a pass.
+browser.jr must give each adapter the same layout evidence. The engine supports a stated CSS subset instead of claiming full visual-browser compatibility. It reports unsupported behavior instead of turning missing evidence into a pass.
 
 Watch mode adds a second constraint. Spineless Traversal needs field-level dependencies, legal recomputation order, dirty state, and stable layout identity. Those decisions must remain private to the layout engine.
 
-The central boundary is the immutable snapshot. Mutable page state produces a snapshot. Observations and rules consume selected evidence from that snapshot.
+Mutable page state produces an immutable snapshot. Observations and rules read selected evidence from that snapshot.
 
 ## Caller experience
 
-The planned CLI command remains the primary workflow.
+The CLI command is the primary workflow.
 
 ```text
 browser.jr lint <url>
@@ -164,6 +164,10 @@ pub(crate) struct EvidenceRef {
 	item: EvidenceItemId,
 }
 ```
+
+The implemented interactive reference stores a document epoch and document-order ordinal. Repeated captures retain equality within one document.
+
+Opening another document increments the epoch. The displayed ordinal may restart, but the typed reference identity changes.
 
 Navigation creates a new `DocumentEpoch`. Deleted or replaced nodes invalidate their generational identifiers. The session returns a stale-target error instead of silently retargeting an action or observation.
 
@@ -535,8 +539,8 @@ A staged service pipeline lost because it would repeat one document representati
 - Which size, latency, memory, and resource budgets constrain the stores?
 - How does cancellation interrupt a field computation that does not yield?
 
-## Next implementation step
+## Next implementation decision
 
-Build one clean-layout vertical slice. Use one explicit field table, one box-to-fragment relation, one canonical snapshot, and one typed overflow rule.
+The original clean-layout, typed overflow, and width-mutation slice now exists.
 
-Then apply one mutation through Spineless Traversal and compare the result with a fresh clean layout.
+Choose the next slice from the open decisions before adding another architecture layer. No current product decision selects that slice.
