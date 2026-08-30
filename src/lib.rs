@@ -1,4 +1,5 @@
 mod cli;
+mod cli_session;
 mod layout;
 mod loading;
 mod non_empty;
@@ -7,17 +8,22 @@ mod rules;
 mod session;
 mod snapshot;
 
-pub use cli::{ExitStatus, run_cli};
+pub use cli::{ExitStatus, run_cli, run_cli_with_input};
 pub use layout::{ElementInput, LayoutError, LayoutInput, LayoutMutation, SemanticElementId};
 pub use loading::LoadError;
 pub use non_empty::NonEmpty;
 pub use rules::{Comparison, Finding, RuleConstraint, RuleResult, WidthFinding};
 pub use session::{
-    ApplyMutation, CaptureInteractiveSnapshot, CheckElementWidth, LintLayout, OpenPage, OpenedPage,
-    Session, SessionError, SessionRequest,
+    ApplyMutation, CaptureInteractiveSnapshot, CheckElementWidth, ClickElement, ClickResult,
+    ElementAttribute, ElementChecked, ElementEnabled, ElementText, ElementValue, FillElement,
+    FillResult, GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementText,
+    GetElementValue, GetPageTitle, GetPageUrl, LintLayout, OpenPage, OpenedPage, PageTitle,
+    PageUrl, ReloadPage, Session, SessionError, SessionRequest, SetCheckedResult,
+    SetElementChecked,
 };
 pub use snapshot::{
-    EvidenceRef, InteractiveElement, InteractiveElementRef, InteractiveSnapshot, SnapshotId,
+    EvidenceRef, InteractiveElement, InteractiveElementRef, InteractiveElementState,
+    InteractiveSnapshot, SnapshotId,
 };
 
 #[cfg(test)]

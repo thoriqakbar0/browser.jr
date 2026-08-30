@@ -9,6 +9,15 @@ use html5ever::tokenizer::{
 
 use crate::{ElementInput, LayoutInput};
 
+mod interactive;
+
+#[cfg(test)]
+pub(crate) use interactive::interactive_elements_from_html;
+pub(crate) use interactive::{
+    CheckedState, ControlState, InteractiveAction, InteractiveElementSource, TextValueState,
+    page_semantics_from_html,
+};
+
 #[derive(Debug)]
 struct ElementSource {
     id: String,
@@ -18,17 +27,11 @@ struct ElementSource {
     text: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct InteractiveElementSource {
-    pub(crate) element: String,
-    pub(crate) role: String,
-    pub(crate) name: String,
-}
-
 #[derive(Debug)]
 struct OpenElement {
     tag: String,
     content_index: Option<usize>,
+    captures_title: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -50,8 +53,22 @@ struct PageSink {
     elements: RefCell<Vec<ElementSource>>,
     stack: RefCell<Vec<OpenElement>>,
     next_ordinal: Cell<usize>,
+    metadata: PageMetadataSink,
+}
+
+#[derive(Debug, Default)]
+struct PageMetadataSink {
     has_stylesheet: Cell<bool>,
+    title_seen: Cell<bool>,
+    title: RefCell<String>,
     parse_error: RefCell<Option<String>>,
+}
+
+struct ParsedPageSource {
+    elements: Vec<ElementSource>,
+    has_stylesheet: bool,
+    title: String,
+    parse_error: Option<String>,
 }
 
 impl TokenSink for PageSink {
@@ -63,7 +80,7 @@ impl TokenSink for PageSink {
             TagToken(tag) if tag.kind == EndTag => self.end_tag(tag.name.as_ref()),
             CharacterTokens(text) => self.append_text(text.as_ref()),
             ParseError(error) => {
-                let mut first_error = self.parse_error.borrow_mut();
+                let mut first_error = self.metadata.parse_error.borrow_mut();
                 if first_error.is_none() {
                     *first_error = Some(error.to_string());
                 }
@@ -96,7 +113,7 @@ impl PageSink {
                         .any(|part| part.eq_ignore_ascii_case("stylesheet"))
                 }))
         {
-            self.has_stylesheet.set(true);
+            self.metadata.has_stylesheet.set(true);
         }
 
         let content_index = if is_content_element(&tag_name) {
@@ -126,10 +143,12 @@ impl PageSink {
             None
         };
 
+        let captures_title = tag_name == "title" && !self.metadata.title_seen.replace(true);
         if !is_void_element(&tag_name) && !tag.self_closing {
             self.stack.borrow_mut().push(OpenElement {
                 tag: tag_name,
                 content_index,
+                captures_title,
             });
         }
     }
@@ -142,12 +161,16 @@ impl PageSink {
     }
 
     fn append_text(&self, text: &str) {
-        let content_indices = self
-            .stack
-            .borrow()
+        let stack = self.stack.borrow();
+        let captures_title = stack.last().is_some_and(|open| open.captures_title);
+        let content_indices = stack
             .iter()
             .filter_map(|open| open.content_index)
             .collect::<Vec<_>>();
+        drop(stack);
+        if captures_title {
+            self.metadata.title.borrow_mut().push_str(text);
+        }
         let mut elements = self.elements.borrow_mut();
         for index in content_indices {
             elements[index].text.push_str(text);
@@ -155,22 +178,28 @@ impl PageSink {
     }
 }
 
-fn parse_element_sources(html: &str) -> (Vec<ElementSource>, bool, Option<String>) {
+fn parse_page_source(html: &str) -> ParsedPageSource {
     let input = BufferQueue::default();
     input.push_back(StrTendril::from(html));
     let tokenizer = Tokenizer::new(PageSink::default(), Default::default());
     let _ = tokenizer.feed(&input);
     tokenizer.end();
 
-    (
-        tokenizer.sink.elements.into_inner(),
-        tokenizer.sink.has_stylesheet.get(),
-        tokenizer.sink.parse_error.into_inner(),
-    )
+    ParsedPageSource {
+        elements: tokenizer.sink.elements.into_inner(),
+        has_stylesheet: tokenizer.sink.metadata.has_stylesheet.get(),
+        title: tokenizer.sink.metadata.title.into_inner(),
+        parse_error: tokenizer.sink.metadata.parse_error.into_inner(),
+    }
 }
 
 pub(crate) fn layout_input_from_html(html: &str, viewport_width: u64) -> LayoutInput {
-    let (sources, has_stylesheet, parse_error) = parse_element_sources(html);
+    let ParsedPageSource {
+        elements: sources,
+        has_stylesheet,
+        parse_error,
+        ..
+    } = parse_page_source(html);
     let mut resolved = Vec::<Result<ResolvedBox, String>>::with_capacity(sources.len());
     let mut elements = Vec::with_capacity(sources.len() + usize::from(parse_error.is_some()));
 
@@ -225,178 +254,6 @@ pub(crate) fn layout_input_from_html(html: &str, viewport_width: u64) -> LayoutI
         viewport_width,
         elements,
     }
-}
-
-pub(crate) fn interactive_elements_from_html(html: &str) -> Vec<InteractiveElementSource> {
-    let (sources, _, _) = parse_element_sources(html);
-    sources
-        .iter()
-        .filter_map(|source| {
-            let role = interactive_role(source)?;
-            Some(InteractiveElementSource {
-                element: source.id.clone(),
-                role,
-                name: accessible_name(source, &sources),
-            })
-        })
-        .collect()
-}
-
-fn interactive_role(source: &ElementSource) -> Option<String> {
-    explicit_interactive_role(source).or_else(|| native_interactive_role(source))
-}
-
-fn explicit_interactive_role(source: &ElementSource) -> Option<String> {
-    source.attributes.get("role").and_then(|roles| {
-        roles
-            .split_ascii_whitespace()
-            .map(str::to_ascii_lowercase)
-            .find(|role| is_interactive_role(role))
-    })
-}
-
-fn native_interactive_role(source: &ElementSource) -> Option<String> {
-    match source.tag.as_str() {
-        "a" if source.attributes.contains_key("href") => Some("link".into()),
-        "button" => Some("button".into()),
-        "select" => Some("combobox".into()),
-        "textarea" => Some("textbox".into()),
-        "input" => input_role(input_type(source)),
-        _ => None,
-    }
-}
-
-fn input_role(input_type: Option<String>) -> Option<String> {
-    match input_type.as_deref() {
-        Some("hidden") => None,
-        Some("checkbox") => Some("checkbox".into()),
-        Some("radio") => Some("radio".into()),
-        Some("range") => Some("slider".into()),
-        Some("number") => Some("spinbutton".into()),
-        Some("search") => Some("searchbox".into()),
-        Some("button" | "image" | "reset" | "submit") => Some("button".into()),
-        _ => Some("textbox".into()),
-    }
-}
-
-fn is_interactive_role(role: &str) -> bool {
-    matches!(
-        role,
-        "button"
-            | "checkbox"
-            | "combobox"
-            | "link"
-            | "listbox"
-            | "menuitem"
-            | "option"
-            | "radio"
-            | "searchbox"
-            | "slider"
-            | "spinbutton"
-            | "switch"
-            | "tab"
-            | "textbox"
-            | "treeitem"
-    )
-}
-
-fn accessible_name(source: &ElementSource, sources: &[ElementSource]) -> String {
-    if let Some(name) = labelled_name(source, sources) {
-        return name;
-    }
-
-    if source.tag == "input" {
-        return input_accessible_name(source);
-    }
-    if matches!(source.tag.as_str(), "select" | "textarea") {
-        return title_name(source);
-    }
-
-    let text = collapse_whitespace(&source.text);
-    if !text.is_empty() {
-        return text;
-    }
-    title_name(source)
-}
-
-fn labelled_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
-    non_empty_attribute(source, "aria-label")
-        .map(collapse_whitespace)
-        .or_else(|| explicit_label_name(source, sources))
-        .or_else(|| ancestor_label_name(source, sources))
-}
-
-fn explicit_label_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
-    let id = source.attributes.get("id")?;
-    sources
-        .iter()
-        .find(|candidate| {
-            candidate.tag == "label"
-                && candidate
-                    .attributes
-                    .get("for")
-                    .is_some_and(|target| target == id)
-        })
-        .map(|label| collapse_whitespace(&label.text))
-}
-
-fn ancestor_label_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
-    let mut parent = source.parent;
-    while let Some(index) = parent {
-        let ancestor = &sources[index];
-        if ancestor.tag == "label" {
-            return Some(collapse_whitespace(&ancestor.text));
-        }
-        parent = ancestor.parent;
-    }
-    None
-}
-
-fn input_accessible_name(source: &ElementSource) -> String {
-    let input_type = input_type(source);
-    if input_type.as_deref() == Some("image") {
-        return attribute_name(source, "alt");
-    }
-    if matches!(input_type.as_deref(), Some("button" | "reset" | "submit")) {
-        let value = attribute_name(source, "value");
-        if !value.is_empty() {
-            return value;
-        }
-    }
-    match input_type.as_deref() {
-        Some("submit") => "Submit".into(),
-        Some("reset") => "Reset".into(),
-        _ => title_name(source),
-    }
-}
-
-fn input_type(source: &ElementSource) -> Option<String> {
-    source
-        .attributes
-        .get("type")
-        .map(|value| value.to_ascii_lowercase())
-}
-
-fn attribute_name(source: &ElementSource, attribute: &str) -> String {
-    non_empty_attribute(source, attribute)
-        .map(collapse_whitespace)
-        .unwrap_or_default()
-}
-
-fn title_name(source: &ElementSource) -> String {
-    attribute_name(source, "title")
-}
-
-fn non_empty_attribute<'a>(source: &'a ElementSource, name: &str) -> Option<&'a str> {
-    source
-        .attributes
-        .get(name)
-        .map(String::as_str)
-        .filter(|value| !value.trim().is_empty())
-}
-
-fn collapse_whitespace(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn resolve_horizontal_box(
@@ -709,7 +566,10 @@ fn is_void_element(tag_name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{interactive_elements_from_html, layout_input_from_html};
+    use super::{
+        CheckedState, ControlState, InteractiveAction, TextValueState,
+        interactive_elements_from_html, layout_input_from_html, page_semantics_from_html,
+    };
     use crate::{Comparison, LintLayout, RuleConstraint, RuleResult, Session};
 
     fn lint(html: &str) -> RuleResult {
@@ -840,12 +700,14 @@ mod tests {
 
         assert_eq!(elements.len(), 3);
         assert_eq!(elements[0].element, "email");
-        assert_eq!(elements[0].role, "textbox");
-        assert_eq!(elements[0].name, "Email address");
-        assert_eq!(elements[1].role, "button");
-        assert_eq!(elements[1].name, "Save changes");
-        assert_eq!(elements[2].role, "link");
-        assert_eq!(elements[2].name, "Read documentation");
+        assert_eq!(elements[0].role(), "textbox");
+        assert_eq!(elements[0].name(), "Email address");
+        assert_eq!(elements[1].role(), "button");
+        assert_eq!(elements[1].name(), "Save changes");
+        assert_eq!(elements[1].text(), "Save changes");
+        assert_eq!(elements[2].role(), "link");
+        assert_eq!(elements[2].name(), "Read documentation");
+        assert_eq!(elements[2].text(), "Docs");
     }
 
     #[test]
@@ -855,8 +717,8 @@ mod tests {
         );
 
         assert_eq!(elements.len(), 1);
-        assert_eq!(elements[0].role, "switch");
-        assert_eq!(elements[0].name, "Dark mode");
+        assert_eq!(elements[0].role(), "switch");
+        assert_eq!(elements[0].name(), "Dark mode");
     }
 
     #[test]
@@ -865,8 +727,96 @@ mod tests {
             r#"<select><option>One</option></select><textarea>draft</textarea><input type="submit">"#,
         );
 
-        assert_eq!(elements[0].name, "");
-        assert_eq!(elements[1].name, "");
-        assert_eq!(elements[2].name, "Submit");
+        assert_eq!(elements[0].name(), "");
+        assert_eq!(elements[1].name(), "");
+        assert_eq!(elements[2].name(), "Submit");
+    }
+
+    #[test]
+    fn text_controls_expose_initial_value_capabilities() {
+        let elements = interactive_elements_from_html(
+            r#"<input value="old"><textarea>draft</textarea><input type="password"><input disabled>"#,
+        );
+
+        assert_eq!(
+            elements[0].control_state,
+            ControlState::Text(TextValueState::Editable {
+                value: "old".into()
+            })
+        );
+        assert_eq!(
+            elements[1].control_state,
+            ControlState::Text(TextValueState::Editable {
+                value: "draft".into()
+            })
+        );
+        assert!(matches!(
+            elements[2].control_state,
+            ControlState::Unavailable
+        ));
+        assert!(matches!(
+            elements[3].control_state,
+            ControlState::Text(TextValueState::NonEditable { .. })
+        ));
+    }
+
+    #[test]
+    fn native_checkboxes_expose_checked_state_capabilities() {
+        let elements = interactive_elements_from_html(
+            r#"<input type="checkbox"><input type="checkbox" checked disabled><div role="checkbox" aria-checked="true"></div>"#,
+        );
+
+        assert_eq!(
+            elements[0].control_state,
+            ControlState::Checkbox(CheckedState::Editable { checked: false })
+        );
+        assert!(matches!(
+            elements[1].control_state,
+            ControlState::Checkbox(CheckedState::NonEditable { checked: true, .. })
+        ));
+        assert_eq!(elements[2].control_state, ControlState::Unavailable);
+    }
+
+    #[test]
+    fn link_actions_preserve_href_for_session_navigation() {
+        let elements = interactive_elements_from_html(r#"<a href="../next?q=1">Next</a>"#);
+
+        assert_eq!(
+            elements[0].action,
+            InteractiveAction::Navigate {
+                href: "../next?q=1".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn new_context_and_download_links_are_unsupported_actions() {
+        let elements = interactive_elements_from_html(
+            r#"<a href="/new" target="_blank">New</a><a href="/file" download>File</a>"#,
+        );
+
+        assert!(matches!(
+            elements[0].action,
+            InteractiveAction::Unsupported { .. }
+        ));
+        assert!(matches!(
+            elements[1].action,
+            InteractiveAction::Unsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn page_title_uses_the_first_title_and_collapses_whitespace() {
+        let semantics = page_semantics_from_html(
+            "<title> browser\n  junior </title><title>Ignored</title><button>Save</button>",
+        );
+
+        assert_eq!(semantics.title, "browser junior");
+        assert_eq!(semantics.interactive_elements.len(), 1);
+    }
+
+    #[test]
+    fn page_title_is_empty_when_the_document_has_no_title() {
+        assert_eq!(page_semantics_from_html("<main>Hello</main>").title, "");
     }
 }

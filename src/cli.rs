@@ -1,6 +1,7 @@
 use std::ffi::OsString;
-use std::io::Write;
+use std::io::{BufRead, Write};
 
+use crate::cli_session::{run_session, write_interactive_snapshot};
 use crate::loading::{LoadError, load_local_html};
 use crate::page::layout_input_from_html;
 use crate::{
@@ -16,6 +17,7 @@ A browser engine package for programmable interface verification.
 Usage:
   browser.jr lint <url> [--viewport <css-px>] [--max-width <element> <css-px>]
   browser.jr snapshot <url> --interactive
+  browser.jr session
   browser.jr help
 
 Options:
@@ -28,6 +30,7 @@ Options:
 Current implementation:
   Static HTML design lint is available for loopback HTTP pages.
   Interactive snapshots include a stated native HTML and ARIA role subset.
+  Session mode supports open, snapshot, click, fill, and get value through stdin.
   Parent-aware block flow and fixed pixel geometry form the layout subset.
 ";
 
@@ -74,6 +77,21 @@ where
     O: Write,
     E: Write,
 {
+    run_cli_with_input(args, &mut std::io::empty(), output, errors)
+}
+
+pub fn run_cli_with_input<I, R, O, E>(
+    args: I,
+    input: &mut R,
+    output: &mut O,
+    errors: &mut E,
+) -> ExitStatus
+where
+    I: IntoIterator<Item = OsString>,
+    R: BufRead,
+    O: Write,
+    E: Write,
+{
     let args: Vec<OsString> = args.into_iter().collect();
     match args.as_slice() {
         [] => write_help(output),
@@ -91,6 +109,7 @@ where
             Ok(options) => run_snapshot(options, output, errors),
             Err(message) => write_line(errors, &message, ExitStatus::InvalidInput),
         },
+        [command] if command == "session" => run_session(input, output, errors),
         _ => write_line(
             errors,
             "browser.jr: invalid arguments; run browser.jr help",
@@ -242,34 +261,17 @@ fn run_snapshot(
         Ok(snapshot) => snapshot,
         Err(error) => return write_session_error(errors, error),
     };
-    if writeln!(
-        output,
-        "snapshot={} url={} mode=interactive elements={}",
-        snapshot.id.get(),
-        snapshot.url,
-        snapshot.elements.len()
-    )
-    .is_err()
-    {
-        return ExitStatus::Unavailable;
-    }
-    for element in snapshot.elements {
-        if writeln!(
-            output,
-            "- {} {:?} [ref={}]",
-            element.role, element.name, element.reference
-        )
-        .is_err()
-        {
-            return ExitStatus::Unavailable;
-        }
-    }
-    ExitStatus::Success
+    write_interactive_snapshot(output, &snapshot)
 }
 
-fn write_session_error(errors: &mut impl Write, error: SessionError) -> ExitStatus {
+pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) -> ExitStatus {
     match error {
         SessionError::Load(error) => write_load_error(errors, error),
+        SessionError::Navigation { reference, error } => write_line(
+            errors,
+            &format!("browser.jr: navigation from {reference} failed: {error}"),
+            ExitStatus::Unavailable,
+        ),
         SessionError::NoPage => write_line(
             errors,
             "browser.jr: no page is open",
@@ -283,6 +285,51 @@ fn write_session_error(errors: &mut impl Write, error: SessionError) -> ExitStat
         SessionError::NoSnapshot => write_line(
             errors,
             "browser.jr: no snapshot is available",
+            ExitStatus::Unavailable,
+        ),
+        SessionError::StaleElementReference { reference } => write_line(
+            errors,
+            &format!("browser.jr: stale element reference {reference}"),
+            ExitStatus::InvalidInput,
+        ),
+        SessionError::UnsupportedClick { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot click {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedFill { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot fill {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedValue { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot read value from {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedCheck { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot change checked state on {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedCheckedState { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot read checked state from {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::InvalidAttributeName { name } => write_line(
+            errors,
+            &format!("browser.jr: invalid attribute name {name:?}"),
+            ExitStatus::InvalidInput,
+        ),
+        SessionError::SensitiveAttribute { reference, name } => write_line(
+            errors,
+            &format!("browser.jr: cannot read sensitive attribute {name:?} from {reference}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedEnabledState { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot read enabled state from {reference}: {reason}"),
             ExitStatus::Unavailable,
         ),
     }
@@ -451,7 +498,7 @@ fn write_constraint(
     }
 }
 
-fn combine_status(left: ExitStatus, right: ExitStatus) -> ExitStatus {
+pub(crate) fn combine_status(left: ExitStatus, right: ExitStatus) -> ExitStatus {
     match (left, right) {
         (ExitStatus::Unavailable, _) | (_, ExitStatus::Unavailable) => ExitStatus::Unavailable,
         (ExitStatus::InvalidInput, _) | (_, ExitStatus::InvalidInput) => ExitStatus::InvalidInput,
@@ -468,7 +515,7 @@ fn write_help(output: &mut impl Write) -> ExitStatus {
     }
 }
 
-fn write_line(output: &mut impl Write, value: &str, success: ExitStatus) -> ExitStatus {
+pub(crate) fn write_line(output: &mut impl Write, value: &str, success: ExitStatus) -> ExitStatus {
     if writeln!(output, "{value}").is_ok() {
         success
     } else {
@@ -498,6 +545,7 @@ mod tests {
 
         assert_eq!(status, ExitStatus::Success);
         assert!(output.contains("browser.jr lint <url>"));
+        assert!(output.contains("browser.jr session"));
         assert!(output.contains("Static HTML design lint is available"));
         assert!(errors.is_empty());
     }

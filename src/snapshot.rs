@@ -28,15 +28,25 @@ pub struct EvidenceRef {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InteractiveElementRef {
     document_epoch: u64,
+    snapshot: SnapshotId,
     ordinal: u64,
 }
 
 impl InteractiveElementRef {
-    pub(crate) const fn new(document_epoch: u64, ordinal: u64) -> Self {
+    pub(crate) const fn new(document_epoch: u64, snapshot: SnapshotId, ordinal: u64) -> Self {
         Self {
             document_epoch,
+            snapshot,
             ordinal,
         }
+    }
+
+    pub(crate) const fn document_epoch(self) -> u64 {
+        self.document_epoch
+    }
+
+    pub const fn snapshot(self) -> SnapshotId {
+        self.snapshot
     }
 
     pub const fn ordinal(self) -> u64 {
@@ -56,6 +66,14 @@ pub struct InteractiveElement {
     pub element: String,
     pub role: String,
     pub name: String,
+    pub state: InteractiveElementState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InteractiveElementState {
+    Unavailable,
+    Value(String),
+    Checked(bool),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,11 +96,17 @@ impl InteractiveSnapshot {
             .map(|(index, source)| InteractiveElement {
                 reference: InteractiveElementRef::new(
                     document_epoch,
+                    id,
                     u64::try_from(index + 1).expect("interactive element count exceeds u64"),
                 ),
                 element: source.element.clone(),
-                role: source.role.clone(),
-                name: source.name.clone(),
+                role: source.role().into(),
+                name: source.name().into(),
+                state: source
+                    .value()
+                    .map(|value| InteractiveElementState::Value(value.into()))
+                    .or_else(|| source.checked().map(InteractiveElementState::Checked))
+                    .unwrap_or(InteractiveElementState::Unavailable),
             })
             .collect();
         Self { id, url, elements }

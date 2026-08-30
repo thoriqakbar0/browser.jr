@@ -8,13 +8,31 @@ browser.jr loads a local page, computes supported layout evidence, and applies d
 
 Evidence date: 31 August 2026.
 
-The Rust implementation loads bounded loopback HTTP pages. It parses static HTML and a stated inline-CSS subset. Parent-aware block flow and fixed pixel geometry support horizontal-overflow lint.
+The Rust implementation loads loopback HTTP pages with a one MiB body cap. It parses static HTML and a stated inline-CSS subset. Parent-aware block flow and fixed pixel geometry support horizontal-overflow lint.
 
 One project rule is available. `--max-width <element> <css-px>` checks an explicit width limit without inventing a design preference. Missing or unsupported evidence blocks the affected rule.
 
 `snapshot <url> --interactive` reports a stated native HTML and ARIA role subset. It assigns ordered references for agent use.
 
-Grid inspection, user-agent comparison, watch mode, JavaScript execution, and the REPL are decided but unimplemented. Numeric budgets remain open.
+Package sessions can click a current link reference. Same-context links navigate through the loopback loader and stale old references.
+
+Package sessions can fill supported text inputs and textareas. Callers can read the current value directly or through a later snapshot.
+
+Package sessions can check, uncheck, and inspect native checkboxes. Snapshots report their current Boolean state.
+
+Package sessions can also read the installed URL and parsed page title.
+
+Package sessions can read normalized descendant text from a current interactive reference.
+
+Package sessions can read static attributes while blocking password input values.
+
+Package sessions can inspect the enabled state of supported native elements.
+
+Package sessions can reload the current URL. Success installs a fresh document and stale references.
+
+`session` reads page, snapshot, link, text, checkbox, URL, and title commands from stdin. It preserves typed identity behind each `@eN` label.
+
+Grid inspection, user-agent comparison, watch mode, JavaScript execution, machine-readable output, and the REPL remain unimplemented. Numeric budgets remain open.
 
 ## Quick start
 
@@ -36,6 +54,12 @@ Capture the supported interactive semantic elements:
 
 ```sh
 ./browser.jr snapshot http://localhost:3000 --interactive
+```
+
+Keep the page and references alive across commands:
+
+```sh
+printf 'open http://localhost:3000\nget url\nget title\nsnapshot --interactive\nfill @e1 hello\nget value @e1\nexit\n' | ./browser.jr session
 ```
 
 The element argument is a semantic element identifier. An HTML `id` supplies that identifier when present.
@@ -191,9 +215,11 @@ src/
   lib.rs                               package boundary
   main.rs                              binary entry point
   cli.rs                               argument parsing and local exits
-  loading.rs                           bounded loopback HTTP page loading
-  page.rs                              HTML semantics, ancestry, and horizontal box extraction
-  session.rs                           typed page, snapshot, and rule requests
+  cli_session.rs                       persistent stdin command adapter
+  loading.rs                           loopback HTTP page loading with a body cap
+  page.rs                              HTML parsing, ancestry, and horizontal box extraction
+  page/interactive.rs                  roles, names, action metadata, and control state
+  session.rs                           typed page, action, snapshot, and rule requests
   layout.rs                            field program, clean layout, and width invalidation
   non_empty.rs                         non-empty evidence and result collections
   snapshot.rs                          immutable layout and interactive evidence
@@ -201,12 +227,21 @@ src/
 
 tests/
   cli.rs                               compiled-process behavior
-  package.rs                           public page, snapshot, and rule behavior
+  package.rs                           public page, action, snapshot, and rule behavior
 
 verification/
   README.md                            hand-verification protocol
   design-lint.md                       checks for the primary lint workflow
   capture-snapshot.md                  checks for interactive semantic snapshots
+  navigation.md                        checks for package link navigation
+  ai-session.md                        checks for persistent CLI action state
+  fill-text.md                         checks for package and CLI fill behavior
+  read-value.md                        checks for current text-value inspection
+  check-state.md                       checks for native checkbox state
+  read-text.md                         checks for descendant text inspection
+  read-attribute.md                    checks for static attribute inspection
+  read-enabled.md                      checks for native enabled-state inspection
+  reload-page.md                       checks for current-page reload behavior
   foundations.md                       checks for the shared models
   loading-and-inspection.md            checks for the core workflow
   automation-and-lifecycle.md          checks for scripting and failures
@@ -230,10 +265,20 @@ repl/
 loading/
   open-page.md                         loading a URL or supplied document
   navigation.md                        redirects and later page navigation
+  reload-page.md                       replacing the current document from its URL
   network-control.md                   requests, failures, timeouts, and deterministic inputs
+
+interaction/
+  fill-text.md                         replacing supported text-control values
+  set-checked.md                       replacing native checkbox state
 
 inspection/
   query-elements.md                    finding rendered elements
+  read-value.md                        reading a current text-control value
+  read-checked.md                      reading native checkbox state
+  read-text.md                         reading normalized descendant text
+  read-attribute.md                    reading static source attributes
+  read-enabled.md                      reading supported native disabled state
   inspect-layout.md                    geometry and computed layout values
   inspect-grid.md                      tracks, placement, gaps, and overflow
   compare-user-agents.md               rerunning observations under another profile
@@ -269,7 +314,17 @@ Status is one of `not started`, `drafted`, or `verified`.
 | `bug-triage.md` | drafted |
 | `verification/README.md` | drafted |
 | `verification/design-lint.md` | drafted |
-| `verification/` remaining 2 checklists | not started |
+| `verification/capture-snapshot.md` | drafted |
+| `verification/navigation.md` | drafted |
+| `verification/ai-session.md` | drafted |
+| `verification/fill-text.md` | drafted |
+| `verification/read-value.md` | drafted |
+| `verification/check-state.md` | drafted |
+| `verification/read-text.md` | drafted |
+| `verification/read-attribute.md` | drafted |
+| `verification/read-enabled.md` | drafted |
+| `verification/reload-page.md` | drafted |
+| `verification/` remaining checklists | not started |
 | `foundations/evaluation.md` | not started |
 | `foundations/session.md` | not started |
 | `foundations/page-and-document.md` | not started |
@@ -281,9 +336,17 @@ Status is one of `not started`, `drafted`, or `verified`.
 | `repl/help-and-discovery.md` | not started |
 | `repl/output.md` | not started |
 | `loading/open-page.md` | drafted |
-| `loading/navigation.md` | not started |
+| `loading/navigation.md` | drafted |
+| `loading/reload-page.md` | drafted |
 | `loading/network-control.md` | not started |
+| `interaction/fill-text.md` | drafted |
+| `interaction/set-checked.md` | drafted |
 | `inspection/query-elements.md` | not started |
+| `inspection/read-value.md` | drafted |
+| `inspection/read-checked.md` | drafted |
+| `inspection/read-text.md` | drafted |
+| `inspection/read-attribute.md` | drafted |
+| `inspection/read-enabled.md` | drafted |
 | `inspection/inspect-layout.md` | not started |
 | `inspection/inspect-grid.md` | not started |
 | `inspection/compare-user-agents.md` | not started |
@@ -293,7 +356,7 @@ Status is one of `not started`, `drafted`, or `verified`.
 | `verification-features/diagnostics.md` | not started |
 | `verification-features/batch-checks.md` | not started |
 | `automation/package-session.md` | not started |
-| `automation/ai-session.md` | not started |
+| `automation/ai-session.md` | drafted |
 | `automation/reproducible-script.md` | not started |
 | `cross-cutting/determinism.md` | not started |
 | `cross-cutting/resource-limits.md` | not started |

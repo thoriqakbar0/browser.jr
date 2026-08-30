@@ -1,11 +1,9 @@
 use std::fmt;
 use std::net::IpAddr;
-use std::time::Duration;
 
 use http::Uri;
 
 const MAX_HTML_BYTES: u64 = 1024 * 1024;
-const LOAD_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LoadError {
@@ -46,12 +44,7 @@ pub(crate) fn load_local_html(value: &str) -> Result<String, LoadError> {
         .map_err(|error| LoadError::InvalidUrl(error.to_string()))?;
     validate_local_http_url(&url)?;
 
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .max_redirects(0)
-        .proxy(None)
-        .timeout_global(Some(LOAD_TIMEOUT))
-        .build()
-        .into();
+    let agent = local_http_agent();
     let mut response = agent
         .get(url)
         .call()
@@ -82,6 +75,15 @@ pub(crate) fn load_local_html(value: &str) -> Result<String, LoadError> {
         .limit(MAX_HTML_BYTES)
         .read_to_string()
         .map_err(|error| LoadError::InvalidBody(error.to_string()))
+}
+
+fn local_http_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .max_redirects(0)
+        .no_delay(false)
+        .proxy(None)
+        .build()
+        .into()
 }
 
 fn validate_local_http_url(url: &Uri) -> Result<(), LoadError> {
@@ -118,7 +120,7 @@ fn validate_local_http_url(url: &Uri) -> Result<(), LoadError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoadError, validate_local_http_url};
+    use super::{LoadError, local_http_agent, validate_local_http_url};
     use http::Uri;
 
     #[test]
@@ -144,5 +146,19 @@ mod tests {
         let result = validate_local_http_url(&"https://localhost".parse::<Uri>().unwrap());
 
         assert!(matches!(result, Err(LoadError::UnsupportedTarget(_))));
+    }
+
+    #[test]
+    fn local_agent_avoids_socket_option_races() {
+        let agent = local_http_agent();
+        let config = agent.config();
+        let timeouts = config.timeouts();
+
+        assert!(!config.no_delay());
+        assert_eq!(timeouts.global, None);
+        assert_eq!(timeouts.connect, None);
+        assert_eq!(timeouts.send_request, None);
+        assert_eq!(timeouts.recv_response, None);
+        assert_eq!(timeouts.recv_body, None);
     }
 }

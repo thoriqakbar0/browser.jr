@@ -4,7 +4,7 @@
 
 CLI help shows the available browser.jr invocation shape. Run `./browser.jr help` or `./browser.jr --help` from the repository.
 
-The output names static-HTML lint, interactive snapshot, and their supported subsets.
+The output names static-HTML lint, interactive snapshot, session mode, and their supported subsets.
 
 ## The simple case
 
@@ -21,10 +21,14 @@ stateDiagram-v2
     parsing --> showing_version : version
     parsing --> rejected : invalid input
     parsing --> loading : valid lint or snapshot request
+    parsing --> session_ready : session request
     showing_help --> finished
     showing_version --> finished
     rejected --> finished
     loading --> finished
+    session_ready --> session_running
+    session_running --> session_running : command result
+    session_running --> finished : exit or EOF
 ```
 
 ### Invoke
@@ -51,7 +55,7 @@ Help and version exit with status zero. Invalid input exits with status two.
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | Help and version use their listed forms. Lint accepts viewport and width flags. Snapshot accepts `-i` or `--interactive`. | Nothing can change. The command exits immediately. |
+| Flags and options | Help and version use their listed forms. Lint accepts viewport and width flags. Snapshot accepts `-i` or `--interactive`. Session takes no invocation flags. | Nothing can change. The help command exits immediately. |
 | Project configuration | Help does not read project configuration. | Nothing can change. |
 | Target matrix | Help does not create a target matrix. | Nothing can change. |
 | Output channel | Help and version use stdout. Errors use stderr. | A write failure prevents successful delivery. |
@@ -96,6 +100,9 @@ Help and version exit with status zero. Invalid input exits with status two.
 - `snapshot <url> --interactive` reports supported interactive semantic elements.
 - `snapshot <url> -i` selects the same implemented projection.
 - `snapshot <url>` reports invalid input because no default projection exists.
+- `session` starts the persistent stdin command adapter.
+- Session help lists every supported line command, including element inspection and page metadata commands.
+- Extra invocation arguments after `session` report invalid input.
 - A missing or unsupported width target blocks `max-element-width`.
 - Extra or unknown arguments report invalid input.
 - A closed stdout prevents successful help delivery.

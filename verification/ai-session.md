@@ -1,0 +1,27 @@
+# Verification: AI session mode
+
+Run these checks against controlled loopback pages. Record the fixtures and browser.jr commit.
+
+## automation/ai-session.md
+
+| ID | P | Device | Claim | Setup | Steps | Expected | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| AISESSION-01 | P1 | pipe | One process preserves action state ([The simple case](../automation/ai-session.md#the-simple-case)). | Serve a page linking to a second page. | Send open, snapshot, click, snapshot, and exit through one stdin pipe. | The click navigates. The second snapshot reports the new document. | partial: compiled-process fixture passed, 2026-08-31 |
+| AISESSION-02 | P1 | pipe | Navigation clears reported references ([While running](../automation/ai-session.md#while-running)). | Serve two pages with one link each. | Open, snapshot, click, then reuse the label without another snapshot. | The second click reports an unknown or stale reference. | partial: compiled-process fixture passed, 2026-08-31 |
+| AISESSION-03 | P1 | pipe | Invalid input does not stop command reading ([Exit immediately](../automation/ai-session.md#exit-immediately)). | Start session mode with captured streams. | Send an invalid command, then help and exit. | Help and closure still appear. Final status is two. | partial: unit test passed, 2026-08-31 |
+| AISESSION-04 | P1 | tty | Each response flushes before the next command ([While running](../automation/ai-session.md#while-running)). | Start session mode in a terminal. | Enter one command at a time and wait after each line. | Its complete response appears before another line is entered. | partial: local TTY check passed on the uncommitted worktree, 2026-08-31 |
+| AISESSION-05 | P2 | pipe | Failed actions preserve usable state ([While running](../automation/ai-session.md#while-running)). | Serve a button and a loopback link. | Snapshot, try the unsupported button, then click the current link reference. | The unsupported result does not clear the snapshot references. | partial: compiled-process fixture passed, 2026-08-31 |
+| AISESSION-06 | P1 | pipe | Fill state survives until another command observes it ([While running](../automation/ai-session.md#while-running)). | Serve a text input with an initial value. | Snapshot, fill with spaced text, then snapshot again. | The second snapshot reports the replacement text. | partial: compiled-process fixture passed, 2026-08-31 |
+| AISESSION-07 | P1 | pipe | URL inspection reports navigation state ([Begin running](../automation/ai-session.md#begin-running)). | Serve a page linking to a second path. | Read the URL before and after clicking the link. | Each `get url` reports the installed page URL. | partial: package and compiled-process fixtures passed, 2026-08-31 |
+| AISESSION-08 | P1 | pipe | Title inspection reports normalized document metadata ([Begin running](../automation/ai-session.md#begin-running)). | Serve two titled pages with one link. | Read the title before and after clicking the link. | Each `get title` reports the installed page title. | partial: package and compiled-process fixtures passed, 2026-08-31 |
+| AISESSION-09 | P1 | pipe | Checkbox commands preserve current references ([While running](../automation/ai-session.md#while-running)). | Serve one native checkbox. | Snapshot, read, check, read, uncheck, and read through one label. | Every command uses the same reference and reports current state. | partial: compiled-process fixture passed, 2026-08-31 |
+| AISESSION-10 | P1 | pipe | Text inspection follows current navigation state ([Begin running](../automation/ai-session.md#begin-running)). | Serve two linked pages with textual controls. | Read element text before and after navigation and recapture. | Each `get text` reports text from its current document. | partial: compiled-process fixture passed, 2026-08-31 |
+| AISESSION-11 | P1 | pipe | Attribute inspection preserves present and missing values ([Begin running](../automation/ai-session.md#begin-running)). | Serve one link with `href` and no `title`. | Read both attributes through one reference. | The first result is quoted. The second reports `null`. | partial: compiled-process fixture passed, 2026-08-31 |
+| AISESSION-12 | P1 | pipe | Enabled-state reads preserve current references ([While running](../automation/ai-session.md#while-running)). | Serve enabled and disabled native checkboxes. | Read enabled and checked state through current labels. | Both enabled results are Boolean. Later state commands reuse the labels. | partial: compiled-process fixture passed, 2026-08-31 |
+| AISESSION-13 | P1 | pipe | Reload replaces document state and clears references ([While running](../automation/ai-session.md#while-running)). | Serve two responses from one URL. | Open, inspect, reload, and capture again. | The second response appears with fresh references. | partial: compiled-process fixture passed, 2026-08-31 |
+
+Not checkable yet:
+
+- Machine-readable responses and command identifiers do not exist.
+- Graceful cancellation and force-stop recovery do not exist.
+- Actions other than bounded link navigation do not exist.

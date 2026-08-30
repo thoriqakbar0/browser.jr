@@ -12,6 +12,6 @@ fi
 debtmap config check --config .debtmap.toml
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets
+cargo test --all-targets -- --test-threads=1
 
 exec debtmap validate . --config .debtmap.toml --format terminal

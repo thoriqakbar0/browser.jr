@@ -2,7 +2,7 @@
 
 Status: proposed internal architecture, 28 August 2026. Implementation evidence updated 31 August 2026.
 
-The current source loads loopback HTML, computes a horizontal layout subset, evaluates two rules, and supports one ordered width mutation. A session can also retain one static page and capture its interactive semantic subset. Many Rust types below remain design sketches. They do not define the package API.
+The current source loads loopback HTML and computes a horizontal layout subset. It evaluates two rules and supports one ordered width mutation. A session retains one static page and its URL and title. It reloads that page and navigates same-context links. It captures interactive semantics and changes text and native checkbox state. The CLI session adapter keeps that state across stdin commands. Many Rust types below remain design sketches. They do not define the package API.
 
 This document owns internal responsibilities and data flow. The [product description](README.md) owns user-visible scope. The [research note](research/browser-engine-and-design-lint-papers.md) records external evidence.
 
@@ -54,6 +54,10 @@ let observation: Observation = session.execute(observe_request).await?;
 ```
 
 Transport adapters may decode a closed wire command. They must convert it into a typed core request before execution. Wire types never enter the engine model.
+
+The implemented `cli_session` adapter stores the typed references from the latest interactive snapshot. It resolves a displayed `@eN` only from that set. A successful open, navigation, or newer snapshot replaces the set.
+
+The implemented `page::interactive` module owns title normalization, semantics, descendant text, actions, and control capabilities. `page` keeps tokenization and layout extraction.
 
 ## System shape
 
@@ -165,9 +169,9 @@ pub(crate) struct EvidenceRef {
 }
 ```
 
-The implemented interactive reference stores a document epoch and document-order ordinal. Repeated captures retain equality within one document.
+The implemented interactive reference stores a document epoch, snapshot identity, and document-order ordinal. Every capture refreshes its identity.
 
-Opening another document increments the epoch. The displayed ordinal may restart, but the typed reference identity changes.
+Another capture changes the snapshot identity. Opening another document also increments the epoch.
 
 Navigation creates a new `DocumentEpoch`. Deleted or replaced nodes invalidate their generational identifiers. The session returns a stale-target error instead of silently retargeting an action or observation.
 

@@ -12,17 +12,25 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Caller.** The person, AI agent, or program that submits an evaluation. Caller identity must not change evaluation semantics.
 
-**CLI.** The primary developer interface. `lint` checks layout. `snapshot --interactive` reports supported semantic controls.
+**CLI.** The primary developer interface. `lint` checks layout. `snapshot --interactive` reports supported semantic controls. `session` accepts persistent line commands.
 
 ## Sessions and pages
 
 **Session.** One isolated engine instance with its pages, configuration, and evaluation history. Whether a session may contain more than one page is open.
 
+**Session mode.** One long-lived CLI invocation that reads one command per stdin line. It keeps one engine session alive. It is separate from the planned JavaScript REPL.
+
 **Page.** A loaded browsing context within a session. A page owns its current document and user-agent profile.
+
+**Current URL.** The URL of the document installed in one page. A successful navigation replaces it.
+
+**Page title.** The normalized text of the first HTML title element. A successful navigation replaces it.
 
 **Document.** The current parsed and rendered content of a page. Navigation may replace it.
 
-**Navigation.** A request that may replace a page's current document. Redirect behavior and commit boundaries remain open.
+**Navigation.** A request that may replace a page's current document. Package and session-mode link clicks implement one bounded subset.
+
+**Reload.** A navigation that fetches the current URL again. Success installs a fresh document epoch.
 
 ## Rendering and evidence
 
@@ -36,7 +44,21 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Interactive snapshot.** A snapshot containing the supported interactive roles, names, semantic identifiers, and ordered references.
 
-**Interactive element reference.** A session-owned target identity such as `@e1`. Repeated captures preserve it until another document opens.
+**Interactive element reference.** A snapshot-owned target identity such as `@e1`. Another capture or document makes it stale.
+
+**Click.** An action request against one current interactive element reference. Only same-context link navigation is implemented.
+
+**Fill.** An action that replaces a supported text control's current value. Fill does not dispatch browser events yet.
+
+**Value inspection.** A read of one current text-control value through a snapshot or typed request.
+
+**Checked state.** The current Boolean state of a supported native checkbox. Snapshots and typed requests expose it.
+
+**Element text.** Normalized descendant text from a loaded static element. It stays distinct from the accessible name.
+
+**Element attribute.** One parsed static source attribute. Attribute reads distinguish present, missing, and blocked-sensitive values.
+
+**Enabled state.** Whether a supported native element lacks its native disabled state. It is not full actionability.
 
 **Evidence.** The structured observations and diagnostics that support a check result.
 
@@ -122,7 +144,7 @@ These terms describe decided but unimplemented REPL behavior.
 
 **Human-readable output.** Text meant for a person. The CLI emits it now. The intended REPL will use the same result terms.
 
-**Machine-readable output.** Decided but unimplemented structured output for programs and AI agents. The encoding remains open.
+**Machine-readable output.** Decided but unimplemented structured output for programs and AI agents. Session mode emits flushed line-oriented text, not this structured format.
 
 **Watch mode.** A decided but unimplemented lint invocation that checks the target again after relevant page changes settle.
 
