@@ -20,10 +20,12 @@ This directory checks product claims against the running browser.jr CLI. Feature
 | [ai-session.md](ai-session.md) | `automation/ai-session.md` |
 | [fill-text.md](fill-text.md) | `interaction/fill-text.md` |
 | [read-value.md](read-value.md) | `inspection/read-value.md` |
+| [select-option.md](select-option.md) | `interaction/select-option.md` |
 | [check-state.md](check-state.md) | `interaction/set-checked.md` and `inspection/read-checked.md` |
 | [read-text.md](read-text.md) | `inspection/read-text.md` |
 | [read-attribute.md](read-attribute.md) | `inspection/read-attribute.md` |
 | [read-enabled.md](read-enabled.md) | `inspection/read-enabled.md` |
+| [read-visible.md](read-visible.md) | `inspection/read-visible.md` |
 | [reload-page.md](reload-page.md) | `loading/reload-page.md` |
 
 The root README lists the remaining checklist clusters. Add a checklist after its feature document reaches `drafted`.
@@ -50,17 +52,19 @@ CLI output, exit status, and saved machine-readable results can be checked by sc
 
 ## Results so far
 
-Automated tests cover CLI discovery, loopback loading, static HTML geometry, typed requests, width invalidation, and explicit project width limits. DLINT-01 through DLINT-04 and DLINT-12 have partial automated evidence from 2026-08-29.
+Automated tests cover CLI discovery, loopback loading, static HTML geometry, typed requests, transactional `x` and `width` invalidation, and explicit project width limits. DLINT-01 through DLINT-04 and DLINT-12 have partial automated evidence from 2026-08-29. DLINT-11 has partial package and kernel evidence from 2026-08-31.
 
-Interactive snapshot tests cover semantics, control state, references, empty pages, and replacement. SNAP-01 through SNAP-09 have partial automated evidence from 2026-08-31.
+Interactive snapshot tests cover semantics, control state, references, empty pages, and replacement. SNAP-01 through SNAP-10 have partial automated evidence from 2026-08-31.
 
 Navigation tests cover relative links, fresh and stale references, unsupported clicks, and failed-navigation recovery. NAV-01 through NAV-06 have partial automated evidence from 2026-08-31.
 
-Session-mode tests cover persistent actions, observations, reload, metadata, stale labels, and recovery. AISESSION-01 through AISESSION-13 have partial evidence from 2026-08-31.
+Session-mode tests cover persistent actions, observations, reload, metadata, stale labels, and recovery. AISESSION-01 through AISESSION-15 have partial evidence from 2026-08-31.
 
 Fill tests cover initial values, replacement, snapshot evidence, stale references, and session-mode text. FILL-01 through FILL-05 have partial automated evidence from 2026-08-31.
 
-Value tests cover direct reads, read-only fields, unsupported controls, stale references, and session-mode output. VALUE-01 through VALUE-05 have partial automated evidence from 2026-08-31.
+Value tests cover text and native single-select reads, unsupported controls, stale references, and session output. VALUE-01 through VALUE-06 have partial automated evidence from 2026-08-31.
+
+Select tests cover initial state, exact values, disabled boundaries, failures, and stale references. SELECT-01 through SELECT-07 have partial automated evidence from 2026-08-31.
 
 Checkbox tests cover writes, reads, snapshots, disabled controls, idempotence, and stale references. CHECK-01 through CHECK-06 have partial automated evidence from 2026-08-31.
 
@@ -69,6 +73,8 @@ Text tests cover descendants, empty text, accessible-name separation, repeated r
 Attribute tests cover present, missing, normalized, invalid, and sensitive values. ATTR-01 through ATTR-05 have partial automated evidence from 2026-08-31.
 
 Enabled-state tests cover active, disabled, unsupported, and reusable references. ENABLED-01 through ENABLED-04 have partial automated evidence from 2026-08-31.
+
+Visibility tests cover static boxes, hidden states, unsupported evidence, and reusable references. VISIBLE-01 through VISIBLE-06 have partial automated evidence from 2026-08-31.
 
 Reload tests cover replacement, stale references, failed-load recovery, and missing pages. RELOAD-01 through RELOAD-04 have partial automated evidence from 2026-08-31.
 

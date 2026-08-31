@@ -1,4 +1,4 @@
-# Read a text-control value
+# Read a control value
 
 ## Summary
 
@@ -8,9 +8,11 @@ Session-mode callers send `get value <ref>` after an interactive snapshot in the
 
 Interactive snapshots also include each supported current value.
 
+Value inspection supports text controls and native single-select controls.
+
 ## The simple case
 
-The caller opens a page and captures an interactive snapshot. It selects a text-control reference.
+The caller opens a page and captures an interactive snapshot. It selects a supported control reference.
 
 The caller requests its value. browser.jr returns the current string without changing page or reference state.
 
@@ -22,7 +24,7 @@ stateDiagram-v2
     checking_reference --> rejected : missing or stale reference
     checking_reference --> checking_value : current reference
     checking_value --> unsupported : value unavailable
-    checking_value --> reporting : supported text value
+    checking_value --> reporting : supported control value
     reporting --> finished
     rejected --> finished
     unsupported --> finished
@@ -47,6 +49,10 @@ browser.jr resolves the reference through the latest interactive snapshot.
 Value inspection supports `textarea` and these `input` types: empty, `text`, `email`, `search`, `tel`, and `url`.
 
 Disabled and read-only controls in that subset remain readable.
+
+Native single selects are readable. Disabled single selects also remain readable.
+
+[Select one option](../interaction/select-option.md) defines select values and selection behavior.
 
 ### While running
 
@@ -95,7 +101,7 @@ The reference remains current after the read.
 
 **Network and storage.** The read uses no network and writes no storage.
 
-**Rendering compatibility.** The result comes from browser.jr's text-control model, not a platform DOM property implementation.
+**Rendering compatibility.** The result comes from browser.jr's control-state model, not a platform DOM property implementation.
 
 **Isolation.** Values and references belong to one session and document.
 
@@ -106,8 +112,8 @@ The reference remains current after the read.
 - An empty supported value returns an empty string.
 - Disabled and read-only supported text controls remain readable.
 - Password values remain unavailable.
-- Number, checkbox, radio, range, select, button, link, and contenteditable values remain unavailable.
-- A successful fill changes the next direct read immediately.
+- Number, checkbox, radio, range, multiple-select, button, link, and contenteditable values remain unavailable.
+- A successful fill or select changes the next direct read immediately.
 - A value read does not invalidate its reference.
 - A later snapshot invalidates references from the previous snapshot.
 - Session-mode output escapes quotes, backslashes, control characters, and line breaks.
@@ -115,7 +121,7 @@ The reference remains current after the read.
 ## Open questions and verification
 
 - Define password reads without exposing secrets.
-- Define other form-control value types.
+- Define multiple-select values and other form-control value types.
 - Define machine-readable response encoding.
 - Define value size limits.
 

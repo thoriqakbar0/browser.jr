@@ -1,4 +1,5 @@
-use super::{ElementSource, parse_page_source};
+use super::visibility::{VisibilityState, visibility_state};
+use super::{ElementSource, collapse_whitespace, parse_page_source};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -13,6 +14,7 @@ pub(crate) struct InteractiveElementSource {
     semantics: InteractiveSemantics,
     pub(crate) action: InteractiveAction,
     pub(crate) control_state: ControlState,
+    visibility: VisibilityState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,9 +46,41 @@ pub(crate) enum CheckedState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SelectState {
+    Editable(SingleSelect),
+    NonEditable {
+        select: SingleSelect,
+        reason: String,
+    },
+    Unsupported {
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SelectValueError {
+    Unsupported { reason: String },
+    OptionNotFound,
+    OptionDisabled,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SingleSelect {
+    options: Vec<SelectOption>,
+    selected: Option<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SelectOption {
+    value: String,
+    disabled: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ControlState {
     Text(TextValueState),
     Checkbox(CheckedState),
+    Select(SelectState),
     Unavailable,
 }
 
@@ -87,14 +121,37 @@ impl InteractiveElementSource {
         }
     }
 
+    pub(crate) fn visible(&self) -> Result<bool, &str> {
+        match &self.visibility {
+            VisibilityState::Visible => Ok(true),
+            VisibilityState::Hidden => Ok(false),
+            VisibilityState::Unsupported { reason } => Err(reason),
+        }
+    }
+
     pub(crate) fn value(&self) -> Option<&str> {
         match &self.control_state {
             ControlState::Text(
                 TextValueState::Editable { value } | TextValueState::NonEditable { value, .. },
             ) => Some(value),
+            ControlState::Select(state) => state.value(),
             ControlState::Text(TextValueState::Unavailable)
             | ControlState::Checkbox(_)
             | ControlState::Unavailable => None,
+        }
+    }
+
+    pub(crate) fn select_value(&mut self, value: &str) -> Result<&str, SelectValueError> {
+        match &mut self.control_state {
+            ControlState::Select(state) => state.select_value(value),
+            ControlState::Text(_) | ControlState::Checkbox(_) | ControlState::Unavailable => {
+                Err(SelectValueError::Unsupported {
+                    reason: format!(
+                        "select execution for role {} is not implemented",
+                        self.semantics.role
+                    ),
+                })
+            }
         }
     }
 
@@ -103,8 +160,49 @@ impl InteractiveElementSource {
             ControlState::Checkbox(
                 CheckedState::Editable { checked } | CheckedState::NonEditable { checked, .. },
             ) => Some(checked),
-            ControlState::Text(_) | ControlState::Unavailable => None,
+            ControlState::Text(_) | ControlState::Select(_) | ControlState::Unavailable => None,
         }
+    }
+}
+
+impl SelectState {
+    fn value(&self) -> Option<&str> {
+        match self {
+            Self::Editable(select) | Self::NonEditable { select, .. } => Some(select.value()),
+            Self::Unsupported { .. } => None,
+        }
+    }
+
+    fn select_value(&mut self, value: &str) -> Result<&str, SelectValueError> {
+        match self {
+            Self::Editable(select) => select.select_value(value),
+            Self::NonEditable { reason, .. } | Self::Unsupported { reason } => {
+                Err(SelectValueError::Unsupported {
+                    reason: reason.clone(),
+                })
+            }
+        }
+    }
+}
+
+impl SingleSelect {
+    fn value(&self) -> &str {
+        self.selected
+            .map(|index| self.options[index].value.as_str())
+            .unwrap_or_default()
+    }
+
+    fn select_value(&mut self, value: &str) -> Result<&str, SelectValueError> {
+        let index = self
+            .options
+            .iter()
+            .position(|option| option.value == value)
+            .ok_or(SelectValueError::OptionNotFound)?;
+        if self.options[index].disabled {
+            return Err(SelectValueError::OptionDisabled);
+        }
+        self.selected = Some(index);
+        Ok(&self.options[index].value)
     }
 }
 
@@ -117,17 +215,25 @@ pub(crate) fn page_semantics_from_html(html: &str) -> PageSemanticSource {
     let source = parse_page_source(html);
     PageSemanticSource {
         title: collapse_whitespace(&source.title),
-        interactive_elements: interactive_elements_from_sources(&source.elements),
+        interactive_elements: interactive_elements_from_sources(
+            &source.elements,
+            source.has_stylesheet,
+        ),
     }
 }
 
-fn interactive_elements_from_sources(sources: &[ElementSource]) -> Vec<InteractiveElementSource> {
+fn interactive_elements_from_sources(
+    sources: &[ElementSource],
+    has_stylesheet: bool,
+) -> Vec<InteractiveElementSource> {
     sources
         .iter()
-        .filter_map(|source| {
+        .enumerate()
+        .filter_map(|(index, source)| {
             let role = interactive_role(source)?;
             let action = interactive_action(source, &role);
-            let control_state = control_state(source);
+            let control_state = control_state(index, source, sources);
+            let visibility = visibility_state(index, source, sources, has_stylesheet);
             Some(InteractiveElementSource {
                 element: source.id.clone(),
                 semantics: InteractiveSemantics {
@@ -139,14 +245,22 @@ fn interactive_elements_from_sources(sources: &[ElementSource]) -> Vec<Interacti
                 },
                 action,
                 control_state,
+                visibility,
             })
         })
         .collect()
 }
 
-fn control_state(source: &ElementSource) -> ControlState {
+fn control_state(
+    source_index: usize,
+    source: &ElementSource,
+    sources: &[ElementSource],
+) -> ControlState {
     if source.tag == "input" && input_type(source).as_deref() == Some("checkbox") {
         return ControlState::Checkbox(checkbox_state(source));
+    }
+    if source.tag == "select" {
+        return ControlState::Select(select_state(source_index, source, sources));
     }
     let text = text_value_state(source);
     if text == TextValueState::Unavailable {
@@ -154,6 +268,87 @@ fn control_state(source: &ElementSource) -> ControlState {
     } else {
         ControlState::Text(text)
     }
+}
+
+fn select_state(
+    select_index: usize,
+    source: &ElementSource,
+    sources: &[ElementSource],
+) -> SelectState {
+    if source.attributes.contains_key("multiple") {
+        return SelectState::Unsupported {
+            reason: "multiple select controls are not implemented".into(),
+        };
+    }
+
+    let mut options = Vec::new();
+    let mut selected = None;
+    for option in sources.iter().filter(|candidate| {
+        candidate.tag == "option"
+            && nearest_select_ancestor(candidate.parent, sources) == Some(select_index)
+    }) {
+        if option.attributes.contains_key("selected") {
+            selected = Some(options.len());
+        }
+        options.push(SelectOption {
+            value: option
+                .attributes
+                .get("value")
+                .cloned()
+                .unwrap_or_else(|| collapse_whitespace(&option.text)),
+            disabled: option_is_disabled(option, sources),
+        });
+    }
+
+    if selected.is_none() && select_display_size(source) == 1 {
+        selected = options.iter().position(|option| !option.disabled);
+    }
+    let select = SingleSelect { options, selected };
+    if source.attributes.contains_key("disabled") {
+        SelectState::NonEditable {
+            select,
+            reason: "disabled select controls cannot change value".into(),
+        }
+    } else {
+        SelectState::Editable(select)
+    }
+}
+
+fn nearest_select_ancestor(mut parent: Option<usize>, sources: &[ElementSource]) -> Option<usize> {
+    while let Some(index) = parent {
+        let ancestor = &sources[index];
+        if ancestor.tag == "select" {
+            return Some(index);
+        }
+        parent = ancestor.parent;
+    }
+    None
+}
+
+fn option_is_disabled(option: &ElementSource, sources: &[ElementSource]) -> bool {
+    if option.attributes.contains_key("disabled") {
+        return true;
+    }
+    let mut parent = option.parent;
+    while let Some(index) = parent {
+        let ancestor = &sources[index];
+        if ancestor.tag == "select" {
+            return false;
+        }
+        if ancestor.tag == "optgroup" && ancestor.attributes.contains_key("disabled") {
+            return true;
+        }
+        parent = ancestor.parent;
+    }
+    false
+}
+
+fn select_display_size(source: &ElementSource) -> u64 {
+    source
+        .attributes
+        .get("size")
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(1)
 }
 
 fn checkbox_state(source: &ElementSource) -> CheckedState {
@@ -237,6 +432,11 @@ fn native_interactive_role(source: &ElementSource) -> Option<String> {
     match source.tag.as_str() {
         "a" if source.attributes.contains_key("href") => Some("link".into()),
         "button" => Some("button".into()),
+        "select"
+            if source.attributes.contains_key("multiple") || select_display_size(source) > 1 =>
+        {
+            Some("listbox".into())
+        }
         "select" => Some("combobox".into()),
         "textarea" => Some("textbox".into()),
         "input" => input_role(input_type(source)),
@@ -371,8 +571,4 @@ fn non_empty_attribute<'a>(source: &'a ElementSource, name: &str) -> Option<&'a 
         .get(name)
         .map(String::as_str)
         .filter(|value| !value.trim().is_empty())
-}
-
-fn collapse_whitespace(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }

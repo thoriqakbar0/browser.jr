@@ -75,4 +75,4 @@ The remaining risk is first-slice size. The implementation must begin with one f
 
 The synthesis was reviewed against `README.md`, `goal.md`, `glossary.md`, and the design-lint documents. It keeps unavailable evidence from becoming a pass and carries target-matrix context into findings.
 
-The runtime now loads bounded loopback HTML and computes a stated horizontal layout subset. It exercises typed requests, immutable evidence, overflow and project width rules, and clean-equivalent width invalidation. General incremental equivalence remains unproved.
+The runtime now loads bounded loopback HTML and computes a stated horizontal layout subset. It exercises typed requests, immutable evidence, overflow and project width rules, and transactional `x` and `width` invalidation. A finite mutation matrix checks clean equivalence, queue order, duplicate invalidation, change-only propagation, and rollback. General equivalence for live style, text, insertion, and removal changes remains unproved.

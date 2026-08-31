@@ -14,12 +14,12 @@ pub use loading::LoadError;
 pub use non_empty::NonEmpty;
 pub use rules::{Comparison, Finding, RuleConstraint, RuleResult, WidthFinding};
 pub use session::{
-    ApplyMutation, CaptureInteractiveSnapshot, CheckElementWidth, ClickElement, ClickResult,
-    ElementAttribute, ElementChecked, ElementEnabled, ElementText, ElementValue, FillElement,
-    FillResult, GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementText,
-    GetElementValue, GetPageTitle, GetPageUrl, LintLayout, OpenPage, OpenedPage, PageTitle,
-    PageUrl, ReloadPage, Session, SessionError, SessionRequest, SetCheckedResult,
-    SetElementChecked,
+    ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot, CheckElementWidth, ClickElement,
+    ClickResult, ElementAttribute, ElementChecked, ElementEnabled, ElementText, ElementValue,
+    ElementVisible, FillElement, FillResult, GetElementAttribute, GetElementChecked,
+    GetElementEnabled, GetElementText, GetElementValue, GetElementVisible, GetPageTitle,
+    GetPageUrl, LintLayout, OpenPage, OpenedPage, PageTitle, PageUrl, ReloadPage, SelectElement,
+    SelectResult, Session, SessionError, SessionRequest, SetCheckedResult, SetElementChecked,
 };
 pub use snapshot::{
     EvidenceRef, InteractiveElement, InteractiveElementRef, InteractiveElementState,
@@ -30,7 +30,7 @@ pub use snapshot::{
 mod tests {
     use crate::layout::{ElementInput, LayoutInput};
     use crate::rules::{Comparison, RuleConstraint, RuleResult};
-    use crate::session::{ApplyMutation, LintLayout, Session};
+    use crate::session::{ApplyMutation, ApplyMutations, LintLayout, Session};
 
     #[test]
     fn typed_request_returns_an_overflow_report() {
@@ -177,6 +177,60 @@ mod tests {
             other => panic!("expected overflow, got {other:?}"),
         };
         assert_eq!(right_edge(incremental), right_edge(clean));
+    }
+
+    #[test]
+    fn batched_position_and_width_mutations_match_a_fresh_clean_layout() {
+        let initial = LayoutInput {
+            viewport_width: 320,
+            elements: vec![
+                ElementInput::supported("header", 0, 320),
+                ElementInput::supported("hero", 20, 40),
+            ],
+        };
+        let changed = LayoutInput {
+            viewport_width: 320,
+            elements: vec![
+                ElementInput::supported("header", 0, 320),
+                ElementInput::supported("hero", 280, 80),
+            ],
+        };
+        let mut incremental_session = Session::new();
+        incremental_session
+            .execute(LintLayout { input: initial })
+            .unwrap();
+
+        let incremental = incremental_session
+            .execute(ApplyMutations {
+                mutations: vec![
+                    crate::LayoutMutation::SetWidth {
+                        element: "hero".into(),
+                        width: 80,
+                    },
+                    crate::LayoutMutation::SetX {
+                        element: "hero".into(),
+                        x: 280,
+                    },
+                ],
+            })
+            .unwrap();
+        let clean = Session::new()
+            .execute(LintLayout { input: changed })
+            .unwrap();
+
+        let geometry = |result: RuleResult| match result {
+            RuleResult::Compared {
+                comparison: Comparison::Fail(findings),
+                ..
+            } => (
+                findings[0].affected_element.as_str().to_owned(),
+                findings[0].observed_left,
+                findings[0].observed_width,
+                findings[0].observed_right,
+            ),
+            other => panic!("expected overflow, got {other:?}"),
+        };
+        assert_eq!(geometry(incremental), geometry(clean));
     }
 
     #[test]

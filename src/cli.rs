@@ -302,6 +302,21 @@ pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) 
             &format!("browser.jr: cannot fill {reference}: {reason}"),
             ExitStatus::Unavailable,
         ),
+        SessionError::UnsupportedSelect { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot select on {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::SelectOptionNotFound { reference, value } => write_line(
+            errors,
+            &format!("browser.jr: option value {value:?} was not found on {reference}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::SelectOptionDisabled { reference, value } => write_line(
+            errors,
+            &format!("browser.jr: option value {value:?} is disabled on {reference}"),
+            ExitStatus::Unavailable,
+        ),
         SessionError::UnsupportedValue { reference, reason } => write_line(
             errors,
             &format!("browser.jr: cannot read value from {reference}: {reason}"),
@@ -330,6 +345,11 @@ pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) 
         SessionError::UnsupportedEnabledState { reference, reason } => write_line(
             errors,
             &format!("browser.jr: cannot read enabled state from {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedVisibility { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot read visibility from {reference}: {reason}"),
             ExitStatus::Unavailable,
         ),
     }

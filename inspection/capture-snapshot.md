@@ -63,7 +63,9 @@ The name subset reads `aria-label`, associated labels, wrapping labels, selected
 
 The engine assigns references in document order. Each capture creates fresh typed reference identities.
 
-[Supported text controls](read-value.md) include their current value. Snapshot values do not become accessible names.
+The snapshot does not filter those references by [visible state](read-visible.md).
+
+[Supported controls](read-value.md) include their current value. Snapshot values do not become accessible names.
 
 [Native checkboxes](read-checked.md) include their current Boolean state. State does not become an accessible name.
 
@@ -127,8 +129,11 @@ A successful empty snapshot exits zero. Load or output failures exit three.
 - A link without `href` does not receive a native link role.
 - `aria-label` takes precedence over the implemented label and text sources.
 - Form values do not become names for selects, textareas, or text inputs.
-- Supported text values use an escaped quoted form after their reference.
+- Supported control values use an escaped quoted form after their reference.
 - Disabled and read-only text controls expose their value but reject fill.
+- Native single selects expose their selected value.
+- Disabled single selects expose their value but reject [selection](../interaction/select-option.md).
+- Multiple-select values remain unsupported.
 - Unsupported controls and password fields do not expose a value.
 - Native checkboxes expose `[checked=true]` or `[checked=false]` after their reference.
 - Disabled native checkboxes expose state but reject [changes](../interaction/set-checked.md).
@@ -140,13 +145,14 @@ A successful empty snapshot exits zero. Load or output failures exit three.
 - Checks cannot consume layout evidence from the previous document.
 - A failed package open preserves the previously open page.
 - Session mode maps labels only to its latest snapshot's typed references.
+- Hidden semantic elements may retain references for explicit visibility inspection.
 
 ## Open questions and verification
 
 - Define `aria-labelledby`, fieldset, legend, and complete accessible-name behavior.
-- Define CSS visibility and disabled-state fields before actionability work.
+- Define stylesheet-aware snapshot filtering before visibility changes snapshot membership.
 - Define password handling before password fields expose or accept values.
 - Define machine-readable snapshot output.
-- Add visibility and actionability data before non-link actions.
+- Define complete actionability before actions depend on visibility, stability, or pointer targeting.
 
 Drafted from Rust implementation and automated boundary tests on 2026-08-31.

@@ -40,6 +40,12 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Grid observation.** A layout observation for a CSS grid. It may include tracks, gaps, placement, alignment, and overflow once support is defined.
 
+**Layout mutation.** A package request that changes one supported input to incremental layout. Current mutations set one element's `x` or `width` value.
+
+**Mutation batch.** An ordered group of layout mutations applied as one transaction. A failure preserves the previously committed layout.
+
+**Layout invalidation.** The internal process that marks affected layout fields dirty and recomputes them in dependency order.
+
 **Snapshot.** An immutable capture of selected page evidence at a known point in the page's lifetime.
 
 **Interactive snapshot.** A snapshot containing the supported interactive roles, names, semantic identifiers, and ordered references.
@@ -50,7 +56,9 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Fill.** An action that replaces a supported text control's current value. Fill does not dispatch browser events yet.
 
-**Value inspection.** A read of one current text-control value through a snapshot or typed request.
+**Select.** An exact-value action on one current native single-select. Select does not dispatch browser events yet.
+
+**Value inspection.** A read of one current text-control or native single-select value through a snapshot or typed request.
 
 **Checked state.** The current Boolean state of a supported native checkbox. Snapshots and typed requests expose it.
 
@@ -59,6 +67,8 @@ The vocabulary used across these documents. Each definition states intended mean
 **Element attribute.** One parsed static source attribute. Attribute reads distinguish present, missing, and blocked-sensitive values.
 
 **Enabled state.** Whether a supported native element lacks its native disabled state. It is not full actionability.
+
+**Visible state.** Whether supported static evidence proves a non-empty box without hidden computed visibility.
 
 **Evidence.** The structured observations and diagnostics that support a check result.
 

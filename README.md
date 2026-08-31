@@ -12,6 +12,8 @@ The Rust implementation loads loopback HTTP pages with a one MiB body cap. It pa
 
 One project rule is available. `--max-width <element> <css-px>` checks an explicit width limit without inventing a design preference. Missing or unsupported evidence blocks the affected rule.
 
+Package layout requests can apply `x` and `width` changes as one transactional batch. The kernel recomputes dirty `x`, `width`, and `right` fields in dependency order. Automated differential tests compare each incremental result with a clean layout.
+
 `snapshot <url> --interactive` reports a stated native HTML and ARIA role subset. It assigns ordered references for agent use.
 
 Package sessions can click a current link reference. Same-context links navigate through the loopback loader and stale old references.
@@ -19,6 +21,8 @@ Package sessions can click a current link reference. Same-context links navigate
 Package sessions can fill supported text inputs and textareas. Callers can read the current value directly or through a later snapshot.
 
 Package sessions can check, uncheck, and inspect native checkboxes. Snapshots report their current Boolean state.
+
+Package sessions can select exact values on native single selects. Snapshots and direct reads report the selected value.
 
 Package sessions can also read the installed URL and parsed page title.
 
@@ -28,9 +32,11 @@ Package sessions can read static attributes while blocking password input values
 
 Package sessions can inspect the enabled state of supported native elements.
 
+Package sessions can inspect supported static visibility. Missing style or box evidence blocks the read.
+
 Package sessions can reload the current URL. Success installs a fresh document and stale references.
 
-`session` reads page, snapshot, link, text, checkbox, URL, and title commands from stdin. It preserves typed identity behind each `@eN` label.
+`session` reads page, snapshot, link, text, select, checkbox, visibility, URL, and title commands from stdin. It preserves typed identity behind each `@eN` label.
 
 Grid inspection, user-agent comparison, watch mode, JavaScript execution, machine-readable output, and the REPL remain unimplemented. Numeric budgets remain open.
 
@@ -219,8 +225,9 @@ src/
   loading.rs                           loopback HTTP page loading with a body cap
   page.rs                              HTML parsing, ancestry, and horizontal box extraction
   page/interactive.rs                  roles, names, action metadata, and control state
+  page/visibility.rs                   supported static visibility evidence
   session.rs                           typed page, action, snapshot, and rule requests
-  layout.rs                            field program, clean layout, and width invalidation
+  layout.rs                            field program, clean layout, and transactional invalidation
   non_empty.rs                         non-empty evidence and result collections
   snapshot.rs                          immutable layout and interactive evidence
   rules.rs                             built-in overflow and project width evaluation
@@ -236,11 +243,13 @@ verification/
   navigation.md                        checks for package link navigation
   ai-session.md                        checks for persistent CLI action state
   fill-text.md                         checks for package and CLI fill behavior
-  read-value.md                        checks for current text-value inspection
+  read-value.md                        checks for current supported-control value inspection
+  select-option.md                     checks for native single-select behavior
   check-state.md                       checks for native checkbox state
   read-text.md                         checks for descendant text inspection
   read-attribute.md                    checks for static attribute inspection
   read-enabled.md                      checks for native enabled-state inspection
+  read-visible.md                      checks for supported static visibility
   reload-page.md                       checks for current-page reload behavior
   foundations.md                       checks for the shared models
   loading-and-inspection.md            checks for the core workflow
@@ -270,15 +279,17 @@ loading/
 
 interaction/
   fill-text.md                         replacing supported text-control values
+  select-option.md                     selecting one exact native option value
   set-checked.md                       replacing native checkbox state
 
 inspection/
   query-elements.md                    finding rendered elements
-  read-value.md                        reading a current text-control value
+  read-value.md                        reading a current supported-control value
   read-checked.md                      reading native checkbox state
   read-text.md                         reading normalized descendant text
   read-attribute.md                    reading static source attributes
   read-enabled.md                      reading supported native disabled state
+  read-visible.md                      reading supported static visible state
   inspect-layout.md                    geometry and computed layout values
   inspect-grid.md                      tracks, placement, gaps, and overflow
   compare-user-agents.md               rerunning observations under another profile
@@ -319,10 +330,12 @@ Status is one of `not started`, `drafted`, or `verified`.
 | `verification/ai-session.md` | drafted |
 | `verification/fill-text.md` | drafted |
 | `verification/read-value.md` | drafted |
+| `verification/select-option.md` | drafted |
 | `verification/check-state.md` | drafted |
 | `verification/read-text.md` | drafted |
 | `verification/read-attribute.md` | drafted |
 | `verification/read-enabled.md` | drafted |
+| `verification/read-visible.md` | drafted |
 | `verification/reload-page.md` | drafted |
 | `verification/` remaining checklists | not started |
 | `foundations/evaluation.md` | not started |
@@ -340,6 +353,7 @@ Status is one of `not started`, `drafted`, or `verified`.
 | `loading/reload-page.md` | drafted |
 | `loading/network-control.md` | not started |
 | `interaction/fill-text.md` | drafted |
+| `interaction/select-option.md` | drafted |
 | `interaction/set-checked.md` | drafted |
 | `inspection/query-elements.md` | not started |
 | `inspection/read-value.md` | drafted |
@@ -347,6 +361,7 @@ Status is one of `not started`, `drafted`, or `verified`.
 | `inspection/read-text.md` | drafted |
 | `inspection/read-attribute.md` | drafted |
 | `inspection/read-enabled.md` | drafted |
+| `inspection/read-visible.md` | drafted |
 | `inspection/inspect-layout.md` | not started |
 | `inspection/inspect-grid.md` | not started |
 | `inspection/compare-user-agents.md` | not started |

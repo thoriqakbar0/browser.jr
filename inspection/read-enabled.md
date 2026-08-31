@@ -117,6 +117,6 @@ The reference remains current after the read.
 - Define disabled fieldset inheritance.
 - Define option and optgroup disabled behavior.
 - Define ARIA-disabled observation separately from native state.
-- Define actionability after visibility and pointer targeting exist.
+- Define full actionability after stable layout and pointer targeting exist.
 
 Drafted from Rust package and compiled-process tests on 2026-08-31.

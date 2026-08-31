@@ -4,7 +4,7 @@
 
 `browser.jr session` keeps one engine session alive while it reads line commands from stdin.
 
-The implemented commands cover pages, snapshots, links, text values, native checkboxes, URLs, and titles. They also include `help` and `exit`.
+The implemented commands cover pages, snapshots, links, text values, selects, checkboxes, visibility, URLs, and titles. They include `help` and `exit`.
 
 This text protocol lets an AI agent reuse page and snapshot state. It is separate from the planned JavaScript REPL.
 
@@ -64,6 +64,8 @@ Inside session mode, malformed commands report an error. The process then reads 
 
 `fill` resolves the same label and replaces a supported text-control value.
 
+`select` resolves the same label and selects one exact native option value.
+
 `get value` reads that current value without creating another snapshot.
 
 `get text` reads normalized descendant text from a current interactive reference.
@@ -80,6 +82,8 @@ Inside session mode, malformed commands report an error. The process then reads 
 
 `is enabled` reads supported native disabled state without another snapshot.
 
+`is visible` reads supported static box and visibility state without another snapshot.
+
 ### While running
 
 The adapter owns one `Session`. It keeps the current page and latest reference set in memory.
@@ -91,6 +95,8 @@ A successful open, reload, or navigation clears the reference set. The caller mu
 Failed opens, reloads, navigation, and unsupported clicks preserve the latest usable state.
 
 Successful and unsupported fills also preserve the current reference set.
+
+Successful and rejected selects preserve the current reference set.
 
 Value reads never change the reference set.
 
@@ -106,6 +112,8 @@ Checkbox actions and reads preserve the current reference set.
 
 Enabled-state reads preserve the current reference set.
 
+Visibility reads preserve the current reference set, including unsupported reads.
+
 browser.jr flushes stdout and stderr after each command.
 
 ### Finish
@@ -120,7 +128,7 @@ Any command error affects the final exit status even when later commands succeed
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | `session` accepts no flags. | `snapshot -i` equals `snapshot --interactive`. Fill takes the rest of its line as text. |
+| Flags and options | `session` accepts no flags. | `snapshot -i` equals `snapshot --interactive`. Fill and select take the rest of their lines. |
 | Project configuration | No session configuration exists. | Commands cannot reload configuration. |
 | Target matrix | The first successful `open` selects one page. | Another successful `open` or link click replaces its document. |
 | Output channel | Results use stdout. Errors use stderr. | Both streams flush after each command. |
@@ -168,11 +176,15 @@ Status three takes priority over status two. Session mode does not run a finding
 - `@e0`, padded labels, missing labels, and old labels are invalid.
 - Fill text may contain spaces. It cannot contain a line break.
 - Fill trims delimiter whitespace before the value. It preserves trailing whitespace.
+- Select values may contain spaces. They cannot contain line breaks.
+- Select trims delimiter whitespace before the value. It preserves trailing whitespace.
+- A trailing delimiter lets select request an empty value.
 - A failed open keeps the current page and reference set.
 - A failed reload keeps the current page and reference set.
 - A successful reload clears the current reference set.
 - A failed or unsupported click keeps the current reference set.
 - A successful or unsupported fill keeps the current reference set.
+- A successful or rejected select keeps the current reference set.
 - A value read keeps the current reference set.
 - A text read keeps the current reference set.
 - Elements without descendant text return an empty quoted string.
@@ -185,6 +197,8 @@ Status three takes priority over status two. Session mode does not run a finding
 - Disabled and unsupported controls reject checked-state changes.
 - Checked-state reads reject controls without supported native state.
 - Enabled-state reads reject explicit roles without supported native behavior.
+- Visibility reads reject unavailable stylesheet or box evidence.
+- Multiple selects and disabled options reject selection changes.
 - A successful click clears references before the next command.
 - `exit` ignores later input lines.
 
@@ -194,5 +208,6 @@ Status three takes priority over status two. Session mode does not run a finding
 - Define command cancellation without losing a healthy session.
 - Define input length limits and backpressure.
 - Add each action command only after its package request has a typed result.
+- Define label, index, and multiple selection through typed request fields.
 
 Drafted from the Rust implementation and compiled-process tests on 2026-08-31.

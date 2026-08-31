@@ -213,6 +213,47 @@ fn session_mode_fills_text_and_reports_the_new_value() {
 }
 
 #[test]
+fn session_mode_selects_an_exact_option_value() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<select aria-label="Size"><option value="s">Small</option><option value="large value">Large</option></select>"#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nsnapshot -i\nselect @e1 large value\nget value @e1\nsnapshot -i\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#"- combobox "Size" [ref=@e1]: "s""#));
+    assert!(stdout.contains(r#"selected ref=@e1 value="large value""#));
+    assert!(stdout.contains(r#"value ref=@e1 "large value""#));
+    assert!(stdout.contains(r#"- combobox "Size" [ref=@e1]: "large value""#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn session_mode_reads_supported_static_visibility() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<button>Visible</button><button hidden>Hidden</button><div style="display:none"><button>Ancestor hidden</button></div>"#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nsnapshot -i\nis visible @e1\nis visible @e2\nis visible @e3\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("visible ref=@e1 value=true"));
+    assert!(stdout.contains("visible ref=@e2 value=false"));
+    assert!(stdout.contains("visible ref=@e3 value=false"));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn session_mode_changes_and_reads_checkbox_state() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(

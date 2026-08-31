@@ -3,9 +3,9 @@ use std::io::{BufRead, Write};
 use crate::cli::{ExitStatus, combine_status, write_line, write_session_error};
 use crate::{
     CaptureInteractiveSnapshot, ClickElement, ClickResult, FillElement, GetElementAttribute,
-    GetElementChecked, GetElementEnabled, GetElementText, GetElementValue, GetPageTitle,
-    GetPageUrl, InteractiveElementRef, InteractiveElementState, InteractiveSnapshot, OpenPage,
-    ReloadPage, Session, SetElementChecked,
+    GetElementChecked, GetElementEnabled, GetElementText, GetElementValue, GetElementVisible,
+    GetPageTitle, GetPageUrl, InteractiveElementRef, InteractiveElementState, InteractiveSnapshot,
+    OpenPage, ReloadPage, SelectElement, Session, SetElementChecked,
 };
 
 const SESSION_HELP: &str = "session commands:
@@ -14,10 +14,12 @@ const SESSION_HELP: &str = "session commands:
   snapshot --interactive
   click <ref>
   fill <ref> <text>
+  select <ref> <value>
   check <ref>
   uncheck <ref>
   is checked <ref>
   is enabled <ref>
+  is visible <ref>
   get attr <ref> <name>
   get text <ref>
   get value <ref>
@@ -87,12 +89,16 @@ impl CliSession {
         match command {
             ElementCommand::Click(reference) => self.click(reference, output, errors),
             ElementCommand::Fill(reference, value) => self.fill(reference, value, output, errors),
+            ElementCommand::Select(reference, value) => {
+                self.select(reference, value, output, errors)
+            }
             ElementCommand::Check(reference) => self.set_checked(reference, true, output, errors),
             ElementCommand::Uncheck(reference) => {
                 self.set_checked(reference, false, output, errors)
             }
             ElementCommand::IsChecked(reference) => self.is_checked(reference, output, errors),
             ElementCommand::IsEnabled(reference) => self.is_enabled(reference, output, errors),
+            ElementCommand::IsVisible(reference) => self.is_visible(reference, output, errors),
             ElementCommand::GetAttribute(reference, name) => {
                 self.get_attribute(reference, name, output, errors)
             }
@@ -220,6 +226,29 @@ impl CliSession {
         }
     }
 
+    fn select(
+        &mut self,
+        reference_name: &str,
+        value: &str,
+        output: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> SessionStep {
+        let Some(reference) = self.resolve_reference(reference_name) else {
+            return unknown_reference(errors, reference_name);
+        };
+        match self.engine.execute(SelectElement {
+            reference,
+            value: value.into(),
+        }) {
+            Ok(result) => SessionStep::Continue(write_line(
+                output,
+                &format!("selected ref={} value={:?}", result.reference, result.value),
+                ExitStatus::Success,
+            )),
+            Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+        }
+    }
+
     fn get_text(
         &mut self,
         reference_name: &str,
@@ -335,6 +364,25 @@ impl CliSession {
         }
     }
 
+    fn is_visible(
+        &mut self,
+        reference_name: &str,
+        output: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> SessionStep {
+        let Some(reference) = self.resolve_reference(reference_name) else {
+            return unknown_reference(errors, reference_name);
+        };
+        match self.engine.execute(GetElementVisible { reference }) {
+            Ok(result) => SessionStep::Continue(write_line(
+                output,
+                &format!("visible ref={} value={}", result.reference, result.visible),
+                ExitStatus::Success,
+            )),
+            Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+        }
+    }
+
     fn get_url(&mut self, output: &mut impl Write, errors: &mut impl Write) -> SessionStep {
         match self.engine.execute(GetPageUrl) {
             Ok(result) => SessionStep::Continue(write_line(
@@ -405,10 +453,12 @@ enum PageCommand<'a> {
 enum ElementCommand<'a> {
     Click(&'a str),
     Fill(&'a str, &'a str),
+    Select(&'a str, &'a str),
     Check(&'a str),
     Uncheck(&'a str),
     IsChecked(&'a str),
     IsEnabled(&'a str),
+    IsVisible(&'a str),
     GetAttribute(&'a str, &'a str),
     GetText(&'a str),
     GetValue(&'a str),
@@ -513,6 +563,11 @@ fn parse_command(line: &str) -> Result<SessionCommand<'_>, &'static str> {
     {
         return parse_fill_command(rest);
     }
+    if let Some(rest) = line.strip_prefix("select")
+        && (rest.is_empty() || rest.as_bytes()[0].is_ascii_whitespace())
+    {
+        return parse_select_command(rest);
+    }
     let mut parts = line.split_ascii_whitespace();
     let command = parts.next();
     let arguments = (parts.next(), parts.next(), parts.next());
@@ -571,6 +626,7 @@ fn parse_element_command<'a>(
         ("uncheck", (Some(reference), None, None)) => ElementCommand::Uncheck(reference),
         ("is", (Some("checked"), Some(reference), None)) => ElementCommand::IsChecked(reference),
         ("is", (Some("enabled"), Some(reference), None)) => ElementCommand::IsEnabled(reference),
+        ("is", (Some("visible"), Some(reference), None)) => ElementCommand::IsVisible(reference),
         _ => return Err("browser.jr: invalid session command; enter help"),
     };
     Ok(SessionCommand::Element(command))
@@ -588,18 +644,35 @@ fn parse_lifecycle_command<'a>(
 }
 
 fn parse_fill_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
+    let (reference, value) =
+        parse_reference_and_value(rest, "browser.jr: fill requires a reference and text")?;
+    Ok(SessionCommand::Element(ElementCommand::Fill(
+        reference, value,
+    )))
+}
+
+fn parse_select_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
+    let (reference, value) =
+        parse_reference_and_value(rest, "browser.jr: select requires a reference and value")?;
+    Ok(SessionCommand::Element(ElementCommand::Select(
+        reference, value,
+    )))
+}
+
+fn parse_reference_and_value<'a>(
+    rest: &'a str,
+    error: &'static str,
+) -> Result<(&'a str, &'a str), &'static str> {
     let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
     let Some(boundary) = rest.find(|value: char| value.is_ascii_whitespace()) else {
-        return Err("browser.jr: fill requires a reference and text");
+        return Err(error);
     };
     let reference = &rest[..boundary];
     let value = rest[boundary..].trim_start_matches(|value: char| value.is_ascii_whitespace());
     if reference.is_empty() {
-        Err("browser.jr: fill requires a reference and text")
+        Err(error)
     } else {
-        Ok(SessionCommand::Element(ElementCommand::Fill(
-            reference, value,
-        )))
+        Ok((reference, value))
     }
 }
 
@@ -665,6 +738,18 @@ mod tests {
         ));
         assert!(parse_command("fill @e1").is_err());
         assert!(matches!(
+            parse_command("select @e1 large value"),
+            Ok(SessionCommand::Element(ElementCommand::Select(
+                "@e1",
+                "large value"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("select @e1 "),
+            Ok(SessionCommand::Element(ElementCommand::Select("@e1", "")))
+        ));
+        assert!(parse_command("select @e1").is_err());
+        assert!(matches!(
             parse_command("get value @e1"),
             Ok(SessionCommand::Element(ElementCommand::GetValue("@e1")))
         ));
@@ -705,6 +790,10 @@ mod tests {
         assert!(matches!(
             parse_command("is enabled @e1"),
             Ok(SessionCommand::Element(ElementCommand::IsEnabled("@e1")))
+        ));
+        assert!(matches!(
+            parse_command("is visible @e1"),
+            Ok(SessionCommand::Element(ElementCommand::IsVisible("@e1")))
         ));
         assert!(parse_command("get value @e1 extra").is_err());
     }

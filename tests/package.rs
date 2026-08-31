@@ -1,9 +1,10 @@
 use browser_jr::{
-    ApplyMutation, CaptureInteractiveSnapshot, CheckElementWidth, ClickElement, ClickResult,
-    Comparison, ElementInput, FillElement, FillResult, GetElementAttribute, GetElementChecked,
-    GetElementEnabled, GetElementText, GetElementValue, GetPageTitle, GetPageUrl,
-    InteractiveElementState, LayoutInput, LayoutMutation, LintLayout, OpenPage, ReloadPage,
-    RuleConstraint, RuleResult, Session, SessionError, SetElementChecked,
+    ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot, CheckElementWidth, ClickElement,
+    ClickResult, Comparison, ElementInput, ElementVisible, FillElement, FillResult,
+    GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementText, GetElementValue,
+    GetElementVisible, GetPageTitle, GetPageUrl, InteractiveElementState, LayoutInput,
+    LayoutMutation, LintLayout, OpenPage, ReloadPage, RuleConstraint, RuleResult, SelectElement,
+    SelectResult, Session, SessionError, SetElementChecked,
 };
 use std::io::Write;
 use std::net::TcpListener;
@@ -363,6 +364,223 @@ fn text_value_actions_update_and_read_current_state() {
     assert_eq!(
         stale_value,
         Err(SessionError::StaleElementReference { reference: email })
+    );
+}
+
+#[test]
+fn select_actions_update_single_selects_and_preserve_failure_state() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <select aria-label="Size">
+                <option value="s">Small</option>
+                <option value="large value">Large</option>
+                <option value="disabled" disabled>Disabled</option>
+                <optgroup disabled><option value="group">Group</option></optgroup>
+            </select>
+            <select aria-label="Locked" disabled><option value="fixed">Fixed</option></select>
+            <select aria-label="Many" multiple><option value="a" selected>A</option></select>
+            <button>Save</button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let before = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let size = before.elements[0].reference;
+    let locked = before.elements[1].reference;
+    let many = before.elements[2].reference;
+    let button = before.elements[3].reference;
+
+    let selected = session
+        .execute(SelectElement {
+            reference: size,
+            value: "large value".into(),
+        })
+        .unwrap();
+    let repeated = session
+        .execute(SelectElement {
+            reference: size,
+            value: "large value".into(),
+        })
+        .unwrap();
+    let disabled = session.execute(SelectElement {
+        reference: size,
+        value: "disabled".into(),
+    });
+    let disabled_group = session.execute(SelectElement {
+        reference: size,
+        value: "group".into(),
+    });
+    let missing = session.execute(SelectElement {
+        reference: size,
+        value: "missing".into(),
+    });
+    let current = session
+        .execute(GetElementValue { reference: size })
+        .unwrap();
+    let locked_value = session
+        .execute(GetElementValue { reference: locked })
+        .unwrap();
+    let locked_select = session.execute(SelectElement {
+        reference: locked,
+        value: "fixed".into(),
+    });
+    let multiple_value = session.execute(GetElementValue { reference: many });
+    let multiple_select = session.execute(SelectElement {
+        reference: many,
+        value: "a".into(),
+    });
+    let wrong_role = session.execute(SelectElement {
+        reference: button,
+        value: "anything".into(),
+    });
+    let after = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let stale = session.execute(SelectElement {
+        reference: size,
+        value: "s".into(),
+    });
+    drop(network_guard);
+
+    assert_eq!(
+        before.elements[0].state,
+        InteractiveElementState::Value("s".into())
+    );
+    assert_eq!(
+        before.elements[1].state,
+        InteractiveElementState::Value("fixed".into())
+    );
+    assert_eq!(
+        before.elements[2].state,
+        InteractiveElementState::Unavailable
+    );
+    assert_eq!(
+        selected,
+        SelectResult {
+            reference: size,
+            value: "large value".into(),
+        }
+    );
+    assert_eq!(repeated, selected);
+    assert_eq!(current.value, "large value");
+    assert_eq!(locked_value.value, "fixed");
+    assert_eq!(
+        disabled,
+        Err(SessionError::SelectOptionDisabled {
+            reference: size,
+            value: "disabled".into(),
+        })
+    );
+    assert_eq!(
+        disabled_group,
+        Err(SessionError::SelectOptionDisabled {
+            reference: size,
+            value: "group".into(),
+        })
+    );
+    assert_eq!(
+        missing,
+        Err(SessionError::SelectOptionNotFound {
+            reference: size,
+            value: "missing".into(),
+        })
+    );
+    assert!(matches!(
+        locked_select,
+        Err(SessionError::UnsupportedSelect { reference, .. }) if reference == locked
+    ));
+    assert!(matches!(
+        multiple_value,
+        Err(SessionError::UnsupportedValue { reference, .. }) if reference == many
+    ));
+    assert!(matches!(
+        multiple_select,
+        Err(SessionError::UnsupportedSelect { reference, .. }) if reference == many
+    ));
+    assert!(matches!(
+        wrong_role,
+        Err(SessionError::UnsupportedSelect { reference, .. }) if reference == button
+    ));
+    assert_eq!(
+        after.elements[0].state,
+        InteractiveElementState::Value("large value".into())
+    );
+    assert_eq!(
+        stale,
+        Err(SessionError::StaleElementReference { reference: size })
+    );
+}
+
+#[test]
+fn visibility_reads_require_supported_static_box_evidence() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button>Visible</button>
+            <button hidden>Hidden</button>
+            <div style="display:none"><button>Ancestor hidden</button></div>
+            <div role="button" aria-label="Empty"></div>
+            <button style="width:0">Unknown box</button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let visible = snapshot.elements[0].reference;
+    let hidden = snapshot.elements[1].reference;
+    let ancestor_hidden = snapshot.elements[2].reference;
+    let empty = snapshot.elements[3].reference;
+    let unknown = snapshot.elements[4].reference;
+
+    let visible_result = session.execute(GetElementVisible { reference: visible });
+    let hidden_result = session.execute(GetElementVisible { reference: hidden });
+    let ancestor_result = session.execute(GetElementVisible {
+        reference: ancestor_hidden,
+    });
+    let empty_result = session.execute(GetElementVisible { reference: empty });
+    let unknown_result = session.execute(GetElementVisible { reference: unknown });
+    let still_enabled = session.execute(GetElementEnabled { reference: visible });
+    session.execute(CaptureInteractiveSnapshot).unwrap();
+    let stale = session.execute(GetElementVisible { reference: visible });
+    drop(network_guard);
+
+    assert_eq!(
+        visible_result,
+        Ok(ElementVisible {
+            reference: visible,
+            visible: true,
+        })
+    );
+    assert_eq!(
+        hidden_result,
+        Ok(ElementVisible {
+            reference: hidden,
+            visible: false,
+        })
+    );
+    assert_eq!(
+        ancestor_result,
+        Ok(ElementVisible {
+            reference: ancestor_hidden,
+            visible: false,
+        })
+    );
+    assert_eq!(
+        empty_result,
+        Ok(ElementVisible {
+            reference: empty,
+            visible: false,
+        })
+    );
+    assert!(matches!(
+        unknown_result,
+        Err(SessionError::UnsupportedVisibility { reference, .. }) if reference == unknown
+    ));
+    assert!(still_enabled.unwrap().enabled);
+    assert_eq!(
+        stale,
+        Err(SessionError::StaleElementReference { reference: visible })
     );
 }
 
@@ -836,4 +1054,100 @@ fn package_mutation_uses_the_same_session() {
             ..
         }
     ));
+}
+
+#[test]
+fn package_mutation_batch_is_atomic_and_clean_equivalent() {
+    let initial = LayoutInput {
+        viewport_width: 320,
+        elements: vec![ElementInput::supported("hero", 20, 40)],
+    };
+    let changed = LayoutInput {
+        viewport_width: 320,
+        elements: vec![ElementInput::supported("hero", 280, 80)],
+    };
+    let mut incremental_session = Session::new();
+    incremental_session
+        .execute(LintLayout { input: initial })
+        .unwrap();
+
+    let incremental = incremental_session
+        .execute(ApplyMutations {
+            mutations: vec![
+                LayoutMutation::SetX {
+                    element: "hero".into(),
+                    x: 280,
+                },
+                LayoutMutation::SetWidth {
+                    element: "hero".into(),
+                    width: 80,
+                },
+            ],
+        })
+        .unwrap();
+    let clean = Session::new()
+        .execute(LintLayout { input: changed })
+        .unwrap();
+
+    let geometry = |result: RuleResult| match result {
+        RuleResult::Compared {
+            comparison: Comparison::Fail(findings),
+            ..
+        } => (
+            findings[0].affected_element.as_str().to_owned(),
+            findings[0].observed_left,
+            findings[0].observed_width,
+            findings[0].observed_right,
+        ),
+        other => panic!("expected overflow, got {other:?}"),
+    };
+    assert_eq!(geometry(incremental), geometry(clean));
+}
+
+#[test]
+fn failed_package_mutation_batch_preserves_the_committed_layout() {
+    let mut session = Session::new();
+    session
+        .execute(LintLayout {
+            input: LayoutInput {
+                viewport_width: 320,
+                elements: vec![ElementInput::supported("hero", 20, 40)],
+            },
+        })
+        .unwrap();
+
+    let failure = session.execute(ApplyMutations {
+        mutations: vec![
+            LayoutMutation::SetX {
+                element: "hero".into(),
+                x: 300,
+            },
+            LayoutMutation::SetWidth {
+                element: "missing".into(),
+                width: 80,
+            },
+        ],
+    });
+    let after_failure = session
+        .execute(ApplyMutation {
+            mutation: LayoutMutation::SetWidth {
+                element: "hero".into(),
+                width: 40,
+            },
+        })
+        .unwrap();
+
+    assert_eq!(
+        failure,
+        Err(SessionError::Layout(
+            browser_jr::LayoutError::UnknownElement("missing".into())
+        ))
+    );
+    assert_eq!(
+        after_failure,
+        RuleResult::Compared {
+            rule: "horizontal-overflow",
+            comparison: Comparison::Pass,
+        }
+    );
 }

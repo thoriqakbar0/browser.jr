@@ -101,7 +101,7 @@ Help and version exit with status zero. Invalid input exits with status two.
 - `snapshot <url> -i` selects the same implemented projection.
 - `snapshot <url>` reports invalid input because no default projection exists.
 - `session` starts the persistent stdin command adapter.
-- Session help lists every supported line command, including element inspection and page metadata commands.
+- Session help lists every supported line command, including select, visible-state, and element inspection commands.
 - Extra invocation arguments after `session` report invalid input.
 - A missing or unsupported width target blocks `max-element-width`.
 - Extra or unknown arguments report invalid input.

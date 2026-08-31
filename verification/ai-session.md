@@ -19,9 +19,11 @@ Run these checks against controlled loopback pages. Record the fixtures and brow
 | AISESSION-11 | P1 | pipe | Attribute inspection preserves present and missing values ([Begin running](../automation/ai-session.md#begin-running)). | Serve one link with `href` and no `title`. | Read both attributes through one reference. | The first result is quoted. The second reports `null`. | partial: compiled-process fixture passed, 2026-08-31 |
 | AISESSION-12 | P1 | pipe | Enabled-state reads preserve current references ([While running](../automation/ai-session.md#while-running)). | Serve enabled and disabled native checkboxes. | Read enabled and checked state through current labels. | Both enabled results are Boolean. Later state commands reuse the labels. | partial: compiled-process fixture passed, 2026-08-31 |
 | AISESSION-13 | P1 | pipe | Reload replaces document state and clears references ([While running](../automation/ai-session.md#while-running)). | Serve two responses from one URL. | Open, inspect, reload, and capture again. | The second response appears with fresh references. | partial: compiled-process fixture passed, 2026-08-31 |
+| AISESSION-14 | P1 | pipe | Selection state survives through current references ([While running](../automation/ai-session.md#while-running)). | Serve a single select with a spaced value. | Snapshot, select the spaced value, read it, and capture again. | Select output, direct read, and later snapshot agree. | partial: package and compiled-process fixtures passed, 2026-08-31 |
+| AISESSION-15 | P1 | pipe | Visibility reads preserve current references ([While running](../automation/ai-session.md#while-running)). | Serve visible and hidden buttons. | Snapshot, read both visible states, then reuse one reference. | Both Boolean results return without replacing the reference set. | partial: package and compiled-process fixtures passed, 2026-08-31 |
 
 Not checkable yet:
 
 - Machine-readable responses and command identifiers do not exist.
 - Graceful cancellation and force-stop recovery do not exist.
-- Actions other than bounded link navigation do not exist.
+- DOM event dispatch, keyboard input, and broader action types do not exist.

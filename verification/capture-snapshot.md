@@ -15,8 +15,9 @@ Run these checks against a controlled loopback page. Record the page source and 
 | SNAP-07 | P1 | pipe | Session mode retains only the latest reported references ([Finish](../inspection/capture-snapshot.md#finish)). | Serve two controlled interactive pages. | Open, snapshot, navigate, then reuse the old label before another snapshot. | The label reports unknown or stale. | partial: compiled-process fixture passed, 2026-08-31 |
 | SNAP-08 | P1 | pipe | Snapshots report supported current text values ([While running](../inspection/capture-snapshot.md#while-running)). | Serve a text input and textarea with initial values. | Capture, fill both, and capture again. | The first snapshot has initial values. The second has replacements. Names remain unchanged. | partial: package and compiled-process tests passed, 2026-08-31 |
 | SNAP-09 | P1 | pipe | Snapshots report native checkbox state ([While running](../inspection/capture-snapshot.md#while-running)). | Serve checked and unchecked native checkboxes. | Capture, change one state, and capture again. | Each snapshot reports the current Boolean state. | partial: package and compiled-process tests passed, 2026-08-31 |
+| SNAP-10 | P1 | pipe | Snapshots report native single-select values ([While running](../inspection/capture-snapshot.md#while-running)). | Serve one native single select. | Capture, select another value, and capture again. | Each snapshot reports the current exact value. | partial: package and compiled-process tests passed, 2026-08-31 |
 
 Not checkable by hand yet:
 
-- CSS visibility and JavaScript mutation do not exist.
+- CSS-filtered snapshots and JavaScript mutation do not exist.
 - Complete accessible-name and accessibility-tree conformance remain unsupported.

@@ -16,4 +16,4 @@ Run package checks through one `Session`. Run CLI checks through one session-mod
 Not checkable yet:
 
 - JavaScript events and form submission do not exist.
-- Visibility, stability, and hit-testing actionability checks do not exist.
+- Click does not enforce visibility, stability, or hit-testing actionability checks.

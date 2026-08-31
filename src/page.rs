@@ -10,12 +10,13 @@ use html5ever::tokenizer::{
 use crate::{ElementInput, LayoutInput};
 
 mod interactive;
+mod visibility;
 
 #[cfg(test)]
 pub(crate) use interactive::interactive_elements_from_html;
 pub(crate) use interactive::{
-    CheckedState, ControlState, InteractiveAction, InteractiveElementSource, TextValueState,
-    page_semantics_from_html,
+    CheckedState, ControlState, InteractiveAction, InteractiveElementSource, SelectState,
+    SelectValueError, TextValueState, page_semantics_from_html,
 };
 
 #[derive(Debug)]
@@ -410,6 +411,10 @@ fn parse_style(style: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn reject_unsupported_geometry(properties: &BTreeMap<String, String>) -> Result<(), String> {
     for unsupported in [
         "right",
@@ -567,7 +572,7 @@ fn is_void_element(tag_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CheckedState, ControlState, InteractiveAction, TextValueState,
+        CheckedState, ControlState, InteractiveAction, SelectState, TextValueState,
         interactive_elements_from_html, layout_input_from_html, page_semantics_from_html,
     };
     use crate::{Comparison, LintLayout, RuleConstraint, RuleResult, Session};
@@ -775,6 +780,73 @@ mod tests {
             ControlState::Checkbox(CheckedState::NonEditable { checked: true, .. })
         ));
         assert_eq!(elements[2].control_state, ControlState::Unavailable);
+    }
+
+    #[test]
+    fn native_selects_expose_single_value_state_and_listbox_boundaries() {
+        let elements = interactive_elements_from_html(
+            r#"
+                <select aria-label="Size">
+                    <option value="small" selected>Small</option>
+                    <option value="large" selected>Large</option>
+                </select>
+                <select aria-label="Fallback">
+                    <option value="blocked" disabled>Blocked</option>
+                    <option> Ready </option>
+                </select>
+                <select aria-label="List" size="2"><option>One</option></select>
+                <select aria-label="Many" multiple><option selected>A</option></select>
+            "#,
+        );
+
+        assert_eq!(elements[0].role(), "combobox");
+        assert_eq!(elements[0].value(), Some("large"));
+        assert_eq!(elements[1].value(), Some("Ready"));
+        assert_eq!(elements[2].role(), "listbox");
+        assert_eq!(elements[2].value(), Some(""));
+        assert_eq!(elements[3].role(), "listbox");
+        assert!(matches!(
+            elements[3].control_state,
+            ControlState::Select(SelectState::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn interactive_visibility_requires_static_style_and_box_evidence() {
+        let elements = interactive_elements_from_html(
+            r#"
+                <button>Visible</button>
+                <button hidden>Hidden</button>
+                <button hidden style="display:block">Overridden hidden</button>
+                <div style="display:none"><button>Ancestor hidden</button></div>
+                <div role="button" aria-label="Empty"></div>
+                <div style="visibility:hidden">
+                    <button>Inherited hidden</button>
+                    <button style="visibility:visible">Visible override</button>
+                </div>
+                <button style="width:0">Unknown box</button>
+                <a href="/next">Visible link</a>
+            "#,
+        );
+
+        assert_eq!(elements[0].visible(), Ok(true));
+        assert_eq!(elements[1].visible(), Ok(false));
+        assert_eq!(elements[2].visible(), Ok(true));
+        assert_eq!(elements[3].visible(), Ok(false));
+        assert_eq!(elements[4].visible(), Ok(false));
+        assert_eq!(elements[5].visible(), Ok(false));
+        assert_eq!(elements[6].visible(), Ok(true));
+        assert!(elements[7].visible().is_err());
+        assert_eq!(elements[8].visible(), Ok(true));
+
+        let styled = interactive_elements_from_html(
+            r#"<style>button { display: block }</style><button>Styled</button>"#,
+        );
+        assert!(styled[0].visible().is_err());
+
+        let until_found =
+            interactive_elements_from_html(r#"<button hidden="until-found">Found later</button>"#);
+        assert!(until_found[0].visible().is_err());
     }
 
     #[test]

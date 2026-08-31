@@ -2,7 +2,7 @@
 
 Status: proposed internal architecture, 28 August 2026. Implementation evidence updated 31 August 2026.
 
-The current source loads loopback HTML and computes a horizontal layout subset. It evaluates two rules and supports one ordered width mutation. A session retains one static page and its URL and title. It reloads that page and navigates same-context links. It captures interactive semantics and changes text and native checkbox state. The CLI session adapter keeps that state across stdin commands. Many Rust types below remain design sketches. They do not define the package API.
+The current source loads loopback HTML and computes a horizontal layout subset. It evaluates two rules and supports transactional `x` and `width` mutation batches. A session retains one static page and its URL and title. It reloads that page and navigates same-context links. It captures interactive semantics and inspects supported static visibility. It changes text, native checkbox, and native single-select state. The CLI session adapter keeps that state across stdin commands. Many Rust types below remain design sketches. They do not define the package API.
 
 This document owns internal responsibilities and data flow. The [product description](README.md) owns user-visible scope. The [research note](research/browser-engine-and-design-lint-papers.md) records external evidence.
 
@@ -57,7 +57,9 @@ Transport adapters may decode a closed wire command. They must convert it into a
 
 The implemented `cli_session` adapter stores the typed references from the latest interactive snapshot. It resolves a displayed `@eN` only from that set. A successful open, navigation, or newer snapshot replaces the set.
 
-The implemented `page::interactive` module owns title normalization, semantics, descendant text, actions, and control capabilities. `page` keeps tokenization and layout extraction.
+The implemented `page::interactive` module owns title normalization, semantics, descendant text, actions, and controls.
+
+The implemented `page::visibility` module owns supported static visibility evidence. `page` keeps tokenization and layout extraction.
 
 ## System shape
 
@@ -250,6 +252,12 @@ The incremental loop follows these rules:
 Inserted subtrees enter as ordered bulk work. Deleted objects invalidate their generations, so stale queue entries become no-ops.
 
 Repeated invalidation converges on one dirty bit and one pending entry. That rule makes invalidation idempotent.
+
+The current fixed-element slice implements rules 1, 2, 3, 5, 6, and 7. A packed field store keeps `x`, `width`, and derived `right` values. The element index supplies the stable order label because insertion and removal do not exist yet.
+
+`ApplyMutations` changes the candidate input and runs one ordered queue. It commits the candidate only after all fields succeed. Repeated writes to one field converge on one queue entry. An unchanged complete field value does not dirty its dependents.
+
+Generational identity, rule 4, ordered subtree insertion, deletion, and live watch integration remain unimplemented.
 
 ## Boxes and fragments have separate identities
 
@@ -545,6 +553,6 @@ A staged service pipeline lost because it would repeat one document representati
 
 ## Next implementation decision
 
-The original clean-layout, typed overflow, and width-mutation slice now exists.
+The clean-layout, typed overflow, field store, dirty index, priority queue, and transactional `x` and `width` batch now exist.
 
-Choose the next slice from the open decisions before adding another architecture layer. No current product decision selects that slice.
+The next Spineless Traversal layer needs generational layout identities and ordered insertion or removal. A live mutation adapter can follow after those invariants have differential tests.

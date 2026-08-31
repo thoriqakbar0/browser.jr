@@ -1,8 +1,10 @@
-use crate::layout::{LayoutError, LayoutInput, LayoutKernel, LayoutMutation, LayoutProgram};
+use crate::layout::{
+    LayoutError, LayoutInput, LayoutKernel, LayoutMutation, LayoutProgram, LayoutSnapshot,
+};
 use crate::loading::{LoadError, load_local_html};
 use crate::page::{
-    CheckedState, ControlState, InteractiveAction, InteractiveElementSource, TextValueState,
-    page_semantics_from_html,
+    CheckedState, ControlState, InteractiveAction, InteractiveElementSource, SelectState,
+    SelectValueError, TextValueState, page_semantics_from_html,
 };
 use crate::rules::{
     RuleResult, WidthFinding, evaluate_horizontal_overflow, evaluate_max_element_width,
@@ -312,12 +314,58 @@ impl SessionRequest for FillElement {
             }
             ControlState::Text(TextValueState::Unavailable)
             | ControlState::Checkbox(_)
+            | ControlState::Select(_)
             | ControlState::Unavailable => Err(SessionError::UnsupportedFill {
                 reference: self.reference,
                 reason: format!(
                     "fill execution for role {} is not implemented",
                     element.role()
                 ),
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectElement {
+    pub reference: InteractiveElementRef,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectResult {
+    pub reference: InteractiveElementRef,
+    pub value: String,
+}
+
+impl private::Sealed for SelectElement {}
+
+impl SessionRequest for SelectElement {
+    type Reply = SelectResult;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        let index = session.element_index_for(self.reference)?;
+        let element = &mut session
+            .current_page
+            .as_mut()
+            .expect("validated reference requires a current page")
+            .interactive_elements[index];
+        match element.select_value(&self.value) {
+            Ok(value) => Ok(SelectResult {
+                reference: self.reference,
+                value: value.into(),
+            }),
+            Err(SelectValueError::Unsupported { reason }) => Err(SessionError::UnsupportedSelect {
+                reference: self.reference,
+                reason,
+            }),
+            Err(SelectValueError::OptionNotFound) => Err(SessionError::SelectOptionNotFound {
+                reference: self.reference,
+                value: self.value,
+            }),
+            Err(SelectValueError::OptionDisabled) => Err(SessionError::SelectOptionDisabled {
+                reference: self.reference,
+                value: self.value,
             }),
         }
     }
@@ -346,23 +394,26 @@ impl SessionRequest for GetElementValue {
             .as_ref()
             .expect("validated reference requires a current page")
             .interactive_elements[index];
-        match &element.control_state {
-            ControlState::Text(
-                TextValueState::Editable { value } | TextValueState::NonEditable { value, .. },
-            ) => Ok(ElementValue {
+        if let Some(value) = element.value() {
+            return Ok(ElementValue {
                 reference: self.reference,
-                value: value.clone(),
-            }),
-            ControlState::Text(TextValueState::Unavailable)
-            | ControlState::Checkbox(_)
-            | ControlState::Unavailable => Err(SessionError::UnsupportedValue {
-                reference: self.reference,
-                reason: format!(
-                    "value inspection for role {} is not implemented",
-                    element.role()
-                ),
-            }),
+                value: value.into(),
+            });
         }
+        let reason = match &element.control_state {
+            ControlState::Select(SelectState::Unsupported { reason }) => reason.clone(),
+            ControlState::Text(_)
+            | ControlState::Checkbox(_)
+            | ControlState::Select(_)
+            | ControlState::Unavailable => format!(
+                "value inspection for role {} is not implemented",
+                element.role()
+            ),
+        };
+        Err(SessionError::UnsupportedValue {
+            reference: self.reference,
+            reason,
+        })
     }
 }
 
@@ -479,6 +530,42 @@ impl SessionRequest for GetElementEnabled {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GetElementVisible {
+    pub reference: InteractiveElementRef,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ElementVisible {
+    pub reference: InteractiveElementRef,
+    pub visible: bool,
+}
+
+impl private::Sealed for GetElementVisible {}
+
+impl SessionRequest for GetElementVisible {
+    type Reply = ElementVisible;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        let index = session.element_index_for(self.reference)?;
+        let element = &session
+            .current_page
+            .as_ref()
+            .expect("validated reference requires a current page")
+            .interactive_elements[index];
+        let visible = element
+            .visible()
+            .map_err(|reason| SessionError::UnsupportedVisibility {
+                reference: self.reference,
+                reason: reason.into(),
+            })?;
+        Ok(ElementVisible {
+            reference: self.reference,
+            visible,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SetElementChecked {
     pub reference: InteractiveElementRef,
     pub checked: bool,
@@ -516,7 +603,7 @@ impl SessionRequest for SetElementChecked {
                     reason: reason.clone(),
                 })
             }
-            ControlState::Text(_) | ControlState::Unavailable => {
+            ControlState::Text(_) | ControlState::Select(_) | ControlState::Unavailable => {
                 Err(SessionError::UnsupportedCheck {
                     reference: self.reference,
                     reason: format!(
@@ -559,7 +646,7 @@ impl SessionRequest for GetElementChecked {
                 reference: self.reference,
                 checked,
             }),
-            ControlState::Text(_) | ControlState::Unavailable => {
+            ControlState::Text(_) | ControlState::Select(_) | ControlState::Unavailable => {
                 Err(SessionError::UnsupportedCheckedState {
                     reference: self.reference,
                     reason: format!(
@@ -665,11 +752,7 @@ impl SessionRequest for LintLayout {
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
         let layout = session.layout.clean_layout(self.input)?;
-        let snapshot_id = SnapshotId::next(&mut session.identities.next_snapshot_id);
-        let snapshot = Snapshot::from_layout(snapshot_id, layout);
-        let result = evaluate_horizontal_overflow(&snapshot);
-        session.last_snapshot = Some(snapshot);
-        Ok(result)
+        Ok(install_layout_result(session, layout))
     }
 }
 
@@ -709,12 +792,32 @@ impl SessionRequest for ApplyMutation {
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
         let layout = session.layout.apply_mutation(self.mutation)?;
-        let snapshot_id = SnapshotId::next(&mut session.identities.next_snapshot_id);
-        let snapshot = Snapshot::from_layout(snapshot_id, layout);
-        let result = evaluate_horizontal_overflow(&snapshot);
-        session.last_snapshot = Some(snapshot);
-        Ok(result)
+        Ok(install_layout_result(session, layout))
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplyMutations {
+    pub mutations: Vec<LayoutMutation>,
+}
+
+impl private::Sealed for ApplyMutations {}
+
+impl SessionRequest for ApplyMutations {
+    type Reply = RuleResult;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        let layout = session.layout.apply_mutations(self.mutations)?;
+        Ok(install_layout_result(session, layout))
+    }
+}
+
+fn install_layout_result(session: &mut Session, layout: LayoutSnapshot) -> RuleResult {
+    let snapshot_id = SnapshotId::next(&mut session.identities.next_snapshot_id);
+    let snapshot = Snapshot::from_layout(snapshot_id, layout);
+    let result = evaluate_horizontal_overflow(&snapshot);
+    session.last_snapshot = Some(snapshot);
+    result
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -738,6 +841,18 @@ pub enum SessionError {
         reference: InteractiveElementRef,
         reason: String,
     },
+    UnsupportedSelect {
+        reference: InteractiveElementRef,
+        reason: String,
+    },
+    SelectOptionNotFound {
+        reference: InteractiveElementRef,
+        value: String,
+    },
+    SelectOptionDisabled {
+        reference: InteractiveElementRef,
+        value: String,
+    },
     UnsupportedValue {
         reference: InteractiveElementRef,
         reason: String,
@@ -758,6 +873,10 @@ pub enum SessionError {
         name: String,
     },
     UnsupportedEnabledState {
+        reference: InteractiveElementRef,
+        reason: String,
+    },
+    UnsupportedVisibility {
         reference: InteractiveElementRef,
         reason: String,
     },
