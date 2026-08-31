@@ -1,12 +1,30 @@
 # browser.jr
 
-A browser engine package for programmable interface verification.
+A memory-safe browser engine for programs and AI agents.
 
-browser.jr loads a local page, computes supported layout evidence, and applies deterministic design rules. The CLI and Rust package share one session model.
+browser.jr aims to let an agent inspect and control a page through one deterministic Rust session. It is a new engine, not a Chromium controller or wrapper around another browser.
+
+The first working slices load local pages, expose supported semantics, change native controls, follow links, compute limited layout, and run design checks. The CLI and Rust package share the same session model.
 
 ## Current status
 
 Evidence date: 31 August 2026.
+
+browser.jr is an early browser-engine foundation. Agent inspection and control are ahead of web-platform rendering support.
+
+| Engine area | Current evidence |
+| --- | --- |
+| Loading | Implemented for bounded loopback HTTP pages. |
+| HTML and document state | Partial. The engine parses static HTML into its current page model, not a complete standards DOM. |
+| CSS selectors | Partial. Agent locators support a stated compound selector subset. This is separate from style matching and cascade. |
+| Style and layout | Partial. Inline styles and horizontal block geometry feed a small incremental layout kernel. |
+| Agent control | Partial. Sessions can locate, inspect, fill, select, check, uncheck, and follow supported same-context links. |
+| Accessibility | Partial. Snapshots expose a tested subset of roles, accessible names, states, and action metadata. |
+| JavaScript | Not implemented. There is no script runtime, DOM binding, event loop, or browser event dispatch. |
+| Painting | Not implemented. The engine does not create a display list or raster image. |
+| Compositing | Not implemented. The engine has no layer tree or GPU compositor. |
+
+The project targets memory safety. Its owned Rust source contains no `unsafe` blocks. The crate does not yet enforce this with `#![forbid(unsafe_code)]`, and dependencies retain their own safety boundaries.
 
 The Rust implementation loads loopback HTTP pages with a one MiB body cap. It parses static HTML and a stated inline-CSS subset. Parent-aware block flow and fixed pixel geometry support horizontal-overflow lint.
 
@@ -114,11 +132,17 @@ The element argument is a semantic element identifier. An HTML `id` supplies tha
 
 ## Purpose
 
-browser.jr checks rendered evidence for measurable interface defects.
+browser.jr gives programs and AI agents a browser they can inspect and control through typed requests.
+
+The engine returns semantic state and supported rendered evidence without requiring pixels or simulated pointer input. Actions resolve against the current document and report unsupported behavior explicitly.
+
+Design lint is the first verification workflow. It checks supported rendered evidence for measurable interface defects.
 
 The engine is a new implementation. It is not defined as a wrapper around an existing browser.
 
 The primary experience is `browser.jr lint <url>` against a running development server. Package callers use the same typed observations.
+
+The intended agent experience uses the same session for navigation, observation, actions, JavaScript, rendering, and accessibility inspection. Only the documented subset works today.
 
 This repository owns the product description and its implementation. Product documents distinguish current evidence, decided behavior, and open questions.
 
