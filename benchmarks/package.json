@@ -1,0 +1,19 @@
+{
+  "name": "browser-jr-benchmarks",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.26.2",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "bench": "node run.mjs",
+    "bench:smoke": "node run.mjs --iterations 1 --warmup 0",
+    "browsers:install": "playwright install firefox webkit",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1",
+    "puppeteer-core": "25.9.0"
+  }
+}
