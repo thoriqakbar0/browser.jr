@@ -2,7 +2,7 @@
 
 Status: proposed internal architecture, 28 August 2026. Implementation evidence updated 31 August 2026.
 
-The current source loads loopback HTML and computes a horizontal layout subset. It evaluates two rules and supports transactional `x` and `width` mutation batches. A session retains one static page and its URL and title. It reloads that page and navigates same-context links. It resolves semantic, attribute, and positioned compound CSS locators at each action. It inspects supported static visibility. It changes text, native checkbox, and native single-select state. The CLI session adapter keeps that state across stdin commands. Many Rust types below remain design sketches. They do not define the package API.
+The current source loads loopback HTML and computes a horizontal layout subset. It evaluates two rules and supports transactional `x` and `width` mutation batches. A session retains one static page and its URL and title. It reloads that page and navigates same-context links. It resolves semantic, attribute, CSS, and XPath locators at each action. It inspects supported static visibility. It changes text, native checkbox, and native single-select or multiple-select state. The CLI session adapter keeps that state across stdin commands. Many Rust types below remain design sketches. They do not define the package API.
 
 This document owns internal responsibilities and data flow. The [product description](README.md) owns user-visible scope. The [research note](research/browser-engine-and-design-lint-papers.md) records external evidence.
 
@@ -57,15 +57,21 @@ Transport adapters may decode a closed wire command. They must convert it into a
 
 The implemented `cli_session` adapter stores typed references from the latest interactive snapshot. It resolves a displayed `@eN` only from that set. A successful open or navigation clears the set. A new snapshot replaces it.
 
-The implemented `locator` module owns locator variants, text matching, test ID equality, compound CSS parsing, and document-order positions.
+The implemented `locator` module owns locator variants, text matching, test ID equality, selector validation, and document-order positions.
 
-Its `locator::css` child parses the supported selector subset before any document lookup.
+The implemented `page::selectors` module owns HTML5 document queries, source-element identity mapping, CSS selection, and XPath evaluation.
 
-`FindByLocator` resolves one strict match or one explicit first, last, or nth CSS selection.
+`FindByLocator` resolves one strict semantic, attribute, CSS, or XPath match. `FindAllByLocator` and `CountByLocator` keep the same ordered candidates without strict cardinality.
+
+First, last, and nth CSS locators apply their document-order position before strict or collection replies.
 
 Role-specific requests preserve a required-role reply. Each typed locator action resolves again when it executes.
 
-Fill and checked-state requests mutate only after supported actionability checks pass.
+Typed locator reads resolve the same current candidate and return state without creating interactive references.
+
+Scoped interactive captures resolve a locator, collect subtree interactive indices, and store an explicit reference map.
+
+Fill, select, and checked-state locator requests mutate only after supported actionability checks pass.
 
 Supported link clicks install a new document only after loading succeeds. Failed actions preserve the current document and snapshot references.
 
@@ -101,7 +107,15 @@ flowchart TD
     Rules --> Report
 ```
 
-The engine stops after it creates structured fragments and evidence. Paint, compositing, rasterization, screenshots, and a browser window stay outside the first architecture.
+The default engine stops after it creates structured fragments and evidence. It does not start or retain a renderer during loading, inspection, actions, or design checks.
+
+## Optional screenshot boundary
+
+The package defines the first screenshot boundary. `CaptureTarget` distinguishes a viewport, locator-resolved element, and explicit CSS-pixel rectangle. `CaptureRect` rejects empty regions and coordinate overflow. `PaintScene` contains browser.jr-owned paint commands. `RasterImage` accepts only complete RGBA buffers.
+
+`OnDemandRasterProcess` owns lazy activation. Construction performs no raster work. The first render starts one `RasterProcess`, and later renders reuse it. `Session` does not own this process, so ordinary structured inspection keeps the raster path outside its runtime state.
+
+The process implementation, page paint-list construction, effect-bound expansion, encoding, screenshot command, and renderer adapter remain unimplemented. A future process adapter must parse its wire protocol at both ends, bound allocations, and release the child on every exit. Skia belongs behind that process boundary if the screenshot bake-off selects it.
 
 ## Ownership
 
@@ -569,4 +583,4 @@ The clean-layout, typed overflow, field store, dirty index, priority queue, and 
 
 The next Spineless Traversal layer needs generational layout identities and ordered insertion or removal. A live mutation adapter can follow after those invariants have differential tests.
 
-The next locator layer needs auto-waiting, pointer dispatch, full CSS and XPath queries, configurable test ID attributes, and broader accessibility computation.
+The next locator layer needs auto-waiting, pointer dispatch, configurable test ID attributes, and broader accessibility computation.

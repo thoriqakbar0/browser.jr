@@ -2,9 +2,9 @@
 
 ## Summary
 
-Package callers submit `GetElementChecked` with a current interactive reference.
+Package callers submit `GetElementChecked` with a reference or `GetCheckedByLocator` with a locator.
 
-Session-mode callers send `is checked <ref>` after an interactive snapshot.
+Session-mode callers send `is checked <ref|selector>`. Direct selectors need no snapshot.
 
 Interactive snapshots also report current native checkbox state.
 
@@ -18,9 +18,9 @@ browser.jr returns the current Boolean state without changing the page or refere
 
 ```mermaid
 stateDiagram-v2
-    [*] --> checking_reference
-    checking_reference --> rejected : missing or stale reference
-    checking_reference --> checking_state : current reference
+    [*] --> resolving_target
+    resolving_target --> rejected : stale, missing, or non-unique target
+    resolving_target --> checking_state : current reference or strict locator
     checking_state --> unsupported : state unavailable
     checking_state --> reporting : native checkbox
     reporting --> finished
@@ -30,9 +30,9 @@ stateDiagram-v2
 
 ### Invoke
 
-The package request contains one typed reference.
+The package request contains one typed reference or locator.
 
-Session mode reads `is checked` and one displayed reference.
+Session mode reads `is checked` and one reference or selector.
 
 ### Exit immediately
 
@@ -42,7 +42,7 @@ An unknown session label reports invalid input. Neither path reads another eleme
 
 ### Begin running
 
-browser.jr resolves the reference through the latest interactive snapshot.
+browser.jr resolves a reference through the latest interactive snapshot or a locator through the current document.
 
 State inspection supports native checkbox inputs, including disabled checkboxes.
 
@@ -54,9 +54,9 @@ The read does not dispatch events, run scripts, validate input, or change focus.
 
 ### Finish
 
-The package returns `ElementChecked` with the reference and current state.
+The package returns `ElementChecked` for references or `LocatorChecked` for locators.
 
-Session mode reports `checked ref=<ref> value=<boolean>` and flushes stdout.
+Reference output reports `checked ref=<ref> value=<boolean>`. Direct selectors print the Boolean.
 
 The reference remains current after the read.
 
@@ -64,7 +64,7 @@ The reference remains current after the read.
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | The package and session commands take one reference. | No state-read flags exist. |
+| Flags and options | The package and session commands take one reference or locator. | No state-read flags exist. |
 | Project configuration | No checkbox inspection configuration exists. | Nothing reloads. |
 | Target matrix | The current page and snapshot select one control. | The read does not change it. |
 | Output channel | The package returns a typed value. Session mode uses flushed text. | Snapshots expose the same Boolean. |
@@ -107,6 +107,7 @@ The reference remains current after the read.
 - Radio buttons, switches, buttons, links, and textboxes report unsupported state.
 - A successful state change affects the next direct read immediately.
 - A direct read does not invalidate its reference.
+- Direct selectors resolve strictly without a prior snapshot.
 - A later snapshot invalidates references from the previous snapshot.
 
 ## Open questions and verification

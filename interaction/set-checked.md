@@ -4,7 +4,7 @@
 
 Package callers submit `SetElementChecked` with a current interactive reference and Boolean state.
 
-Session-mode callers use `check <ref>` or `uncheck <ref>` after an interactive snapshot.
+Session-mode callers use `check <ref|selector>` or `uncheck <ref|selector>`. Direct selectors need no snapshot.
 
 [Locator actions](../inspection/query-elements.md) define the snapshot-free checked-state path.
 
@@ -22,9 +22,9 @@ Repeating either action returns the same state without an error.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> checking_reference
-    checking_reference --> rejected : missing or stale reference
-    checking_reference --> checking_control : current reference
+    [*] --> resolving_target
+    resolving_target --> rejected : stale, missing, or non-unique target
+    resolving_target --> checking_control : current reference or strict locator
     checking_control --> unsupported : not a mutable native checkbox
     checking_control --> storing : mutable checkbox
     storing --> reported
@@ -35,19 +35,19 @@ stateDiagram-v2
 
 ### Invoke
 
-The package request contains one typed reference and one Boolean value.
+The package request contains one typed reference or locator and one Boolean value.
 
-Session mode maps `check` to true and `uncheck` to false.
+Session mode maps `check` to true and `uncheck` to false for references and selectors.
 
 ### Exit immediately
 
 A stale package reference returns `SessionError::StaleElementReference`.
 
-An unknown session label reports invalid input. Neither path changes any checkbox.
+An unknown session label reports invalid input. Locator failures follow [Find elements with locators](../inspection/query-elements.md).
 
 ### Begin running
 
-browser.jr confirms that the referenced source element is `input[type=checkbox]`.
+browser.jr confirms that the resolved source element is `input[type=checkbox]`.
 
 Disabled checkboxes reject changes. Explicit ARIA checkbox roles do not create mutable native state.
 
@@ -59,9 +59,9 @@ The action does not dispatch `input`, `change`, click, focus, or pointer events.
 
 ### Finish
 
-The package returns `SetCheckedResult` with the reference and stored state.
+The package returns `SetCheckedResult` for references or `SetCheckedByLocatorResult` for locators.
 
-Session mode reports `set checked ref=<ref> value=<boolean>` and flushes stdout.
+Reference output reports `set checked ref=<ref> value=<boolean>`. Direct selector output includes the resolved element and state.
 
 A later snapshot reports the current state and invalidates earlier references.
 
@@ -69,7 +69,7 @@ A later snapshot reports the current state and invalidates earlier references.
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | The package takes a Boolean. Session mode uses separate commands. | No checked-state flags exist. |
+| Flags and options | The package takes a reference or locator and Boolean. Session mode uses separate commands. | No checked-state flags exist. |
 | Project configuration | No checkbox configuration exists. | Nothing reloads. |
 | Target matrix | The current page and snapshot select one checkbox. | The action does not navigate. |
 | Output channel | The package returns a typed result. Session mode uses flushed text. | A later snapshot exposes the state. |
@@ -113,6 +113,7 @@ A later snapshot reports the current state and invalidates earlier references.
 - Radio buttons and switches reject checked-state mutation.
 - Explicit ARIA roles do not create native checkbox behavior.
 - Rejected actions preserve state and the current reference.
+- Direct selectors resolve strictly without a prior snapshot.
 - A later snapshot invalidates the action reference.
 
 ## Open questions and verification

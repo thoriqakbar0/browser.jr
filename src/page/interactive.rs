@@ -1,14 +1,18 @@
 use super::visibility::{VisibilityState, visibility_state};
-use super::{ElementSource, collapse_whitespace, parse_page_source};
+use super::{ElementSource, SelectorIndex, collapse_whitespace, parse_page_source};
 use crate::locator::{Locator, LocatorCandidate, SemanticLocatorCandidate, SourceLocatorCandidate};
+use crate::non_empty::NonEmpty;
+use crate::selection::SelectOptionTarget;
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct PageSemanticSource {
     pub(crate) title: String,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) semantic_elements: Vec<SemanticElementSource>,
     pub(crate) locator_elements: Vec<LocatorElementSource>,
     pub(crate) interactive_elements: Vec<InteractiveElementSource>,
+    pub(crate) selector_index: SelectorIndex,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,6 +30,7 @@ struct LocatorEvidence {
     text: String,
     label: Option<String>,
     placeholder: Option<String>,
+    visibility: VisibilityState,
     source: LocatorSourceEvidence,
 }
 
@@ -75,32 +80,37 @@ pub(crate) enum CheckedState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SelectState {
-    Editable(SingleSelect),
+    Editable(NativeSelect),
     NonEditable {
-        select: SingleSelect,
-        reason: String,
-    },
-    Unsupported {
+        select: NativeSelect,
         reason: String,
     },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SelectValueError {
+    Blocked { reason: String },
     Unsupported { reason: String },
-    OptionNotFound,
-    OptionDisabled,
+    OptionNotFound { target: SelectOptionTarget },
+    OptionDisabled { target: SelectOptionTarget },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SingleSelect {
-    options: Vec<SelectOption>,
-    selected: Option<usize>,
+pub(crate) struct NativeSelect {
+    options: Vec<NativeSelectOption>,
+    selection: SelectSelection,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct SelectOption {
+enum SelectSelection {
+    Single(Option<usize>),
+    Multiple(Vec<usize>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NativeSelectOption {
     value: String,
+    label: String,
     disabled: bool,
 }
 
@@ -187,6 +197,23 @@ impl InteractiveElementSource {
         }
     }
 
+    pub(crate) fn select_options(
+        &mut self,
+        targets: &NonEmpty<SelectOptionTarget>,
+    ) -> Result<NonEmpty<String>, SelectValueError> {
+        match &mut self.control_state {
+            ControlState::Select(state) => state.select_options(targets),
+            ControlState::Text(_) | ControlState::Checkbox(_) | ControlState::Unavailable => {
+                Err(SelectValueError::Unsupported {
+                    reason: format!(
+                        "select execution for role {} is not implemented",
+                        self.semantics.role
+                    ),
+                })
+            }
+        }
+    }
+
     pub(crate) fn checked(&self) -> Option<bool> {
         match self.control_state {
             ControlState::Checkbox(
@@ -224,6 +251,43 @@ impl LocatorElementSource {
         &self.evidence.text
     }
 
+    pub(crate) fn attribute(&self, name: &str) -> Option<&str> {
+        self.evidence
+            .source
+            .attributes
+            .get(name)
+            .map(String::as_str)
+    }
+
+    pub(crate) fn attribute_is_sensitive(&self, name: &str) -> bool {
+        name == "value"
+            && self.evidence.source.tag == "input"
+            && self
+                .evidence
+                .source
+                .attributes
+                .get("type")
+                .is_some_and(|value| value.eq_ignore_ascii_case("password"))
+    }
+
+    pub(crate) fn enabled(&self) -> Option<bool> {
+        match self.evidence.source.tag.as_str() {
+            "button" | "input" | "select" | "textarea" | "option" | "optgroup" => {
+                Some(!self.evidence.source.attributes.contains_key("disabled"))
+            }
+            "a" if self.evidence.source.attributes.contains_key("href") => Some(true),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn visible(&self) -> Result<bool, &str> {
+        match &self.evidence.visibility {
+            VisibilityState::Visible => Ok(true),
+            VisibilityState::Hidden => Ok(false),
+            VisibilityState::Unsupported { reason } => Err(reason),
+        }
+    }
+
     pub(crate) fn matches(&self, locator: &Locator) -> bool {
         locator.matches(LocatorCandidate {
             semantic: SemanticLocatorCandidate {
@@ -234,7 +298,6 @@ impl LocatorElementSource {
                 placeholder: self.evidence.placeholder.as_deref(),
             },
             source: SourceLocatorCandidate {
-                tag: &self.evidence.source.tag,
                 attributes: &self.evidence.source.attributes,
             },
         })
@@ -245,40 +308,105 @@ impl SelectState {
     fn value(&self) -> Option<&str> {
         match self {
             Self::Editable(select) | Self::NonEditable { select, .. } => Some(select.value()),
-            Self::Unsupported { .. } => None,
         }
     }
 
     fn select_value(&mut self, value: &str) -> Result<&str, SelectValueError> {
         match self {
             Self::Editable(select) => select.select_value(value),
-            Self::NonEditable { reason, .. } | Self::Unsupported { reason } => {
-                Err(SelectValueError::Unsupported {
-                    reason: reason.clone(),
-                })
-            }
+            Self::NonEditable { reason, .. } => Err(SelectValueError::Blocked {
+                reason: reason.clone(),
+            }),
+        }
+    }
+
+    fn select_options(
+        &mut self,
+        targets: &NonEmpty<SelectOptionTarget>,
+    ) -> Result<NonEmpty<String>, SelectValueError> {
+        match self {
+            Self::Editable(select) => select.select_options(targets),
+            Self::NonEditable { reason, .. } => Err(SelectValueError::Blocked {
+                reason: reason.clone(),
+            }),
         }
     }
 }
 
-impl SingleSelect {
+impl NativeSelect {
     fn value(&self) -> &str {
-        self.selected
+        self.first_selected_index()
             .map(|index| self.options[index].value.as_str())
             .unwrap_or_default()
     }
 
     fn select_value(&mut self, value: &str) -> Result<&str, SelectValueError> {
-        let index = self
-            .options
-            .iter()
-            .position(|option| option.value == value)
-            .ok_or(SelectValueError::OptionNotFound)?;
-        if self.options[index].disabled {
-            return Err(SelectValueError::OptionDisabled);
+        let targets = NonEmpty::one(SelectOptionTarget::Value(value.to_owned()));
+        self.select_options(&targets)?;
+        Ok(self.value())
+    }
+
+    fn select_options(
+        &mut self,
+        targets: &NonEmpty<SelectOptionTarget>,
+    ) -> Result<NonEmpty<String>, SelectValueError> {
+        let mut requested_indices = Vec::with_capacity(targets.len());
+        for target in targets.iter() {
+            let index =
+                self.option_index(target)
+                    .ok_or_else(|| SelectValueError::OptionNotFound {
+                        target: target.clone(),
+                    })?;
+            if self.options[index].disabled {
+                return Err(SelectValueError::OptionDisabled {
+                    target: target.clone(),
+                });
+            }
+            if !requested_indices.contains(&index) {
+                requested_indices.push(index);
+            }
         }
-        self.selected = Some(index);
-        Ok(&self.options[index].value)
+
+        if matches!(self.selection, SelectSelection::Single(_)) {
+            let index = requested_indices
+                .iter()
+                .copied()
+                .min()
+                .expect("non-empty requested values resolve at least one option");
+            self.selection = SelectSelection::Single(Some(index));
+            return Ok(NonEmpty::one(self.options[index].value.clone()));
+        }
+
+        let selected_values = requested_indices
+            .iter()
+            .map(|index| self.options[*index].value.clone())
+            .collect();
+        let mut selected_indices = requested_indices;
+        selected_indices.sort_unstable();
+        self.selection = SelectSelection::Multiple(selected_indices);
+        Ok(NonEmpty::from_vec(selected_values)
+            .expect("non-empty requested values resolve at least one option"))
+    }
+
+    fn first_selected_index(&self) -> Option<usize> {
+        match &self.selection {
+            SelectSelection::Single(selected) => *selected,
+            SelectSelection::Multiple(selected) => selected.first().copied(),
+        }
+    }
+
+    fn option_index(&self, target: &SelectOptionTarget) -> Option<usize> {
+        match target {
+            SelectOptionTarget::Value(value) => self
+                .options
+                .iter()
+                .position(|option| option.value == *value),
+            SelectOptionTarget::Label(label) => self
+                .options
+                .iter()
+                .position(|option| option.label == *label),
+            SelectOptionTarget::Index(index) => (*index < self.options.len()).then_some(*index),
+        }
     }
 }
 
@@ -294,6 +422,7 @@ pub(crate) fn semantic_elements_from_html(html: &str) -> Vec<SemanticElementSour
 
 pub(crate) fn page_semantics_from_html(html: &str) -> PageSemanticSource {
     let source = parse_page_source(html);
+    let selector_index = SelectorIndex::new(html, &source.elements);
     let (semantic_elements, locator_elements, interactive_elements) =
         element_sources(&source.elements, source.has_stylesheet);
     PageSemanticSource {
@@ -301,6 +430,7 @@ pub(crate) fn page_semantics_from_html(html: &str) -> PageSemanticSource {
         semantic_elements,
         locator_elements,
         interactive_elements,
+        selector_index,
     }
 }
 
@@ -317,6 +447,7 @@ fn element_sources(
     let mut interactive_elements = Vec::new();
     for (index, source) in sources.iter().enumerate() {
         let role = semantic_role(index, source, sources);
+        let visibility = visibility_state(index, source, sources, has_stylesheet);
         let interactive_index = role
             .as_deref()
             .is_some_and(is_interactive_role)
@@ -336,6 +467,7 @@ fn element_sources(
                 text: text.clone(),
                 label: locator_label(source, sources),
                 placeholder: locator_placeholder(source),
+                visibility: visibility.clone(),
                 source: LocatorSourceEvidence {
                     tag: source.tag.clone(),
                     attributes: source.attributes.clone(),
@@ -357,7 +489,6 @@ fn element_sources(
             if interactive_index.is_some() {
                 let action = interactive_action(source, &role);
                 let control_state = control_state(index, source, sources);
-                let visibility = visibility_state(index, source, sources, has_stylesheet);
                 interactive_elements.push(InteractiveElementSource {
                     semantics: semantics.clone(),
                     action,
@@ -419,35 +550,49 @@ fn select_state(
     source: &ElementSource,
     sources: &[ElementSource],
 ) -> SelectState {
-    if source.attributes.contains_key("multiple") {
-        return SelectState::Unsupported {
-            reason: "multiple select controls are not implemented".into(),
-        };
-    }
-
+    let multiple = source.attributes.contains_key("multiple");
     let mut options = Vec::new();
-    let mut selected = None;
+    let mut selected = Vec::new();
     for option in sources.iter().filter(|candidate| {
         candidate.tag == "option"
             && nearest_select_ancestor(candidate.parent, sources) == Some(select_index)
     }) {
         if option.attributes.contains_key("selected") {
-            selected = Some(options.len());
+            if multiple {
+                selected.push(options.len());
+            } else {
+                selected.clear();
+                selected.push(options.len());
+            }
         }
-        options.push(SelectOption {
+        options.push(NativeSelectOption {
             value: option
                 .attributes
                 .get("value")
+                .cloned()
+                .unwrap_or_else(|| collapse_whitespace(&option.text)),
+            label: option
+                .attributes
+                .get("label")
                 .cloned()
                 .unwrap_or_else(|| collapse_whitespace(&option.text)),
             disabled: option_is_disabled(option, sources),
         });
     }
 
-    if selected.is_none() && select_display_size(source) == 1 {
-        selected = options.iter().position(|option| !option.disabled);
+    if selected.is_empty()
+        && !multiple
+        && select_display_size(source) == 1
+        && let Some(index) = options.iter().position(|option| !option.disabled)
+    {
+        selected.push(index);
     }
-    let select = SingleSelect { options, selected };
+    let selection = if multiple {
+        SelectSelection::Multiple(selected)
+    } else {
+        SelectSelection::Single(selected.first().copied())
+    };
+    let select = NativeSelect { options, selection };
     if source.attributes.contains_key("disabled") {
         SelectState::NonEditable {
             select,

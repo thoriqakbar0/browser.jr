@@ -89,6 +89,110 @@ fn interactive_snapshot_reports_ordered_agent_refs() {
 }
 
 #[test]
+fn interactive_snapshot_json_matches_the_agent_envelope() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<label for="email">Email address</label><input id="email"><button>Save</button>"#,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+        .args(["--json", "snapshot", &url, "--interactive"])
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["success"], true);
+    assert_eq!(value["data"]["origin"], url);
+    assert_eq!(value["data"]["refs"]["e1"]["role"], "textbox");
+    assert_eq!(value["data"]["refs"]["e1"]["name"], "Email address");
+    assert_eq!(value["data"]["refs"]["e2"]["role"], "button");
+    assert_eq!(
+        value["data"]["snapshot"],
+        "- textbox \"Email address\" [ref=e1]: \"\"\n- button \"Save\" [ref=e2]"
+    );
+    assert!(value["error"].is_null());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn snapshot_json_reports_load_failures_on_stdout() {
+    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+        .args(["snapshot", "http://example.com", "--interactive", "--json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["success"], false);
+    assert!(value["data"].is_null());
+    assert!(value["error"].as_str().unwrap().contains("loopback"));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn snapshot_json_reports_scope_failures_on_stdout() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(r#"<button>Save</button>"#);
+    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+        .args([
+            "snapshot",
+            &url,
+            "--interactive",
+            "--selector",
+            "#missing",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["success"], false);
+    assert!(value["data"].is_null());
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap()
+            .contains("no element matches")
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn one_shot_snapshot_scopes_interactive_elements_with_css() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button>Outside</button>
+            <main><section><input aria-label="Email"><button>Inside</button></section></main>
+        "#,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+        .args(["snapshot", &url, "-i", "-s", "main > section"])
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(
+        output.status.success(),
+        "unexpected stdout: {}\nunexpected stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("mode=interactive elements=2"));
+    assert!(stdout.contains(r#"- textbox "Email" [ref=@e1]"#));
+    assert!(stdout.contains(r#"- button "Inside" [ref=@e2]"#));
+    assert!(!stdout.contains("Outside"));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn session_mode_keeps_snapshot_refs_for_link_navigation() {
     let network_guard = network_test_guard();
     let (url, server) = serve_pages(vec![
@@ -266,11 +370,11 @@ fn session_mode_supports_alt_title_test_id_and_css_positions() {
 }
 
 #[test]
-fn unsupported_css_position_selector_preserves_current_references() {
+fn invalid_css_position_selector_preserves_current_references() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<input value="old"><div class="card">Card</div>"#);
     let output = run_session_script(&format!(
-        "open {url}\nsnapshot -i\nfind first \"div .card\" text\nget value @e1\nexit\n"
+        "open {url}\nsnapshot -i\nfind first \"div[\" text\nget value @e1\nexit\n"
     ));
     server.join().unwrap();
     drop(network_guard);
@@ -279,8 +383,183 @@ fn unsupported_css_position_selector_preserves_current_references() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains(r#"value ref=@e1 "old""#));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("invalid locator: CSS selector uses unsupported syntax"));
+    assert!(stderr.contains("invalid locator: CSS selector is invalid"));
     assert!(!stderr.contains("unknown or stale element reference"));
+}
+
+#[test]
+fn session_mode_uses_direct_css_and_xpath_selectors() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <form><input id="email" name="email" value="old"></form>
+            <section class="cards"><button>One</button><button>Two</button></section>
+        "#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nfill \"form > input[name=email]\" changed\nget text \"//section[@class='cards']/button[2]\"\nfind css \"section.cards > button:first-child\" text\nfind xpath \"//form/input\" text\nsnapshot -i\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(
+        output.status.success(),
+        "unexpected stdout: {}\nunexpected stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#"filled role="textbox" name="" element="email" characters=7"#));
+    assert!(stdout.contains("\nTwo\n"));
+    assert!(stdout.contains("\nOne\n"));
+    assert!(stdout.contains(r#"- textbox "" [ref=@e1]: "changed""#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn session_mode_counts_direct_css_and_xpath_matches() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <section class="cards">
+                <button class="card">One</button>
+                <button class="card">Two</button>
+            </section>
+        "#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nget count \"section.cards > .card\"\nget count \"//section/button\"\nget count .missing\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(
+        output.status.success(),
+        "unexpected stdout: {}\nunexpected stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\n2\n2\n0\n"));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn session_mode_reads_and_changes_state_through_direct_selectors() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <input id="email" value="old">
+            <input id="terms" type="checkbox">
+            <select id="size">
+                <option value="small">Small</option>
+                <option value="large">Large</option>
+            </select>
+            <button id="disabled" disabled>Save</button>
+            <div id="hidden" hidden>Hidden</div>
+            <div id="card" data-kind="demo">Card</div>
+        "#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nget value '#email'\nget attr '#card' data-kind\nget attr '#card' missing\nis checked '#terms'\nis enabled '#disabled'\nis visible '#hidden'\ncheck '#terms'\nis checked '#terms'\nselect '#size' large\nget value '#size'\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(
+        output.status.success(),
+        "unexpected stdout: {}\nunexpected stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\nold\ndemo\nnull\nfalse\nfalse\nfalse\n"));
+    assert!(stdout.contains(r#"checked role="checkbox" name="" element="terms" checked=true"#));
+    assert!(stdout.contains("\ntrue\n"));
+    assert!(stdout.contains(r#"selected role="combobox" name="" element="size" value="large""#));
+    assert!(stdout.contains("\nlarge\nsession closed\n"));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn session_mode_reads_normalized_inner_html_by_selector_and_reference() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <section id="card"><span data-x="a&amp;b">Hello &amp; <b>world</b></span><!-- note --></section>
+            <button id="action"><span>Save</span></button>
+        "#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nget html '#card'\nget html \"//section[@id='card']\"\nsnapshot -i\nget html @e1\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(
+        output.status.success(),
+        "unexpected stdout: {}\nunexpected stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let expected = r#"<span data-x="a&amp;b">Hello &amp; <b>world</b></span><!-- note -->"#;
+    assert_eq!(stdout.matches(expected).count(), 2);
+    assert!(stdout.contains(r#"html ref=@e1 "<span>Save</span>""#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn session_mode_scopes_snapshots_and_resolves_compact_refs() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button>Outside</button>
+            <main><section><input aria-label="Email"><button>Inside</button></section></main>
+        "#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nsnapshot -i -s \"main > section\"\nget text @e2\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(
+        output.status.success(),
+        "unexpected stdout: {}\nunexpected stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("mode=interactive elements=2"));
+    assert!(!stdout.contains(r#"button "Outside""#));
+    assert!(stdout.contains(r#"text ref=@e2 "Inside""#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn direct_css_click_navigates_without_a_snapshot() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"<main><a class="next" href="/next">Next</a></main>"#,
+        r#"<h1>Arrived</h1>"#,
+    ]);
+    let output = run_session_script(&format!(
+        "open {url}\nclick \"main > a.next\"\nfind role heading text --name Arrived\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(
+        output.status.success(),
+        "unexpected stdout: {}\nunexpected stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(&format!("url={}next", url)));
+    assert!(stdout.contains("\nArrived\n"));
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -502,6 +781,26 @@ fn session_mode_selects_an_exact_option_value() {
 }
 
 #[test]
+fn session_mode_selects_multiple_quoted_option_values() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<select aria-label="Many" multiple><option value="a" selected>A</option><option value="b">B</option></select>"#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nsnapshot -i\nselect @e1 \"b\" \"a\"\nget value @e1\nsnapshot -i\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#"- listbox "Many" [ref=@e1]: "a""#));
+    assert!(stdout.contains(r#"selected ref=@e1 values=["b", "a"]"#));
+    assert!(stdout.contains(r#"value ref=@e1 "a""#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn session_mode_reads_supported_static_visibility() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(
@@ -559,6 +858,28 @@ fn snapshot_requires_interactive_mode() {
         String::from_utf8(output.stderr)
             .unwrap()
             .contains("requires --interactive")
+    );
+}
+
+#[test]
+fn invalid_snapshot_selector_fails_before_loading() {
+    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+        .args([
+            "snapshot",
+            "http://127.0.0.1:1",
+            "--interactive",
+            "--selector",
+            "div[",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("invalid snapshot selector")
     );
 }
 

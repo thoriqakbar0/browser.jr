@@ -3,13 +3,15 @@ use crate::layout::{
 };
 use crate::loading::{LoadError, load_local_html};
 use crate::locator::{Locator, LocatorMatch, LocatorPosition, RoleLocator, RoleMatch};
+use crate::non_empty::NonEmpty;
 use crate::page::{
     CheckedState, ControlState, InteractiveAction, InteractiveElementSource, LocatorElementSource,
-    SelectState, SelectValueError, TextValueState, page_semantics_from_html,
+    SelectValueError, SelectorIndex, SelectorQueryError, TextValueState, page_semantics_from_html,
 };
 use crate::rules::{
     RuleResult, WidthFinding, evaluate_horizontal_overflow, evaluate_max_element_width,
 };
+use crate::selection::SelectOptionTarget;
 use crate::snapshot::{InteractiveElementRef, InteractiveSnapshot, Snapshot, SnapshotId};
 use http::Uri;
 
@@ -28,8 +30,14 @@ pub struct Session {
     layout: LayoutKernel,
     identities: IdentityCounters,
     last_snapshot: Option<Snapshot>,
-    latest_interactive_snapshot: Option<SnapshotId>,
+    latest_interactive_snapshot: Option<LatestInteractiveSnapshot>,
     current_page: Option<CurrentPage>,
+}
+
+#[derive(Debug)]
+struct LatestInteractiveSnapshot {
+    id: SnapshotId,
+    element_indices: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -45,11 +53,13 @@ struct CurrentPage {
     title: String,
     locator_elements: Vec<LocatorElementSource>,
     interactive_elements: Vec<InteractiveElementSource>,
+    selector_index: SelectorIndex,
 }
 
 #[derive(Debug)]
 struct ResolvedLocator {
     matched: LocatorMatch,
+    source_index: usize,
     interactive_index: Option<usize>,
 }
 
@@ -59,6 +69,22 @@ enum LocatorOperationError {
     NotFound,
     Ambiguous {
         match_count: usize,
+    },
+    Query {
+        reason: String,
+    },
+    InspectionBlocked {
+        inspection: LocatorInspection,
+        reason: String,
+    },
+    SensitiveAttribute {
+        name: String,
+    },
+    SelectOptionNotFound {
+        target: SelectOptionTarget,
+    },
+    SelectOptionDisabled {
+        target: SelectOptionTarget,
     },
     Navigation(LoadError),
     ActionBlocked {
@@ -115,42 +141,51 @@ impl Session {
             title: semantics.title,
             locator_elements: semantics.locator_elements,
             interactive_elements: semantics.interactive_elements,
+            selector_index: semantics.selector_index,
         });
         Ok(reply)
     }
 
     fn element_index_for(&self, reference: InteractiveElementRef) -> Result<usize, SessionError> {
         let page = self.current_page.as_ref().ok_or(SessionError::NoPage)?;
-        if reference.document_epoch() != page.epoch
-            || self.latest_interactive_snapshot != Some(reference.snapshot())
-        {
+        let Some(snapshot) = &self.latest_interactive_snapshot else {
+            return Err(SessionError::StaleElementReference { reference });
+        };
+        if reference.document_epoch() != page.epoch || snapshot.id != reference.snapshot() {
             return Err(SessionError::StaleElementReference { reference });
         }
-        let index = reference
+        let ordinal = reference
             .ordinal()
             .checked_sub(1)
             .and_then(|ordinal| usize::try_from(ordinal).ok())
             .expect("interactive snapshot references use nonzero usize ordinals");
-        page.interactive_elements
-            .get(index)
-            .map(|_| index)
+        snapshot
+            .element_indices
+            .get(ordinal)
+            .copied()
+            .filter(|index| page.interactive_elements.get(*index).is_some())
             .ok_or(SessionError::StaleElementReference { reference })
     }
 
-    fn locator_match_for(
+    fn locator_matches_for(
         &self,
         locator: &Locator,
-    ) -> Result<ResolvedLocator, LocatorOperationError> {
+    ) -> Result<Vec<ResolvedLocator>, LocatorOperationError> {
         let page = self
             .current_page
             .as_ref()
             .ok_or(LocatorOperationError::NoPage)?;
-        let mut matches = page
-            .locator_elements
-            .iter()
-            .enumerate()
-            .filter_map(|(index, element)| element.matches(locator).then_some(index))
-            .collect::<Vec<_>>();
+        let mut matches = if let Some(css) = locator.css() {
+            page.selector_index.css_matches(css.selector())?
+        } else if let Some(xpath) = locator.xpath() {
+            page.selector_index.xpath_matches(xpath.expression())?
+        } else {
+            page.locator_elements
+                .iter()
+                .enumerate()
+                .filter_map(|(index, element)| element.matches(locator).then_some(index))
+                .collect::<Vec<_>>()
+        };
         if locator.uses_descendant_text() {
             let candidates = matches.clone();
             matches.retain(|candidate| {
@@ -169,24 +204,38 @@ impl Session {
             matches.clear();
             matches.extend(selected);
         }
-        let Some(index) = matches.first().copied() else {
+        Ok(matches
+            .into_iter()
+            .map(|index| {
+                let element = &page.locator_elements[index];
+                ResolvedLocator {
+                    matched: LocatorMatch::new(
+                        &element.element,
+                        element.role(),
+                        element.name(),
+                        element.text(),
+                    ),
+                    source_index: index,
+                    interactive_index: element.interactive_index,
+                }
+            })
+            .collect())
+    }
+
+    fn locator_match_for(
+        &self,
+        locator: &Locator,
+    ) -> Result<ResolvedLocator, LocatorOperationError> {
+        let mut matches = self.locator_matches_for(locator)?;
+        if matches.is_empty() {
             return Err(LocatorOperationError::NotFound);
-        };
+        }
         if matches.len() > 1 {
             return Err(LocatorOperationError::Ambiguous {
                 match_count: matches.len(),
             });
         }
-        let element = &page.locator_elements[index];
-        Ok(ResolvedLocator {
-            matched: LocatorMatch::new(
-                &element.element,
-                element.role(),
-                element.name(),
-                element.text(),
-            ),
-            interactive_index: element.interactive_index,
-        })
+        Ok(matches.pop().expect("one locator match remains"))
     }
 
     fn locator_interactive_index(
@@ -311,17 +360,76 @@ impl SessionRequest for CaptureInteractiveSnapshot {
     type Reply = InteractiveSnapshot;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let page = session.current_page.as_ref().ok_or(SessionError::NoPage)?;
-        let snapshot_id = SnapshotId::next(&mut session.identities.next_snapshot_id);
-        let snapshot = InteractiveSnapshot::from_document(
-            snapshot_id,
-            page.epoch,
-            page.url.clone(),
-            &page.interactive_elements,
-        );
-        session.latest_interactive_snapshot = Some(snapshot_id);
-        Ok(snapshot)
+        let element_indices = (0..session
+            .current_page
+            .as_ref()
+            .ok_or(SessionError::NoPage)?
+            .interactive_elements
+            .len())
+            .collect();
+        Ok(capture_interactive_snapshot(session, element_indices))
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CaptureInteractiveSnapshotWithin {
+    pub locator: Locator,
+}
+
+impl private::Sealed for CaptureInteractiveSnapshotWithin {}
+
+impl SessionRequest for CaptureInteractiveSnapshotWithin {
+    type Reply = InteractiveSnapshot;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        let locator = self.locator;
+        let resolved = match session.locator_match_for(&locator) {
+            Ok(resolved) => resolved,
+            Err(error) => return Err(locator_session_error(locator, error)),
+        };
+        let page = session
+            .current_page
+            .as_ref()
+            .expect("resolved locator requires a current page");
+        let element_indices = page
+            .locator_elements
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                *index == resolved.source_index
+                    || locator_element_is_descendant(
+                        &page.locator_elements,
+                        *index,
+                        resolved.source_index,
+                    )
+            })
+            .filter_map(|(_, element)| element.interactive_index)
+            .collect();
+        Ok(capture_interactive_snapshot(session, element_indices))
+    }
+}
+
+fn capture_interactive_snapshot(
+    session: &mut Session,
+    element_indices: Vec<usize>,
+) -> InteractiveSnapshot {
+    let page = session
+        .current_page
+        .as_ref()
+        .expect("snapshot capture requires a current page");
+    let snapshot_id = SnapshotId::next(&mut session.identities.next_snapshot_id);
+    let snapshot = InteractiveSnapshot::from_document_indices(
+        snapshot_id,
+        page.epoch,
+        page.url.clone(),
+        &page.interactive_elements,
+        &element_indices,
+    );
+    session.latest_interactive_snapshot = Some(LatestInteractiveSnapshot {
+        id: snapshot_id,
+        element_indices,
+    });
+    snapshot
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -347,6 +455,7 @@ impl SessionRequest for FindByRole {
 pub enum LocatorAction {
     Click,
     Fill,
+    Select,
     Check,
     Uncheck,
     Hover,
@@ -359,6 +468,7 @@ impl std::fmt::Display for LocatorAction {
         formatter.write_str(match self {
             Self::Click => "click",
             Self::Fill => "fill",
+            Self::Select => "select",
             Self::Check => "check",
             Self::Uncheck => "uncheck",
             Self::Hover => "hover",
@@ -371,6 +481,27 @@ pub enum ActionabilityCheck {
     Visible,
     Enabled,
     Editable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocatorInspection {
+    Html,
+    Value,
+    Checked,
+    Enabled,
+    Visible,
+}
+
+impl std::fmt::Display for LocatorInspection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Html => "HTML",
+            Self::Value => "value",
+            Self::Checked => "checked state",
+            Self::Enabled => "enabled state",
+            Self::Visible => "visibility",
+        })
+    }
 }
 
 impl std::fmt::Display for ActionabilityCheck {
@@ -386,6 +517,206 @@ impl std::fmt::Display for ActionabilityCheck {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FindByLocator {
     pub locator: Locator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FindAllByLocator {
+    pub locator: Locator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocatorMatches {
+    pub matches: Vec<LocatorMatch>,
+}
+
+impl private::Sealed for FindAllByLocator {}
+
+impl SessionRequest for FindAllByLocator {
+    type Reply = LocatorMatches;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match session.locator_matches_for(&self.locator) {
+            Ok(matches) => Ok(LocatorMatches {
+                matches: matches
+                    .into_iter()
+                    .map(|resolved| resolved.matched)
+                    .collect(),
+            }),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CountByLocator {
+    pub locator: Locator,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocatorCount {
+    pub count: usize,
+}
+
+impl private::Sealed for CountByLocator {}
+
+impl SessionRequest for CountByLocator {
+    type Reply = LocatorCount;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match session.locator_matches_for(&self.locator) {
+            Ok(matches) => Ok(LocatorCount {
+                count: matches.len(),
+            }),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GetHtmlByLocator {
+    pub locator: Locator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocatorHtml {
+    pub matched: LocatorMatch,
+    pub html: String,
+}
+
+impl private::Sealed for GetHtmlByLocator {}
+
+impl SessionRequest for GetHtmlByLocator {
+    type Reply = LocatorHtml;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_get_html_by_locator(session, &self.locator) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GetValueByLocator {
+    pub locator: Locator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocatorValue {
+    pub matched: LocatorMatch,
+    pub value: String,
+}
+
+impl private::Sealed for GetValueByLocator {}
+
+impl SessionRequest for GetValueByLocator {
+    type Reply = LocatorValue;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_get_value_by_locator(session, &self.locator) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GetAttributeByLocator {
+    pub locator: Locator,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocatorAttribute {
+    pub matched: LocatorMatch,
+    pub name: String,
+    pub value: Option<String>,
+}
+
+impl private::Sealed for GetAttributeByLocator {}
+
+impl SessionRequest for GetAttributeByLocator {
+    type Reply = LocatorAttribute;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        let name = normalize_attribute_name(self.name)?;
+        match execute_get_attribute_by_locator(session, &self.locator, name) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GetCheckedByLocator {
+    pub locator: Locator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocatorChecked {
+    pub matched: LocatorMatch,
+    pub checked: bool,
+}
+
+impl private::Sealed for GetCheckedByLocator {}
+
+impl SessionRequest for GetCheckedByLocator {
+    type Reply = LocatorChecked;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_get_checked_by_locator(session, &self.locator) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GetEnabledByLocator {
+    pub locator: Locator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocatorEnabled {
+    pub matched: LocatorMatch,
+    pub enabled: bool,
+}
+
+impl private::Sealed for GetEnabledByLocator {}
+
+impl SessionRequest for GetEnabledByLocator {
+    type Reply = LocatorEnabled;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_get_enabled_by_locator(session, &self.locator) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GetVisibleByLocator {
+    pub locator: Locator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocatorVisible {
+    pub matched: LocatorMatch,
+    pub visible: bool,
+}
+
+impl private::Sealed for GetVisibleByLocator {}
+
+impl SessionRequest for GetVisibleByLocator {
+    type Reply = LocatorVisible;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_get_visible_by_locator(session, &self.locator) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
 }
 
 impl private::Sealed for FindByLocator {}
@@ -437,6 +768,56 @@ pub struct FillByLocator {
 pub struct FillByLocatorResult {
     pub matched: LocatorMatch,
     pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectByLocator {
+    pub locator: Locator,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectByLocatorResult {
+    pub matched: LocatorMatch,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectOptionsByLocator {
+    pub locator: Locator,
+    pub options: NonEmpty<SelectOptionTarget>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectOptionsByLocatorResult {
+    pub matched: LocatorMatch,
+    pub selected: NonEmpty<String>,
+}
+
+impl private::Sealed for SelectByLocator {}
+
+impl SessionRequest for SelectByLocator {
+    type Reply = SelectByLocatorResult;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_select_by_locator(session, &self.locator, self.value) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+impl private::Sealed for SelectOptionsByLocator {}
+
+impl SessionRequest for SelectOptionsByLocator {
+    type Reply = SelectOptionsByLocatorResult;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_select_options_by_locator(session, &self.locator, self.options) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
 }
 
 impl private::Sealed for FillByLocator {}
@@ -616,6 +997,175 @@ impl SessionRequest for HoverByRole {
     }
 }
 
+fn execute_get_value_by_locator(
+    session: &Session,
+    locator: &Locator,
+) -> Result<LocatorValue, LocatorOperationError> {
+    let resolved = session.locator_match_for(locator)?;
+    let index = resolved.interactive_index.ok_or_else(|| {
+        unsupported_locator_inspection(
+            &resolved,
+            LocatorInspection::Value,
+            "matched element has no implemented value state",
+        )
+    })?;
+    let element = &session
+        .current_page
+        .as_ref()
+        .expect("resolved locator requires a current page")
+        .interactive_elements[index];
+    let value = element.value().ok_or_else(|| {
+        let reason = format!(
+            "value inspection for role {} is not implemented",
+            element.role()
+        );
+        LocatorOperationError::InspectionBlocked {
+            inspection: LocatorInspection::Value,
+            reason,
+        }
+    })?;
+    Ok(LocatorValue {
+        matched: resolved.matched,
+        value: value.into(),
+    })
+}
+
+fn execute_get_html_by_locator(
+    session: &Session,
+    locator: &Locator,
+) -> Result<LocatorHtml, LocatorOperationError> {
+    let resolved = session.locator_match_for(locator)?;
+    let page = session
+        .current_page
+        .as_ref()
+        .expect("resolved locator requires a current page");
+    if page
+        .selector_index
+        .inner_html_contains_sensitive_value(resolved.source_index)?
+    {
+        return Err(LocatorOperationError::InspectionBlocked {
+            inspection: LocatorInspection::Html,
+            reason: "inner HTML contains a password value attribute".into(),
+        });
+    }
+    let html = page.selector_index.inner_html(resolved.source_index)?;
+    Ok(LocatorHtml {
+        matched: resolved.matched,
+        html,
+    })
+}
+
+fn execute_get_attribute_by_locator(
+    session: &Session,
+    locator: &Locator,
+    name: String,
+) -> Result<LocatorAttribute, LocatorOperationError> {
+    let resolved = session.locator_match_for(locator)?;
+    let element = &session
+        .current_page
+        .as_ref()
+        .expect("resolved locator requires a current page")
+        .locator_elements[resolved.source_index];
+    if element.attribute_is_sensitive(&name) {
+        return Err(LocatorOperationError::SensitiveAttribute { name });
+    }
+    Ok(LocatorAttribute {
+        matched: resolved.matched,
+        value: element.attribute(&name).map(str::to_owned),
+        name,
+    })
+}
+
+fn execute_get_checked_by_locator(
+    session: &Session,
+    locator: &Locator,
+) -> Result<LocatorChecked, LocatorOperationError> {
+    let resolved = session.locator_match_for(locator)?;
+    let index = resolved.interactive_index.ok_or_else(|| {
+        unsupported_locator_inspection(
+            &resolved,
+            LocatorInspection::Checked,
+            "matched element has no implemented checked state",
+        )
+    })?;
+    let element = &session
+        .current_page
+        .as_ref()
+        .expect("resolved locator requires a current page")
+        .interactive_elements[index];
+    let checked = element.checked().ok_or_else(|| {
+        unsupported_locator_inspection(
+            &resolved,
+            LocatorInspection::Checked,
+            &format!(
+                "checked-state inspection for role {} is not implemented",
+                element.role()
+            ),
+        )
+    })?;
+    Ok(LocatorChecked {
+        matched: resolved.matched,
+        checked,
+    })
+}
+
+fn execute_get_enabled_by_locator(
+    session: &Session,
+    locator: &Locator,
+) -> Result<LocatorEnabled, LocatorOperationError> {
+    let resolved = session.locator_match_for(locator)?;
+    let element = &session
+        .current_page
+        .as_ref()
+        .expect("resolved locator requires a current page")
+        .locator_elements[resolved.source_index];
+    let enabled = element.enabled().ok_or_else(|| {
+        unsupported_locator_inspection(
+            &resolved,
+            LocatorInspection::Enabled,
+            "matched element has no implemented native enabled state",
+        )
+    })?;
+    Ok(LocatorEnabled {
+        matched: resolved.matched,
+        enabled,
+    })
+}
+
+fn execute_get_visible_by_locator(
+    session: &Session,
+    locator: &Locator,
+) -> Result<LocatorVisible, LocatorOperationError> {
+    let resolved = session.locator_match_for(locator)?;
+    let element = &session
+        .current_page
+        .as_ref()
+        .expect("resolved locator requires a current page")
+        .locator_elements[resolved.source_index];
+    let visible = element
+        .visible()
+        .map_err(|reason| LocatorOperationError::InspectionBlocked {
+            inspection: LocatorInspection::Visible,
+            reason: reason.into(),
+        })?;
+    Ok(LocatorVisible {
+        matched: resolved.matched,
+        visible,
+    })
+}
+
+fn unsupported_locator_inspection(
+    resolved: &ResolvedLocator,
+    inspection: LocatorInspection,
+    fallback: &str,
+) -> LocatorOperationError {
+    let reason = resolved.matched.role.as_ref().map_or_else(
+        || fallback.into(),
+        |role| format!("{inspection} inspection for role {role} is not implemented"),
+    );
+    LocatorOperationError::InspectionBlocked { inspection, reason }
+}
+
 fn execute_click_by_locator(
     session: &mut Session,
     locator: &Locator,
@@ -695,6 +1245,60 @@ fn execute_fill_by_locator(
                 element.role()
             ),
         }),
+    }
+}
+
+fn execute_select_by_locator(
+    session: &mut Session,
+    locator: &Locator,
+    replacement: String,
+) -> Result<SelectByLocatorResult, LocatorOperationError> {
+    let result = execute_select_options_by_locator(
+        session,
+        locator,
+        NonEmpty::one(SelectOptionTarget::Value(replacement)),
+    )?;
+    Ok(SelectByLocatorResult {
+        matched: result.matched,
+        value: result.selected[0].clone(),
+    })
+}
+
+fn execute_select_options_by_locator(
+    session: &mut Session,
+    locator: &Locator,
+    options: NonEmpty<SelectOptionTarget>,
+) -> Result<SelectOptionsByLocatorResult, LocatorOperationError> {
+    let resolved = session.locator_match_for(locator)?;
+    let index = session.locator_interactive_index(&resolved, LocatorAction::Select)?;
+    let page = session
+        .current_page
+        .as_mut()
+        .expect("resolved locator requires a current page");
+    let element = &mut page.interactive_elements[index];
+    require_locator_visible(element, LocatorAction::Select)?;
+    match element.select_options(&options) {
+        Ok(selected) => Ok(SelectOptionsByLocatorResult {
+            matched: resolved.matched,
+            selected,
+        }),
+        Err(SelectValueError::Blocked { reason }) => Err(LocatorOperationError::ActionBlocked {
+            action: LocatorAction::Select,
+            check: ActionabilityCheck::Enabled,
+            reason,
+        }),
+        Err(SelectValueError::Unsupported { reason }) => {
+            Err(LocatorOperationError::UnsupportedAction {
+                action: LocatorAction::Select,
+                reason,
+            })
+        }
+        Err(SelectValueError::OptionNotFound { target }) => {
+            Err(LocatorOperationError::SelectOptionNotFound { target })
+        }
+        Err(SelectValueError::OptionDisabled { target }) => {
+            Err(LocatorOperationError::SelectOptionDisabled { target })
+        }
     }
 }
 
@@ -878,6 +1482,18 @@ pub struct SelectResult {
     pub value: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectOptions {
+    pub reference: InteractiveElementRef,
+    pub options: NonEmpty<SelectOptionTarget>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectOptionsResult {
+    pub reference: InteractiveElementRef,
+    pub selected: NonEmpty<String>,
+}
+
 impl private::Sealed for SelectElement {}
 
 impl SessionRequest for SelectElement {
@@ -895,19 +1511,72 @@ impl SessionRequest for SelectElement {
                 reference: self.reference,
                 value: value.into(),
             }),
-            Err(SelectValueError::Unsupported { reason }) => Err(SessionError::UnsupportedSelect {
+            Err(
+                SelectValueError::Blocked { reason } | SelectValueError::Unsupported { reason },
+            ) => Err(SessionError::UnsupportedSelect {
                 reference: self.reference,
                 reason,
             }),
-            Err(SelectValueError::OptionNotFound) => Err(SessionError::SelectOptionNotFound {
-                reference: self.reference,
-                value: self.value,
-            }),
-            Err(SelectValueError::OptionDisabled) => Err(SessionError::SelectOptionDisabled {
-                reference: self.reference,
-                value: self.value,
-            }),
+            Err(SelectValueError::OptionNotFound { target }) => {
+                Err(reference_option_not_found(self.reference, target))
+            }
+            Err(SelectValueError::OptionDisabled { target }) => {
+                Err(reference_option_disabled(self.reference, target))
+            }
         }
+    }
+}
+
+impl private::Sealed for SelectOptions {}
+
+impl SessionRequest for SelectOptions {
+    type Reply = SelectOptionsResult;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        let index = session.element_index_for(self.reference)?;
+        let element = &mut session
+            .current_page
+            .as_mut()
+            .expect("validated reference requires a current page")
+            .interactive_elements[index];
+        match element.select_options(&self.options) {
+            Ok(selected) => Ok(SelectOptionsResult {
+                reference: self.reference,
+                selected,
+            }),
+            Err(
+                SelectValueError::Blocked { reason } | SelectValueError::Unsupported { reason },
+            ) => Err(SessionError::UnsupportedSelect {
+                reference: self.reference,
+                reason,
+            }),
+            Err(SelectValueError::OptionNotFound { target }) => {
+                Err(reference_option_not_found(self.reference, target))
+            }
+            Err(SelectValueError::OptionDisabled { target }) => {
+                Err(reference_option_disabled(self.reference, target))
+            }
+        }
+    }
+}
+
+fn reference_option_not_found(
+    reference: InteractiveElementRef,
+    target: SelectOptionTarget,
+) -> SessionError {
+    match target {
+        SelectOptionTarget::Value(value) => SessionError::SelectOptionNotFound { reference, value },
+        target => SessionError::SelectOptionTargetNotFound { reference, target },
+    }
+}
+
+fn reference_option_disabled(
+    reference: InteractiveElementRef,
+    target: SelectOptionTarget,
+) -> SessionError {
+    match target {
+        SelectOptionTarget::Value(value) => SessionError::SelectOptionDisabled { reference, value },
+        target => SessionError::SelectOptionTargetDisabled { reference, target },
     }
 }
 
@@ -940,16 +1609,10 @@ impl SessionRequest for GetElementValue {
                 value: value.into(),
             });
         }
-        let reason = match &element.control_state {
-            ControlState::Select(SelectState::Unsupported { reason }) => reason.clone(),
-            ControlState::Text(_)
-            | ControlState::Checkbox(_)
-            | ControlState::Select(_)
-            | ControlState::Unavailable => format!(
-                "value inspection for role {} is not implemented",
-                element.role()
-            ),
-        };
+        let reason = format!(
+            "value inspection for role {} is not implemented",
+            element.role()
+        );
         Err(SessionError::UnsupportedValue {
             reference: self.reference,
             reason,
@@ -987,6 +1650,60 @@ impl SessionRequest for GetElementText {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GetElementHtml {
+    pub reference: InteractiveElementRef,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ElementHtml {
+    pub reference: InteractiveElementRef,
+    pub html: String,
+}
+
+impl private::Sealed for GetElementHtml {}
+
+impl SessionRequest for GetElementHtml {
+    type Reply = ElementHtml;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        let interactive_index = session.element_index_for(self.reference)?;
+        let page = session
+            .current_page
+            .as_ref()
+            .expect("validated reference requires a current page");
+        let source_index = page
+            .locator_elements
+            .iter()
+            .position(|element| element.interactive_index == Some(interactive_index))
+            .expect("every interactive element has one locator source");
+        let contains_sensitive_value = page
+            .selector_index
+            .inner_html_contains_sensitive_value(source_index)
+            .map_err(|error| SessionError::UnsupportedHtml {
+                reference: self.reference,
+                reason: error.to_string(),
+            })?;
+        if contains_sensitive_value {
+            return Err(SessionError::UnsupportedHtml {
+                reference: self.reference,
+                reason: "inner HTML contains a password value attribute".into(),
+            });
+        }
+        let html = page
+            .selector_index
+            .inner_html(source_index)
+            .map_err(|error| SessionError::UnsupportedHtml {
+                reference: self.reference,
+                reason: error.to_string(),
+            })?;
+        Ok(ElementHtml {
+            reference: self.reference,
+            html,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GetElementAttribute {
     pub reference: InteractiveElementRef,
@@ -1006,10 +1723,7 @@ impl SessionRequest for GetElementAttribute {
     type Reply = ElementAttribute;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        if self.name.is_empty() || self.name.chars().any(char::is_whitespace) {
-            return Err(SessionError::InvalidAttributeName { name: self.name });
-        }
-        let name = self.name.to_ascii_lowercase();
+        let name = normalize_attribute_name(self.name)?;
         let index = session.element_index_for(self.reference)?;
         let element = &session
             .current_page
@@ -1028,6 +1742,13 @@ impl SessionRequest for GetElementAttribute {
             name,
         })
     }
+}
+
+fn normalize_attribute_name(name: String) -> Result<String, SessionError> {
+    if name.is_empty() || name.chars().any(char::is_whitespace) {
+        return Err(SessionError::InvalidAttributeName { name });
+    }
+    Ok(name.to_ascii_lowercase())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1387,6 +2108,35 @@ pub enum SessionError {
         locator: Locator,
         match_count: usize,
     },
+    LocatorQuery {
+        locator: Locator,
+        reason: String,
+    },
+    UnsupportedLocatorInspection {
+        locator: Locator,
+        inspection: LocatorInspection,
+        reason: String,
+    },
+    SensitiveLocatorAttribute {
+        locator: Locator,
+        name: String,
+    },
+    LocatorSelectOptionNotFound {
+        locator: Locator,
+        value: String,
+    },
+    LocatorSelectOptionDisabled {
+        locator: Locator,
+        value: String,
+    },
+    LocatorSelectOptionTargetNotFound {
+        locator: Locator,
+        target: SelectOptionTarget,
+    },
+    LocatorSelectOptionTargetDisabled {
+        locator: Locator,
+        target: SelectOptionTarget,
+    },
     RoleNavigation {
         locator: RoleLocator,
         error: LoadError,
@@ -1437,7 +2187,19 @@ pub enum SessionError {
         reference: InteractiveElementRef,
         value: String,
     },
+    SelectOptionTargetNotFound {
+        reference: InteractiveElementRef,
+        target: SelectOptionTarget,
+    },
+    SelectOptionTargetDisabled {
+        reference: InteractiveElementRef,
+        target: SelectOptionTarget,
+    },
     UnsupportedValue {
+        reference: InteractiveElementRef,
+        reason: String,
+    },
+    UnsupportedHtml {
         reference: InteractiveElementRef,
         reason: String,
     },
@@ -1474,6 +2236,29 @@ fn locator_session_error(locator: Locator, error: LocatorOperationError) -> Sess
             locator,
             match_count,
         },
+        LocatorOperationError::Query { reason } => SessionError::LocatorQuery { locator, reason },
+        LocatorOperationError::InspectionBlocked { inspection, reason } => {
+            SessionError::UnsupportedLocatorInspection {
+                locator,
+                inspection,
+                reason,
+            }
+        }
+        LocatorOperationError::SensitiveAttribute { name } => {
+            SessionError::SensitiveLocatorAttribute { locator, name }
+        }
+        LocatorOperationError::SelectOptionNotFound { target } => match target {
+            SelectOptionTarget::Value(value) => {
+                SessionError::LocatorSelectOptionNotFound { locator, value }
+            }
+            target => SessionError::LocatorSelectOptionTargetNotFound { locator, target },
+        },
+        LocatorOperationError::SelectOptionDisabled { target } => match target {
+            SelectOptionTarget::Value(value) => {
+                SessionError::LocatorSelectOptionDisabled { locator, value }
+            }
+            target => SessionError::LocatorSelectOptionTargetDisabled { locator, target },
+        },
         LocatorOperationError::Navigation(error) => {
             SessionError::LocatorNavigation { locator, error }
         }
@@ -1505,6 +2290,15 @@ fn role_session_error(locator: RoleLocator, error: LocatorOperationError) -> Ses
             locator,
             match_count,
         },
+        LocatorOperationError::Query { .. } => {
+            unreachable!("role locators do not execute document selector queries")
+        }
+        LocatorOperationError::InspectionBlocked { .. }
+        | LocatorOperationError::SensitiveAttribute { .. }
+        | LocatorOperationError::SelectOptionNotFound { .. }
+        | LocatorOperationError::SelectOptionDisabled { .. } => {
+            unreachable!("role requests do not execute generic locator reads or selection")
+        }
         LocatorOperationError::Navigation(error) => SessionError::RoleNavigation { locator, error },
         LocatorOperationError::ActionBlocked {
             action,
@@ -1522,6 +2316,14 @@ fn role_session_error(locator: RoleLocator, error: LocatorOperationError) -> Ses
                 action,
                 reason,
             }
+        }
+    }
+}
+
+impl From<SelectorQueryError> for LocatorOperationError {
+    fn from(error: SelectorQueryError) -> Self {
+        Self::Query {
+            reason: error.to_string(),
         }
     }
 }

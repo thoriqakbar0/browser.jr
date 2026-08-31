@@ -10,14 +10,16 @@ use html5ever::tokenizer::{
 use crate::{ElementInput, LayoutInput};
 
 mod interactive;
+mod selectors;
 mod visibility;
 
 pub(crate) use interactive::{
     CheckedState, ControlState, InteractiveAction, InteractiveElementSource, LocatorElementSource,
-    SelectState, SelectValueError, TextValueState, page_semantics_from_html,
+    SelectValueError, TextValueState, page_semantics_from_html,
 };
 #[cfg(test)]
 pub(crate) use interactive::{interactive_elements_from_html, semantic_elements_from_html};
+pub(crate) use selectors::{SelectorIndex, SelectorQueryError};
 
 #[derive(Debug)]
 struct ElementSource {
@@ -625,7 +627,7 @@ fn is_void_element(tag_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CheckedState, ControlState, InteractiveAction, SelectState, TextValueState,
+        CheckedState, ControlState, InteractiveAction, TextValueState,
         interactive_elements_from_html, layout_input_from_html, page_semantics_from_html,
         semantic_elements_from_html,
     };
@@ -879,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn native_selects_expose_single_value_state_and_listbox_boundaries() {
+    fn native_selects_expose_single_and_multiple_value_state() {
         let elements = interactive_elements_from_html(
             r#"
                 <select aria-label="Size">
@@ -891,7 +893,9 @@ mod tests {
                     <option> Ready </option>
                 </select>
                 <select aria-label="List" size="2"><option>One</option></select>
-                <select aria-label="Many" multiple><option selected>A</option></select>
+                <select aria-label="Many" multiple>
+                    <option selected>A</option><option selected>B</option>
+                </select>
             "#,
         );
 
@@ -901,10 +905,7 @@ mod tests {
         assert_eq!(elements[2].role(), "listbox");
         assert_eq!(elements[2].value(), Some(""));
         assert_eq!(elements[3].role(), "listbox");
-        assert!(matches!(
-            elements[3].control_state,
-            ControlState::Select(SelectState::Unsupported { .. })
-        ));
+        assert_eq!(elements[3].value(), Some("A"));
     }
 
     #[test]

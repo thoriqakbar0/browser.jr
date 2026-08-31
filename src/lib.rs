@@ -1,4 +1,5 @@
 mod cli;
+mod cli_output;
 mod cli_session;
 mod layout;
 mod loading;
@@ -6,6 +7,8 @@ mod locator;
 mod non_empty;
 mod page;
 mod rules;
+mod screenshot;
+mod selection;
 mod session;
 mod snapshot;
 
@@ -15,22 +18,33 @@ pub use loading::LoadError;
 pub use locator::{
     AltLocator, CssLocator, CssLocatorError, LabelLocator, Locator, LocatorMatch, LocatorPosition,
     LocatorValueError, PlaceholderLocator, RoleLocator, RoleLocatorError, RoleMatch, TestIdLocator,
-    TextLocator, TitleLocator,
+    TextLocator, TitleLocator, XPathLocator, XPathLocatorError,
 };
 pub use non_empty::NonEmpty;
 pub use rules::{Comparison, Finding, RuleConstraint, RuleResult, WidthFinding};
+pub use screenshot::{
+    CaptureRect, CaptureRectError, CaptureTarget, OnDemandRasterProcess, PaintCommand, PaintScene,
+    PreparedScreenshot, RasterImage, RasterImageError, RasterProcess, RasterProcessError,
+    RasterProcessFactory, Rgba8,
+};
+pub use selection::SelectOptionTarget;
 pub use session::{
     ActionabilityCheck, ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot,
-    CheckElementWidth, ClickByLocator, ClickByLocatorResult, ClickByRole, ClickByRoleResult,
-    ClickElement, ClickResult, ElementAttribute, ElementChecked, ElementEnabled, ElementText,
-    ElementValue, ElementVisible, FillByLocator, FillByLocatorResult, FillByRole, FillByRoleResult,
-    FillElement, FillResult, FindByLocator, FindByRole, GetElementAttribute, GetElementChecked,
-    GetElementEnabled, GetElementText, GetElementValue, GetElementVisible, GetPageTitle,
-    GetPageUrl, HoverByLocator, HoverByLocatorResult, HoverByRole, HoverByRoleResult, LintLayout,
-    LocatorAction, OpenPage, OpenedPage, PageTitle, PageUrl, ReloadPage, RoleAction, SelectElement,
-    SelectResult, Session, SessionError, SessionRequest, SetCheckedByLocator,
-    SetCheckedByLocatorResult, SetCheckedByRole, SetCheckedByRoleResult, SetCheckedResult,
-    SetElementChecked,
+    CaptureInteractiveSnapshotWithin, CheckElementWidth, ClickByLocator, ClickByLocatorResult,
+    ClickByRole, ClickByRoleResult, ClickElement, ClickResult, CountByLocator, ElementAttribute,
+    ElementChecked, ElementEnabled, ElementHtml, ElementText, ElementValue, ElementVisible,
+    FillByLocator, FillByLocatorResult, FillByRole, FillByRoleResult, FillElement, FillResult,
+    FindAllByLocator, FindByLocator, FindByRole, GetAttributeByLocator, GetCheckedByLocator,
+    GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementHtml, GetElementText,
+    GetElementValue, GetElementVisible, GetEnabledByLocator, GetHtmlByLocator, GetPageTitle,
+    GetPageUrl, GetValueByLocator, GetVisibleByLocator, HoverByLocator, HoverByLocatorResult,
+    HoverByRole, HoverByRoleResult, LintLayout, LocatorAction, LocatorAttribute, LocatorChecked,
+    LocatorCount, LocatorEnabled, LocatorHtml, LocatorInspection, LocatorMatches, LocatorValue,
+    LocatorVisible, OpenPage, OpenedPage, PageTitle, PageUrl, ReloadPage, RoleAction,
+    SelectByLocator, SelectByLocatorResult, SelectElement, SelectOptions, SelectOptionsByLocator,
+    SelectOptionsByLocatorResult, SelectOptionsResult, SelectResult, Session, SessionError,
+    SessionRequest, SetCheckedByLocator, SetCheckedByLocatorResult, SetCheckedByRole,
+    SetCheckedByRoleResult, SetCheckedResult, SetElementChecked,
 };
 pub use snapshot::{
     EvidenceRef, InteractiveElement, InteractiveElementRef, InteractiveElementState,

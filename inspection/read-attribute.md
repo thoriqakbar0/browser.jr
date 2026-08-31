@@ -2,9 +2,9 @@
 
 ## Summary
 
-Package callers submit `GetElementAttribute` with a current interactive reference and attribute name.
+Package callers submit `GetElementAttribute` with a reference or `GetAttributeByLocator` with a locator and attribute name.
 
-Session-mode callers send `get attr <ref> <name>` after an interactive snapshot.
+Session-mode callers send `get attr <ref|selector> <name>`. Direct selectors can target non-interactive elements.
 
 The result distinguishes present attributes, missing attributes, and blocked sensitive attributes.
 
@@ -20,10 +20,10 @@ browser.jr normalizes the requested name to ASCII lowercase. It returns the stat
 stateDiagram-v2
     [*] --> validating_name
     validating_name --> rejected : empty or whitespace
-    validating_name --> checking_reference : valid name
-    checking_reference --> rejected : stale reference
-    checking_reference --> blocked : sensitive attribute
-    checking_reference --> reporting : present or missing
+    validating_name --> resolving_target : valid name
+    resolving_target --> rejected : stale, missing, or non-unique target
+    resolving_target --> blocked : sensitive attribute
+    resolving_target --> reporting : present or missing
     reporting --> finished
     blocked --> finished
     rejected --> finished
@@ -31,21 +31,21 @@ stateDiagram-v2
 
 ### Invoke
 
-The package request contains one typed reference and one string name.
+The package request contains one typed reference or locator and one string name.
 
-Session mode reads `get attr`, a displayed reference, and one name token.
+Session mode reads `get attr`, one reference or selector, and one name token.
 
 ### Exit immediately
 
 Empty names and names containing whitespace return `SessionError::InvalidAttributeName`.
 
-Unknown or stale references fail without reading another element.
+Unknown or stale references fail without reading another element. Locator failures follow [Find elements with locators](query-elements.md).
 
 ### Begin running
 
 browser.jr converts ASCII letters in the name to lowercase. Non-ASCII characters remain unchanged.
 
-The engine checks its static attribute map for the referenced source element.
+The engine checks the target source element's static attribute map.
 
 ### While running
 
@@ -57,9 +57,9 @@ The read does not capture, dispatch events, run scripts, or change focus.
 
 ### Finish
 
-The package returns `ElementAttribute` with the normalized name and optional string.
+The package returns `ElementAttribute` for references or `LocatorAttribute` for locators.
 
-Session mode reports quoted names and values. It reports a missing value as `null`.
+Reference output reports quoted names and values. Direct selector output prints the value or `null`.
 
 The reference remains current after the read.
 
@@ -67,7 +67,7 @@ The reference remains current after the read.
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | The package takes a reference and name. Session mode takes two tokens. | No attribute flags exist. |
+| Flags and options | The package takes a reference or locator and name. Session mode accepts a quoted selector. | No attribute flags exist. |
 | Project configuration | No attribute policy configuration exists. | Nothing reloads. |
 | Target matrix | The current page and snapshot select one element. | The read does not change it. |
 | Output channel | The package returns an optional string. Session mode uses quoted text or `null`. | Session mode flushes stdout. |
@@ -112,13 +112,13 @@ The reference remains current after the read.
 - Password input `value` attributes remain blocked.
 - Other password attributes, including `type`, remain readable.
 - A direct read does not invalidate its reference.
+- Direct selectors resolve strictly and can read non-interactive source elements.
 - A later snapshot invalidates references from the previous snapshot.
 
 ## Open questions and verification
 
 - Define policy for other secret-bearing attributes.
 - Define live property inspection after DOM mutation exists.
-- Define non-interactive element locators.
 - Define machine-readable response encoding.
 
 Drafted from Rust package and compiled-process tests on 2026-08-31.

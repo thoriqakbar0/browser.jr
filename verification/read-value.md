@@ -12,9 +12,12 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | VALUE-04 | P1 | pipe | Controls without supported values return unsupported behavior ([Edge cases](../inspection/read-value.md#edge-cases)). | Serve a button. | Snapshot and request its value. | The package returns `UnsupportedValue`. | partial: package boundary test passed, 2026-08-31 |
 | VALUE-05 | P1 | pipe | New snapshots stale older value references ([Edge cases](../inspection/read-value.md#edge-cases)). | Serve one text input. | Capture twice, then read with the first reference. | The read reports a stale reference. | partial: package boundary test passed, 2026-08-31 |
 | VALUE-06 | P1 | pipe | Native single selects expose their current value ([Begin running](../inspection/read-value.md#begin-running)). | Serve enabled and disabled single selects. | Snapshot, read both, and select another enabled value. | Both reads succeed. The enabled select reports its replacement value. | partial: package and compiled-process tests passed, 2026-08-31 |
+| VALUE-07 | P1 | pipe | Direct selectors read current values without a snapshot ([Finish](../inspection/read-value.md#finish)). | Serve one text input and one single select. | Read the input, select another value, then read the select through CSS. | Both reads return current strings. | partial: package, compiled-process, and controlled agent-browser comparison passed, 2026-08-31 |
+| VALUE-08 | P1 | pipe | Multiple-select value reads return the first selected value ([Edge cases](../inspection/read-value.md#edge-cases)). | Serve a multiple select with two selected values. | Read, replace selection in reverse order, and read again. | Each read returns the first selected value in document order. | partial: package and compiled-process tests passed, 2026-08-31 |
 
 Not checkable yet:
 
 - Password values remain intentionally unavailable.
-- Multiple-select values and other native form-control values do not exist.
+- A typed read for every selected option does not exist.
+- Other native form-control values do not exist.
 - Machine-readable responses do not exist.

@@ -12,6 +12,7 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | CHECK-04 | P1 | pipe | Disabled state remains readable but immutable ([Begin running](../inspection/read-checked.md#begin-running)). | Serve a checked disabled checkbox. | Read state, then request false. | The read returns true. The change reports unsupported. | partial: package boundary test passed, 2026-08-31 |
 | CHECK-05 | P1 | pipe | Snapshots report native checkbox state ([Finish](../interaction/set-checked.md#finish)). | Serve one checkbox. | Snapshot, change state, then snapshot again. | Each snapshot reports its current Boolean state. | partial: package and compiled-process tests passed, 2026-08-31 |
 | CHECK-06 | P1 | pipe | New snapshots stale older state references ([Edge cases](../inspection/read-checked.md#edge-cases)). | Serve one checkbox. | Capture twice, then read with the first reference. | The read reports a stale reference. | partial: package boundary test passed, 2026-08-31 |
+| CHECK-07 | P1 | pipe | Direct selectors change and read checked state without a snapshot ([The simple case](../interaction/set-checked.md#the-simple-case)). | Serve one unchecked native checkbox. | Check it through CSS, then read checked state through CSS. | The action commits true and the read returns true. | partial: package, compiled-process, and controlled agent-browser comparison passed, 2026-08-31 |
 
 Not checkable yet:
 

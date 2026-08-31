@@ -1,9 +1,5 @@
 use std::collections::BTreeMap;
 
-mod css;
-
-use css::SimpleCssSelector;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RoleLocator {
     role: String,
@@ -20,6 +16,7 @@ pub enum Locator {
     Title(TitleLocator),
     TestId(TestIdLocator),
     Css(CssLocator),
+    XPath(XPathLocator),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,8 +42,12 @@ pub struct TestIdLocator {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CssLocator {
     source: String,
-    selector: Box<SimpleCssSelector>,
-    position: LocatorPosition,
+    position: Option<LocatorPosition>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct XPathLocator {
+    expression: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,7 +100,12 @@ pub enum LocatorValueError {
 pub enum CssLocatorError {
     EmptySelector,
     InvalidSelector,
-    UnsupportedSelector,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum XPathLocatorError {
+    EmptyExpression,
+    InvalidExpression,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -119,7 +125,6 @@ pub(crate) struct SemanticLocatorCandidate<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SourceLocatorCandidate<'a> {
-    pub(crate) tag: &'a str,
     pub(crate) attributes: &'a BTreeMap<String, String>,
 }
 
@@ -235,40 +240,67 @@ impl TestIdLocator {
 }
 
 impl CssLocator {
+    pub fn new(selector: impl Into<String>) -> Result<Self, CssLocatorError> {
+        Self::with_position(selector, None)
+    }
+
     pub fn first(selector: impl Into<String>) -> Result<Self, CssLocatorError> {
-        Self::new(selector, LocatorPosition::First)
+        Self::with_position(selector, Some(LocatorPosition::First))
     }
 
     pub fn last(selector: impl Into<String>) -> Result<Self, CssLocatorError> {
-        Self::new(selector, LocatorPosition::Last)
+        Self::with_position(selector, Some(LocatorPosition::Last))
     }
 
     pub fn nth(index: usize, selector: impl Into<String>) -> Result<Self, CssLocatorError> {
-        Self::new(selector, LocatorPosition::Nth(index))
+        Self::with_position(selector, Some(LocatorPosition::Nth(index)))
     }
 
     pub fn selector(&self) -> &str {
         &self.source
     }
 
-    pub fn position(&self) -> LocatorPosition {
+    pub fn position(&self) -> Option<LocatorPosition> {
         self.position
     }
 
-    fn new(
+    fn with_position(
         selector: impl Into<String>,
-        position: LocatorPosition,
+        position: Option<LocatorPosition>,
     ) -> Result<Self, CssLocatorError> {
         let source = selector.into();
         let source = source.trim();
         if source.is_empty() {
             return Err(CssLocatorError::EmptySelector);
         }
+        dom_query::Matcher::new(source).map_err(|_| CssLocatorError::InvalidSelector)?;
         Ok(Self {
-            selector: Box::new(SimpleCssSelector::parse(source)?),
             source: source.into(),
             position,
         })
+    }
+}
+
+impl XPathLocator {
+    pub fn new(expression: impl Into<String>) -> Result<Self, XPathLocatorError> {
+        let expression = expression.into();
+        let expression = expression.trim();
+        if expression.is_empty() {
+            return Err(XPathLocatorError::EmptyExpression);
+        }
+        let parsed = sxd_xpath::Factory::new()
+            .build(expression)
+            .map_err(|_| XPathLocatorError::InvalidExpression)?;
+        if parsed.is_none() {
+            return Err(XPathLocatorError::InvalidExpression);
+        }
+        Ok(Self {
+            expression: expression.into(),
+        })
+    }
+
+    pub fn expression(&self) -> &str {
+        &self.expression
     }
 }
 
@@ -297,7 +329,7 @@ impl Locator {
                 .attributes
                 .get("data-testid")
                 .is_some_and(|test_id| locator.matches(test_id)),
-            Self::Css(locator) => locator.selector.matches(source.tag, source.attributes),
+            Self::Css(_) | Self::XPath(_) => false,
         }
     }
 
@@ -307,14 +339,29 @@ impl Locator {
 
     pub(crate) fn position(&self) -> Option<LocatorPosition> {
         match self {
-            Self::Css(locator) => Some(locator.position()),
+            Self::Css(locator) => locator.position(),
             Self::Role(_)
             | Self::Text(_)
             | Self::Label(_)
             | Self::Placeholder(_)
             | Self::Alt(_)
             | Self::Title(_)
-            | Self::TestId(_) => None,
+            | Self::TestId(_)
+            | Self::XPath(_) => None,
+        }
+    }
+
+    pub(crate) fn css(&self) -> Option<&CssLocator> {
+        match self {
+            Self::Css(locator) => Some(locator),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn xpath(&self) -> Option<&XPathLocator> {
+        match self {
+            Self::XPath(locator) => Some(locator),
+            _ => None,
         }
     }
 }
@@ -367,6 +414,12 @@ impl From<CssLocator> for Locator {
     }
 }
 
+impl From<XPathLocator> for Locator {
+    fn from(locator: XPathLocator) -> Self {
+        Self::XPath(locator)
+    }
+}
+
 impl LocatorMatch {
     pub(crate) fn new(element: &str, role: Option<&str>, name: &str, text: &str) -> Self {
         Self {
@@ -415,6 +468,7 @@ impl std::fmt::Display for Locator {
             Self::Title(locator) => write_text_locator(formatter, "title", &locator.0),
             Self::TestId(locator) => write!(formatter, "test id {:?}", locator.value),
             Self::Css(locator) => locator.fmt(formatter),
+            Self::XPath(locator) => locator.fmt(formatter),
         }
     }
 }
@@ -447,22 +501,43 @@ impl std::fmt::Display for CssLocatorError {
         formatter.write_str(match self {
             Self::EmptySelector => "CSS selector must not be empty",
             Self::InvalidSelector => "CSS selector is invalid",
-            Self::UnsupportedSelector => "CSS selector uses unsupported syntax",
         })
     }
 }
 
 impl std::error::Error for CssLocatorError {}
 
+impl std::fmt::Display for XPathLocatorError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::EmptyExpression => "XPath expression must not be empty",
+            Self::InvalidExpression => "XPath expression is invalid",
+        })
+    }
+}
+
+impl std::error::Error for XPathLocatorError {}
+
 impl std::fmt::Display for CssLocator {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.position {
-            LocatorPosition::First => write!(formatter, "first element matching {:?}", self.source),
-            LocatorPosition::Last => write!(formatter, "last element matching {:?}", self.source),
-            LocatorPosition::Nth(index) => {
+            None => write!(formatter, "CSS selector {:?}", self.source),
+            Some(LocatorPosition::First) => {
+                write!(formatter, "first element matching {:?}", self.source)
+            }
+            Some(LocatorPosition::Last) => {
+                write!(formatter, "last element matching {:?}", self.source)
+            }
+            Some(LocatorPosition::Nth(index)) => {
                 write!(formatter, "element {index} matching {:?}", self.source)
             }
         }
+    }
+}
+
+impl std::fmt::Display for XPathLocator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "XPath expression {:?}", self.expression)
     }
 }
 
@@ -512,6 +587,7 @@ mod tests {
         AltLocator, CssLocator, CssLocatorError, LabelLocator, Locator, LocatorCandidate,
         LocatorPosition, LocatorValueError, PlaceholderLocator, RoleLocator, RoleLocatorError,
         SemanticLocatorCandidate, SourceLocatorCandidate, TestIdLocator, TextLocator, TitleLocator,
+        XPathLocator, XPathLocatorError,
     };
     use std::collections::BTreeMap;
 
@@ -571,7 +647,6 @@ mod tests {
         let placeholder = Locator::from(PlaceholderLocator::new("search").unwrap());
         let attributes = BTreeMap::new();
         let source = SourceLocatorCandidate {
-            tag: "input",
             attributes: &attributes,
         };
 
@@ -639,7 +714,6 @@ mod tests {
                 placeholder: None,
             },
             source: SourceLocatorCandidate {
-                tag: "span",
                 attributes: &attributes,
             },
         };
@@ -654,38 +728,36 @@ mod tests {
     }
 
     #[test]
-    fn css_position_locators_parse_compound_selectors() {
+    fn css_locators_validate_document_selectors_and_positions() {
         let locator = CssLocator::nth(2, "BUTTON.primary[data-kind='save'][disabled]").unwrap();
-        let spaced = CssLocator::first("input[title='hello world']").unwrap();
-        let attributes = BTreeMap::from([
-            ("class".into(), "primary large".into()),
-            ("data-kind".into(), "save".into()),
-            ("disabled".into(), String::new()),
-        ]);
+        let strict = CssLocator::new("form > input[title='hello world']:first-child").unwrap();
 
         assert_eq!(
             locator.selector(),
             "BUTTON.primary[data-kind='save'][disabled]"
         );
-        assert_eq!(locator.position(), LocatorPosition::Nth(2));
-        assert!(locator.selector.matches("button", &attributes));
-        assert!(!locator.selector.matches("a", &attributes));
-        assert!(spaced.selector.matches(
-            "input",
-            &BTreeMap::from([("title".into(), "hello world".into())])
-        ));
+        assert_eq!(locator.position(), Some(LocatorPosition::Nth(2)));
+        assert_eq!(strict.position(), None);
         assert_eq!(CssLocator::first(""), Err(CssLocatorError::EmptySelector));
-        assert_eq!(
-            CssLocator::last("article .card"),
-            Err(CssLocatorError::UnsupportedSelector)
-        );
-        assert_eq!(
-            CssLocator::last("button:hover"),
-            Err(CssLocatorError::UnsupportedSelector)
-        );
+        assert!(CssLocator::last("article .card, button:first-child").is_ok());
         assert_eq!(
             CssLocator::last("[name=]"),
             Err(CssLocatorError::InvalidSelector)
+        );
+    }
+
+    #[test]
+    fn xpath_locators_validate_expressions() {
+        let locator = XPathLocator::new("//main/section[@data-kind='card'][2]").unwrap();
+
+        assert_eq!(locator.expression(), "//main/section[@data-kind='card'][2]");
+        assert_eq!(
+            XPathLocator::new("  "),
+            Err(XPathLocatorError::EmptyExpression)
+        );
+        assert_eq!(
+            XPathLocator::new("//["),
+            Err(XPathLocatorError::InvalidExpression)
         );
     }
 }

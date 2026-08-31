@@ -2,19 +2,23 @@ use std::io::{BufRead, Write};
 
 use crate::cli::{ExitStatus, combine_status, write_line, write_session_error};
 use crate::{
-    AltLocator, CaptureInteractiveSnapshot, ClickByLocator, ClickByLocatorResult, ClickElement,
-    ClickResult, CssLocator, FillByLocator, FillElement, FindByLocator, GetElementAttribute,
-    GetElementChecked, GetElementEnabled, GetElementText, GetElementValue, GetElementVisible,
-    GetPageTitle, GetPageUrl, HoverByLocator, HoverByLocatorResult, InteractiveElementRef,
-    InteractiveElementState, InteractiveSnapshot, LabelLocator, Locator, OpenPage,
-    PlaceholderLocator, ReloadPage, RoleLocator, SelectElement, Session, SetCheckedByLocator,
-    SetElementChecked, TestIdLocator, TextLocator, TitleLocator,
+    AltLocator, CaptureInteractiveSnapshot, CaptureInteractiveSnapshotWithin, ClickByLocator,
+    ClickByLocatorResult, ClickElement, ClickResult, CountByLocator, CssLocator, FillByLocator,
+    FillElement, FindByLocator, GetAttributeByLocator, GetCheckedByLocator, GetElementAttribute,
+    GetElementChecked, GetElementEnabled, GetElementHtml, GetElementText, GetElementValue,
+    GetElementVisible, GetEnabledByLocator, GetHtmlByLocator, GetPageTitle, GetPageUrl,
+    GetValueByLocator, GetVisibleByLocator, HoverByLocator, HoverByLocatorResult,
+    InteractiveElementRef, InteractiveElementState, InteractiveSnapshot, LabelLocator, Locator,
+    NonEmpty, OpenPage, PlaceholderLocator, ReloadPage, RoleLocator, SelectOptionTarget,
+    SelectOptions, SelectOptionsByLocator, SelectOptionsByLocatorResult, SelectOptionsResult,
+    Session, SetCheckedByLocator, SetElementChecked, TestIdLocator, TextLocator, TitleLocator,
+    XPathLocator,
 };
 
 const SESSION_HELP: &str = "session commands:
   open <url>
   reload
-  snapshot --interactive
+  snapshot --interactive [-s|--selector <css>]
   find role <role> [click|fill <text>|check|uncheck|hover|text] [--name <accessible-name>] [--exact]
   find text <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
   find label <label> [click|fill <text>|check|uncheck|hover|text] [--exact]
@@ -22,20 +26,25 @@ const SESSION_HELP: &str = "session commands:
   find alt <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
   find title <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
   find testid <id> [click|fill <text>|check|uncheck|hover|text]
+  find css <selector> [click|fill <text>|check|uncheck|hover|text]
+  find xpath <expression> [click|fill <text>|check|uncheck|hover|text]
   find first <selector> [click|fill <text>|check|uncheck|hover|text]
   find last <selector> [click|fill <text>|check|uncheck|hover|text]
   find nth <index> <selector> [click|fill <text>|check|uncheck|hover|text]
-  click <ref>
-  fill <ref> <text>
-  select <ref> <value>
-  check <ref>
-  uncheck <ref>
-  is checked <ref>
-  is enabled <ref>
-  is visible <ref>
-  get attr <ref> <name>
-  get text <ref>
-  get value <ref>
+  click <ref|selector>
+  fill <ref|selector> <text>
+  select <ref|selector> <value>
+  select <ref|selector> \"<value>\" [\"<value>\" ...]
+  check <ref|selector>
+  uncheck <ref|selector>
+  is checked <ref|selector>
+  is enabled <ref|selector>
+  is visible <ref|selector>
+  get attr <ref|selector> <name>
+  get count <selector>
+  get html <ref|selector>
+  get text <ref|selector>
+  get value <ref|selector>
   get url
   get title
   help
@@ -87,7 +96,7 @@ impl CliSession {
         match command {
             PageCommand::Open(url) => self.open(url, output, errors),
             PageCommand::Reload => self.reload(output, errors),
-            PageCommand::SnapshotInteractive => self.snapshot(output, errors),
+            PageCommand::SnapshotInteractive(selector) => self.snapshot(selector, output, errors),
             PageCommand::GetUrl => self.get_url(output, errors),
             PageCommand::GetTitle => self.get_title(output, errors),
         }
@@ -114,8 +123,8 @@ impl CliSession {
                 action,
             } => self.find_typed_locator(kind, value, exact, action, output, errors),
             ElementCommand::Fill(reference, value) => self.fill(reference, value, output, errors),
-            ElementCommand::Select(reference, value) => {
-                self.select(reference, value, output, errors)
+            ElementCommand::Select(reference, values) => {
+                self.select(reference, values, output, errors)
             }
             ElementCommand::Check(reference) => self.set_checked(reference, true, output, errors),
             ElementCommand::Uncheck(reference) => {
@@ -127,6 +136,8 @@ impl CliSession {
             ElementCommand::GetAttribute(reference, name) => {
                 self.get_attribute(reference, name, output, errors)
             }
+            ElementCommand::GetCount(selector) => self.get_count(selector, output, errors),
+            ElementCommand::GetHtml(reference) => self.get_html(reference, output, errors),
             ElementCommand::GetText(reference) => self.get_text(reference, output, errors),
             ElementCommand::GetValue(reference) => self.get_value(reference, output, errors),
         }
@@ -166,8 +177,24 @@ impl CliSession {
         }
     }
 
-    fn snapshot(&mut self, output: &mut impl Write, errors: &mut impl Write) -> SessionStep {
-        match self.engine.execute(CaptureInteractiveSnapshot) {
+    fn snapshot(
+        &mut self,
+        selector: Option<&str>,
+        output: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> SessionStep {
+        let snapshot = match selector {
+            Some(selector) => {
+                let locator = match CssLocator::new(selector) {
+                    Ok(locator) => Locator::from(locator),
+                    Err(error) => return invalid_locator(errors, error.to_string()),
+                };
+                self.engine
+                    .execute(CaptureInteractiveSnapshotWithin { locator })
+            }
+            None => self.engine.execute(CaptureInteractiveSnapshot),
+        };
+        match snapshot {
             Ok(snapshot) => {
                 self.current_references = snapshot
                     .elements
@@ -315,12 +342,15 @@ impl CliSession {
 
     fn click(
         &mut self,
-        reference_name: &str,
+        target: &str,
         output: &mut impl Write,
         errors: &mut impl Write,
     ) -> SessionStep {
-        let Some(reference) = self.resolve_reference(reference_name) else {
-            return unknown_reference(errors, reference_name);
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            return self.run_direct_locator(target, FindRoleAction::Click, output, errors);
         };
         match self.engine.execute(ClickElement { reference }) {
             Ok(ClickResult::Navigated { reference, page }) => {
@@ -340,13 +370,16 @@ impl CliSession {
 
     fn fill(
         &mut self,
-        reference_name: &str,
+        target: &str,
         value: &str,
         output: &mut impl Write,
         errors: &mut impl Write,
     ) -> SessionStep {
-        let Some(reference) = self.resolve_reference(reference_name) else {
-            return unknown_reference(errors, reference_name);
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            return self.run_direct_locator(target, FindRoleAction::Fill(value), output, errors);
         };
         match self.engine.execute(FillElement {
             reference,
@@ -367,12 +400,24 @@ impl CliSession {
 
     fn get_value(
         &mut self,
-        reference_name: &str,
+        target: &str,
         output: &mut impl Write,
         errors: &mut impl Write,
     ) -> SessionStep {
-        let Some(reference) = self.resolve_reference(reference_name) else {
-            return unknown_reference(errors, reference_name);
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            let locator = match build_direct_locator(target) {
+                Ok(locator) => locator,
+                Err(error) => return invalid_locator(errors, error),
+            };
+            return match self.engine.execute(GetValueByLocator { locator }) {
+                Ok(result) => {
+                    SessionStep::Continue(write_line(output, &result.value, ExitStatus::Success))
+                }
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            };
         };
         match self.engine.execute(GetElementValue { reference }) {
             Ok(result) => SessionStep::Continue(write_line(
@@ -386,21 +431,49 @@ impl CliSession {
 
     fn select(
         &mut self,
-        reference_name: &str,
-        value: &str,
+        target: &str,
+        values: SelectCommandValues<'_>,
         output: &mut impl Write,
         errors: &mut impl Write,
     ) -> SessionStep {
-        let Some(reference) = self.resolve_reference(reference_name) else {
-            return unknown_reference(errors, reference_name);
+        let list_output = matches!(values, SelectCommandValues::List(_));
+        let options = match values {
+            SelectCommandValues::Single(value) => {
+                NonEmpty::one(SelectOptionTarget::Value(value.into()))
+            }
+            SelectCommandValues::List(values) => NonEmpty::from_vec(
+                values
+                    .into_iter()
+                    .map(str::to_owned)
+                    .map(SelectOptionTarget::Value)
+                    .collect(),
+            )
+            .expect("the select parser requires at least one quoted value"),
         };
-        match self.engine.execute(SelectElement {
-            reference,
-            value: value.into(),
-        }) {
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            let locator = match build_direct_locator(target) {
+                Ok(locator) => locator,
+                Err(error) => return invalid_locator(errors, error),
+            };
+            return match self
+                .engine
+                .execute(SelectOptionsByLocator { locator, options })
+            {
+                Ok(result) => SessionStep::Continue(write_line(
+                    output,
+                    &format_locator_selection(&result, list_output),
+                    ExitStatus::Success,
+                )),
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            };
+        };
+        match self.engine.execute(SelectOptions { reference, options }) {
             Ok(result) => SessionStep::Continue(write_line(
                 output,
-                &format!("selected ref={} value={:?}", result.reference, result.value),
+                &format_reference_selection(&result, list_output),
                 ExitStatus::Success,
             )),
             Err(error) => SessionStep::Continue(write_session_error(errors, error)),
@@ -409,12 +482,15 @@ impl CliSession {
 
     fn get_text(
         &mut self,
-        reference_name: &str,
+        target: &str,
         output: &mut impl Write,
         errors: &mut impl Write,
     ) -> SessionStep {
-        let Some(reference) = self.resolve_reference(reference_name) else {
-            return unknown_reference(errors, reference_name);
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            return self.run_direct_locator(target, FindRoleAction::Text, output, errors);
         };
         match self.engine.execute(GetElementText { reference }) {
             Ok(result) => SessionStep::Continue(write_line(
@@ -426,15 +502,62 @@ impl CliSession {
         }
     }
 
+    fn get_html(
+        &mut self,
+        target: &str,
+        output: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> SessionStep {
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            let locator = match build_direct_locator(target) {
+                Ok(locator) => locator,
+                Err(error) => return invalid_locator(errors, error),
+            };
+            return match self.engine.execute(GetHtmlByLocator { locator }) {
+                Ok(result) => {
+                    SessionStep::Continue(write_line(output, &result.html, ExitStatus::Success))
+                }
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            };
+        };
+        match self.engine.execute(GetElementHtml { reference }) {
+            Ok(result) => SessionStep::Continue(write_line(
+                output,
+                &format!("html ref={} {:?}", result.reference, result.html),
+                ExitStatus::Success,
+            )),
+            Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+        }
+    }
+
     fn get_attribute(
         &mut self,
-        reference_name: &str,
+        target: &str,
         name: &str,
         output: &mut impl Write,
         errors: &mut impl Write,
     ) -> SessionStep {
-        let Some(reference) = self.resolve_reference(reference_name) else {
-            return unknown_reference(errors, reference_name);
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            let locator = match build_direct_locator(target) {
+                Ok(locator) => locator,
+                Err(error) => return invalid_locator(errors, error),
+            };
+            return match self.engine.execute(GetAttributeByLocator {
+                locator,
+                name: name.into(),
+            }) {
+                Ok(result) => {
+                    let value = result.value.unwrap_or_else(|| "null".into());
+                    SessionStep::Continue(write_line(output, &value, ExitStatus::Success))
+                }
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            };
         };
         match self.engine.execute(GetElementAttribute {
             reference,
@@ -458,15 +581,49 @@ impl CliSession {
         }
     }
 
+    fn get_count(
+        &mut self,
+        selector: &str,
+        output: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> SessionStep {
+        let locator = match build_direct_locator(selector) {
+            Ok(locator) => locator,
+            Err(error) => {
+                return SessionStep::Continue(write_line(
+                    errors,
+                    &format!("browser.jr: invalid locator: {error}"),
+                    ExitStatus::InvalidInput,
+                ));
+            }
+        };
+        match self.engine.execute(CountByLocator { locator }) {
+            Ok(result) => SessionStep::Continue(write_line(
+                output,
+                &result.count.to_string(),
+                ExitStatus::Success,
+            )),
+            Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+        }
+    }
+
     fn set_checked(
         &mut self,
-        reference_name: &str,
+        target: &str,
         checked: bool,
         output: &mut impl Write,
         errors: &mut impl Write,
     ) -> SessionStep {
-        let Some(reference) = self.resolve_reference(reference_name) else {
-            return unknown_reference(errors, reference_name);
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            let action = if checked {
+                FindRoleAction::Check
+            } else {
+                FindRoleAction::Uncheck
+            };
+            return self.run_direct_locator(target, action, output, errors);
         };
         match self
             .engine
@@ -486,12 +643,26 @@ impl CliSession {
 
     fn is_checked(
         &mut self,
-        reference_name: &str,
+        target: &str,
         output: &mut impl Write,
         errors: &mut impl Write,
     ) -> SessionStep {
-        let Some(reference) = self.resolve_reference(reference_name) else {
-            return unknown_reference(errors, reference_name);
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            let locator = match build_direct_locator(target) {
+                Ok(locator) => locator,
+                Err(error) => return invalid_locator(errors, error),
+            };
+            return match self.engine.execute(GetCheckedByLocator { locator }) {
+                Ok(result) => SessionStep::Continue(write_line(
+                    output,
+                    &result.checked.to_string(),
+                    ExitStatus::Success,
+                )),
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            };
         };
         match self.engine.execute(GetElementChecked { reference }) {
             Ok(result) => SessionStep::Continue(write_line(
@@ -505,12 +676,26 @@ impl CliSession {
 
     fn is_enabled(
         &mut self,
-        reference_name: &str,
+        target: &str,
         output: &mut impl Write,
         errors: &mut impl Write,
     ) -> SessionStep {
-        let Some(reference) = self.resolve_reference(reference_name) else {
-            return unknown_reference(errors, reference_name);
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            let locator = match build_direct_locator(target) {
+                Ok(locator) => locator,
+                Err(error) => return invalid_locator(errors, error),
+            };
+            return match self.engine.execute(GetEnabledByLocator { locator }) {
+                Ok(result) => SessionStep::Continue(write_line(
+                    output,
+                    &result.enabled.to_string(),
+                    ExitStatus::Success,
+                )),
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            };
         };
         match self.engine.execute(GetElementEnabled { reference }) {
             Ok(result) => SessionStep::Continue(write_line(
@@ -524,12 +709,26 @@ impl CliSession {
 
     fn is_visible(
         &mut self,
-        reference_name: &str,
+        target: &str,
         output: &mut impl Write,
         errors: &mut impl Write,
     ) -> SessionStep {
-        let Some(reference) = self.resolve_reference(reference_name) else {
-            return unknown_reference(errors, reference_name);
+        let Some(reference) = self.resolve_reference(target) else {
+            if target.starts_with('@') {
+                return unknown_reference(errors, target);
+            }
+            let locator = match build_direct_locator(target) {
+                Ok(locator) => locator,
+                Err(error) => return invalid_locator(errors, error),
+            };
+            return match self.engine.execute(GetVisibleByLocator { locator }) {
+                Ok(result) => SessionStep::Continue(write_line(
+                    output,
+                    &result.visible.to_string(),
+                    ExitStatus::Success,
+                )),
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            };
         };
         match self.engine.execute(GetElementVisible { reference }) {
             Ok(result) => SessionStep::Continue(write_line(
@@ -561,6 +760,26 @@ impl CliSession {
             )),
             Err(error) => SessionStep::Continue(write_session_error(errors, error)),
         }
+    }
+
+    fn run_direct_locator(
+        &mut self,
+        target: &str,
+        action: FindRoleAction<'_>,
+        output: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> SessionStep {
+        let locator = match build_direct_locator(target) {
+            Ok(locator) => locator,
+            Err(error) => {
+                return SessionStep::Continue(write_line(
+                    errors,
+                    &format!("browser.jr: invalid locator: {error}"),
+                    ExitStatus::InvalidInput,
+                ));
+            }
+        };
+        self.find_locator(locator, action, output, errors)
     }
 
     fn run_line(
@@ -604,6 +823,12 @@ fn build_locator(kind: FindLocatorKind, value: &str, exact: bool) -> Result<Loca
         FindLocatorKind::TestId => TestIdLocator::new(value)
             .map(Locator::from)
             .map_err(|error| error.to_string()),
+        FindLocatorKind::Css => CssLocator::new(value)
+            .map(Locator::from)
+            .map_err(|error| error.to_string()),
+        FindLocatorKind::XPath => XPathLocator::new(value)
+            .map(Locator::from)
+            .map_err(|error| error.to_string()),
         FindLocatorKind::First => CssLocator::first(value)
             .map(Locator::from)
             .map_err(|error| error.to_string()),
@@ -614,6 +839,31 @@ fn build_locator(kind: FindLocatorKind, value: &str, exact: bool) -> Result<Loca
             .map(Locator::from)
             .map_err(|error| error.to_string()),
     }
+}
+
+fn build_direct_locator(target: &str) -> Result<Locator, String> {
+    if let Some(expression) = target.strip_prefix("xpath=") {
+        return XPathLocator::new(expression)
+            .map(Locator::from)
+            .map_err(|error| error.to_string());
+    }
+    if target.starts_with("//") || target.starts_with("..") {
+        return XPathLocator::new(target)
+            .map(Locator::from)
+            .map_err(|error| error.to_string());
+    }
+    let selector = target.strip_prefix("css=").unwrap_or(target);
+    CssLocator::new(selector)
+        .map(Locator::from)
+        .map_err(|error| error.to_string())
+}
+
+fn invalid_locator(errors: &mut impl Write, error: String) -> SessionStep {
+    SessionStep::Continue(write_line(
+        errors,
+        &format!("browser.jr: invalid locator: {error}"),
+        ExitStatus::InvalidInput,
+    ))
 }
 
 fn unknown_reference(errors: &mut impl Write, reference_name: &str) -> SessionStep {
@@ -635,7 +885,7 @@ enum SessionCommand<'a> {
 enum PageCommand<'a> {
     Open(&'a str),
     Reload,
-    SnapshotInteractive,
+    SnapshotInteractive(Option<&'a str>),
     GetUrl,
     GetTitle,
 }
@@ -655,15 +905,22 @@ enum ElementCommand<'a> {
     },
     Click(&'a str),
     Fill(&'a str, &'a str),
-    Select(&'a str, &'a str),
+    Select(&'a str, SelectCommandValues<'a>),
     Check(&'a str),
     Uncheck(&'a str),
     IsChecked(&'a str),
     IsEnabled(&'a str),
     IsVisible(&'a str),
     GetAttribute(&'a str, &'a str),
+    GetCount(&'a str),
+    GetHtml(&'a str),
     GetText(&'a str),
     GetValue(&'a str),
+}
+
+enum SelectCommandValues<'a> {
+    Single(&'a str),
+    List(Vec<&'a str>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -674,6 +931,8 @@ enum FindLocatorKind {
     Alt,
     Title,
     TestId,
+    Css,
+    XPath,
     First,
     Last,
     Nth(usize),
@@ -781,40 +1040,163 @@ pub(crate) fn write_interactive_snapshot(
     ExitStatus::Success
 }
 
+fn format_locator_selection(result: &SelectOptionsByLocatorResult, list_output: bool) -> String {
+    let selection = format_selection(&result.selected, list_output);
+    format!(
+        "selected role={:?} name={:?} element={:?} {selection}",
+        result.matched.role.as_deref().unwrap_or(""),
+        result.matched.name,
+        result.matched.element,
+    )
+}
+
+fn format_reference_selection(result: &SelectOptionsResult, list_output: bool) -> String {
+    let selection = format_selection(&result.selected, list_output);
+    format!("selected ref={} {selection}", result.reference)
+}
+
+fn format_selection(selected: &NonEmpty<String>, list_output: bool) -> String {
+    if list_output {
+        format!("values={:?}", selected.iter().collect::<Vec<_>>())
+    } else {
+        format!("value={:?}", selected[0])
+    }
+}
+
 fn parse_command(line: &str) -> Result<SessionCommand<'_>, &'static str> {
     let line = line.strip_suffix('\r').unwrap_or(line);
-    if let Some(rest) = line.strip_prefix("find")
-        && (rest.is_empty() || rest.as_bytes()[0].is_ascii_whitespace())
-    {
+    if let Some(rest) = command_rest(line, "find") {
         return parse_find_command(rest);
     }
-    if let Some(rest) = line.strip_prefix("fill")
-        && (rest.is_empty() || rest.as_bytes()[0].is_ascii_whitespace())
-    {
+    if let Some(rest) = command_rest(line, "snapshot") {
+        return parse_snapshot_session_command(rest);
+    }
+    if let Some(rest) = command_rest(line, "fill") {
         return parse_fill_command(rest);
     }
-    if let Some(rest) = line.strip_prefix("select")
-        && (rest.is_empty() || rest.as_bytes()[0].is_ascii_whitespace())
-    {
+    if let Some(rest) = command_rest(line, "select") {
         return parse_select_command(rest);
+    }
+    if let Some(rest) = command_rest(line, "get attr") {
+        return parse_target_and_token(
+            rest,
+            "browser.jr: get attr requires a reference or selector and attribute name",
+        )
+        .map(|(target, name)| SessionCommand::Element(ElementCommand::GetAttribute(target, name)));
+    }
+    if let Some(command) = parse_simple_target_command(line) {
+        return command;
     }
     let mut parts = line.split_ascii_whitespace();
     let command = parts.next();
     let arguments = (parts.next(), parts.next(), parts.next());
     match command {
         None if arguments == (None, None, None) => Ok(SessionCommand::Empty),
-        Some(command @ ("open" | "reload" | "snapshot")) => parse_page_command(command, arguments),
+        Some(command @ ("open" | "reload")) => parse_page_command(command, arguments),
         Some("get") => parse_get_command(arguments),
-        Some(command @ ("click" | "check" | "uncheck" | "is")) => {
-            parse_element_command(command, arguments)
-        }
         Some(command @ ("help" | "exit")) => parse_lifecycle_command(command, arguments),
         _ => Err("browser.jr: invalid session command; enter help"),
     }
 }
 
+#[derive(Clone, Copy)]
+enum SimpleTargetCommand {
+    Click,
+    GetText,
+    GetCount,
+    GetHtml,
+    GetValue,
+    Check,
+    Uncheck,
+    IsChecked,
+    IsEnabled,
+    IsVisible,
+}
+
+impl SimpleTargetCommand {
+    fn build(self, target: &str) -> SessionCommand<'_> {
+        let command = match self {
+            Self::Click => ElementCommand::Click(target),
+            Self::GetText => ElementCommand::GetText(target),
+            Self::GetCount => ElementCommand::GetCount(target),
+            Self::GetHtml => ElementCommand::GetHtml(target),
+            Self::GetValue => ElementCommand::GetValue(target),
+            Self::Check => ElementCommand::Check(target),
+            Self::Uncheck => ElementCommand::Uncheck(target),
+            Self::IsChecked => ElementCommand::IsChecked(target),
+            Self::IsEnabled => ElementCommand::IsEnabled(target),
+            Self::IsVisible => ElementCommand::IsVisible(target),
+        };
+        SessionCommand::Element(command)
+    }
+}
+
+fn parse_simple_target_command(line: &str) -> Option<Result<SessionCommand<'_>, &'static str>> {
+    const COMMANDS: &[(&str, &str, SimpleTargetCommand)] = &[
+        (
+            "click",
+            "browser.jr: click requires a reference or selector",
+            SimpleTargetCommand::Click,
+        ),
+        (
+            "get text",
+            "browser.jr: get text requires a reference or selector",
+            SimpleTargetCommand::GetText,
+        ),
+        (
+            "get count",
+            "browser.jr: get count requires a selector",
+            SimpleTargetCommand::GetCount,
+        ),
+        (
+            "get html",
+            "browser.jr: get html requires a reference or selector",
+            SimpleTargetCommand::GetHtml,
+        ),
+        (
+            "get value",
+            "browser.jr: get value requires a reference or selector",
+            SimpleTargetCommand::GetValue,
+        ),
+        (
+            "check",
+            "browser.jr: check requires a reference or selector",
+            SimpleTargetCommand::Check,
+        ),
+        (
+            "uncheck",
+            "browser.jr: uncheck requires a reference or selector",
+            SimpleTargetCommand::Uncheck,
+        ),
+        (
+            "is checked",
+            "browser.jr: is checked requires a reference or selector",
+            SimpleTargetCommand::IsChecked,
+        ),
+        (
+            "is enabled",
+            "browser.jr: is enabled requires a reference or selector",
+            SimpleTargetCommand::IsEnabled,
+        ),
+        (
+            "is visible",
+            "browser.jr: is visible requires a reference or selector",
+            SimpleTargetCommand::IsVisible,
+        ),
+    ];
+    COMMANDS.iter().find_map(|(name, error, command)| {
+        command_rest(line, name)
+            .map(|rest| parse_target_command(rest, error).map(|target| command.build(target)))
+    })
+}
+
+fn command_rest<'a>(line: &'a str, command: &str) -> Option<&'a str> {
+    let rest = line.strip_prefix(command)?;
+    (rest.is_empty() || rest.as_bytes()[0].is_ascii_whitespace()).then_some(rest)
+}
+
 fn parse_find_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
-    const ERROR: &str = "browser.jr: find requires role|text|label|placeholder|alt|title|testid|first|last|nth and a valid value";
+    const ERROR: &str = "browser.jr: find requires role|text|label|placeholder|alt|title|testid|css|xpath|first|last|nth and a valid value";
     let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
     let (kind, rest) = split_first_token(rest).ok_or(ERROR)?;
     let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
@@ -826,6 +1208,8 @@ fn parse_find_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
             "alt" => FindLocatorKind::Alt,
             "title" => FindLocatorKind::Title,
             "testid" => FindLocatorKind::TestId,
+            "css" => FindLocatorKind::Css,
+            "xpath" => FindLocatorKind::XPath,
             "first" => FindLocatorKind::First,
             "last" => FindLocatorKind::Last,
             "nth" => {
@@ -1016,44 +1400,43 @@ fn parse_page_command<'a>(
     match (command, arguments) {
         ("open", (Some(url), None, None)) => Ok(SessionCommand::Page(PageCommand::Open(url))),
         ("reload", (None, None, None)) => Ok(SessionCommand::Page(PageCommand::Reload)),
-        ("snapshot", (Some("--interactive" | "-i"), None, None)) => {
-            Ok(SessionCommand::Page(PageCommand::SnapshotInteractive))
-        }
         _ => Err("browser.jr: invalid session command; enter help"),
     }
+}
+
+fn parse_snapshot_session_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
+    const ERROR: &str = "browser.jr: snapshot requires --interactive and an optional CSS selector";
+    let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
+    let (projection, rest) = split_first_token(rest).ok_or(ERROR)?;
+    if !matches!(projection, "-i" | "--interactive") {
+        return Err(ERROR);
+    }
+    let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
+    if rest.is_empty() {
+        return Ok(SessionCommand::Page(PageCommand::SnapshotInteractive(None)));
+    }
+    let (option, rest) = split_first_token(rest).ok_or(ERROR)?;
+    if !matches!(option, "-s" | "--selector") {
+        return Err(ERROR);
+    }
+    let (selector, trailing) = split_locator_value(rest).ok_or(ERROR)?;
+    if !trailing
+        .trim_matches(|value: char| value.is_ascii_whitespace())
+        .is_empty()
+    {
+        return Err(ERROR);
+    }
+    Ok(SessionCommand::Page(PageCommand::SnapshotInteractive(
+        Some(selector),
+    )))
 }
 
 fn parse_get_command(arguments: CommandArguments<'_>) -> Result<SessionCommand<'_>, &'static str> {
     match arguments {
-        (Some("value"), Some(reference), None) => {
-            Ok(SessionCommand::Element(ElementCommand::GetValue(reference)))
-        }
-        (Some("text"), Some(reference), None) => {
-            Ok(SessionCommand::Element(ElementCommand::GetText(reference)))
-        }
-        (Some("attr"), Some(reference), Some(name)) => Ok(SessionCommand::Element(
-            ElementCommand::GetAttribute(reference, name),
-        )),
         (Some("url"), None, None) => Ok(SessionCommand::Page(PageCommand::GetUrl)),
         (Some("title"), None, None) => Ok(SessionCommand::Page(PageCommand::GetTitle)),
         _ => Err("browser.jr: invalid session command; enter help"),
     }
-}
-
-fn parse_element_command<'a>(
-    command: &str,
-    arguments: CommandArguments<'a>,
-) -> Result<SessionCommand<'a>, &'static str> {
-    let command = match (command, arguments) {
-        ("click", (Some(reference), None, None)) => ElementCommand::Click(reference),
-        ("check", (Some(reference), None, None)) => ElementCommand::Check(reference),
-        ("uncheck", (Some(reference), None, None)) => ElementCommand::Uncheck(reference),
-        ("is", (Some("checked"), Some(reference), None)) => ElementCommand::IsChecked(reference),
-        ("is", (Some("enabled"), Some(reference), None)) => ElementCommand::IsEnabled(reference),
-        ("is", (Some("visible"), Some(reference), None)) => ElementCommand::IsVisible(reference),
-        _ => return Err("browser.jr: invalid session command; enter help"),
-    };
-    Ok(SessionCommand::Element(command))
 }
 
 fn parse_lifecycle_command<'a>(
@@ -1068,8 +1451,10 @@ fn parse_lifecycle_command<'a>(
 }
 
 fn parse_fill_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
-    let (reference, value) =
-        parse_reference_and_value(rest, "browser.jr: fill requires a reference and text")?;
+    let (reference, value) = parse_target_and_value(
+        rest,
+        "browser.jr: fill requires a reference or selector and text",
+    )?;
     Ok(SessionCommand::Element(ElementCommand::Fill(
         reference, value,
     )))
@@ -1077,27 +1462,87 @@ fn parse_fill_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
 
 fn parse_select_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
     let (reference, value) =
-        parse_reference_and_value(rest, "browser.jr: select requires a reference and value")?;
+        parse_target_and_value(rest, "browser.jr: select requires a reference and value")?;
+    let values = parse_select_values(value)
+        .ok_or("browser.jr: select quoted values must be complete and whitespace-separated")?;
     Ok(SessionCommand::Element(ElementCommand::Select(
-        reference, value,
+        reference, values,
     )))
 }
 
-fn parse_reference_and_value<'a>(
+fn parse_select_values(value: &str) -> Option<SelectCommandValues<'_>> {
+    if !matches!(value.as_bytes().first(), Some(b'\'' | b'"')) {
+        return Some(SelectCommandValues::Single(value));
+    }
+
+    let mut values = Vec::new();
+    let mut remaining = value;
+    loop {
+        remaining = remaining.trim_start_matches(|character: char| character.is_ascii_whitespace());
+        if remaining.is_empty() {
+            break;
+        }
+        let (value, rest) = split_quoted_select_value(remaining)?;
+        values.push(value);
+        remaining = rest;
+    }
+    (!values.is_empty()).then_some(SelectCommandValues::List(values))
+}
+
+fn split_quoted_select_value(value: &str) -> Option<(&str, &str)> {
+    let quote = *value.as_bytes().first()?;
+    if !matches!(quote, b'\'' | b'"') {
+        return None;
+    }
+    let end = value.as_bytes()[1..]
+        .iter()
+        .position(|candidate| *candidate == quote)?
+        + 1;
+    let remaining = &value[end + 1..];
+    if !remaining.is_empty() && !remaining.as_bytes()[0].is_ascii_whitespace() {
+        return None;
+    }
+    Some((&value[1..end], remaining))
+}
+
+fn parse_target_and_value<'a>(
     rest: &'a str,
     error: &'static str,
 ) -> Result<(&'a str, &'a str), &'static str> {
     let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
-    let Some(boundary) = rest.find(|value: char| value.is_ascii_whitespace()) else {
+    let Some((target, remaining)) = split_locator_value(rest) else {
         return Err(error);
     };
-    let reference = &rest[..boundary];
-    let value = rest[boundary..].trim_start_matches(|value: char| value.is_ascii_whitespace());
-    if reference.is_empty() {
-        Err(error)
-    } else {
-        Ok((reference, value))
+    if remaining.is_empty() {
+        return Err(error);
     }
+    let value = remaining.trim_start_matches(|value: char| value.is_ascii_whitespace());
+    Ok((target, value))
+}
+
+fn parse_target_command<'a>(rest: &'a str, error: &'static str) -> Result<&'a str, &'static str> {
+    let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
+    let (target, remaining) = split_locator_value(rest).ok_or(error)?;
+    remaining
+        .trim_matches(|value: char| value.is_ascii_whitespace())
+        .is_empty()
+        .then_some(target)
+        .ok_or(error)
+}
+
+fn parse_target_and_token<'a>(
+    rest: &'a str,
+    error: &'static str,
+) -> Result<(&'a str, &'a str), &'static str> {
+    let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
+    let (target, remaining) = split_locator_value(rest).ok_or(error)?;
+    let remaining = remaining.trim_matches(|value: char| value.is_ascii_whitespace());
+    let (token, trailing) = split_first_token(remaining).ok_or(error)?;
+    trailing
+        .trim_matches(|value: char| value.is_ascii_whitespace())
+        .is_empty()
+        .then_some((target, token))
+        .ok_or(error)
 }
 
 fn flush_streams(output: &mut impl Write, errors: &mut impl Write) -> std::io::Result<()> {
@@ -1108,9 +1553,10 @@ fn flush_streams(output: &mut impl Write, errors: &mut impl Write) -> std::io::R
 #[cfg(test)]
 mod tests {
     use super::{
-        ElementCommand, ExitStatus, FindLocatorKind, FindRoleAction, PageCommand, SessionCommand,
-        parse_command, run_session,
+        ElementCommand, ExitStatus, FindLocatorKind, FindRoleAction, PageCommand,
+        SelectCommandValues, SessionCommand, build_direct_locator, parse_command, run_session,
     };
+    use crate::Locator;
     use std::io::Cursor;
 
     #[test]
@@ -1170,13 +1616,25 @@ mod tests {
             parse_command("select @e1 large value"),
             Ok(SessionCommand::Element(ElementCommand::Select(
                 "@e1",
-                "large value"
+                SelectCommandValues::Single("large value")
             )))
         ));
         assert!(matches!(
             parse_command("select @e1 "),
-            Ok(SessionCommand::Element(ElementCommand::Select("@e1", "")))
+            Ok(SessionCommand::Element(ElementCommand::Select(
+                "@e1",
+                SelectCommandValues::Single("")
+            )))
         ));
+        match parse_command(r#"select @e1 "a" "large value" """#) {
+            Ok(SessionCommand::Element(ElementCommand::Select(
+                "@e1",
+                SelectCommandValues::List(values),
+            ))) => assert_eq!(values, vec!["a", "large value", ""]),
+            _ => panic!("unexpected select list parse result"),
+        }
+        assert!(parse_command(r#"select @e1 "a" trailing"#).is_err());
+        assert!(parse_command(r#"select @e1 "a"#).is_err());
         assert!(parse_command("select @e1").is_err());
         assert!(matches!(
             parse_command("get value @e1"),
@@ -1185,6 +1643,16 @@ mod tests {
         assert!(matches!(
             parse_command("get text @e1"),
             Ok(SessionCommand::Element(ElementCommand::GetText("@e1")))
+        ));
+        assert!(matches!(
+            parse_command("get html @e1"),
+            Ok(SessionCommand::Element(ElementCommand::GetHtml("@e1")))
+        ));
+        assert!(matches!(
+            parse_command("get count \"section > .card\""),
+            Ok(SessionCommand::Element(ElementCommand::GetCount(
+                "section > .card"
+            )))
         ));
         assert!(matches!(
             parse_command("get attr @e1 href"),
@@ -1203,6 +1671,16 @@ mod tests {
         assert!(matches!(
             parse_command("get title"),
             Ok(SessionCommand::Page(PageCommand::GetTitle))
+        ));
+        assert!(matches!(
+            parse_command("snapshot -i"),
+            Ok(SessionCommand::Page(PageCommand::SnapshotInteractive(None)))
+        ));
+        assert!(matches!(
+            parse_command("snapshot --interactive -s \"main > section\""),
+            Ok(SessionCommand::Page(PageCommand::SnapshotInteractive(
+                Some("main > section")
+            )))
         ));
         assert!(matches!(
             parse_command("check @e1"),
@@ -1225,6 +1703,9 @@ mod tests {
             Ok(SessionCommand::Element(ElementCommand::IsVisible("@e1")))
         ));
         assert!(parse_command("get value @e1 extra").is_err());
+        assert!(parse_command("get html @e1 extra").is_err());
+        assert!(parse_command("snapshot -s main").is_err());
+        assert!(parse_command("snapshot -i -s").is_err());
     }
 
     #[test]
@@ -1383,6 +1864,24 @@ mod tests {
             }))
         ));
         assert!(matches!(
+            parse_command("find css \"form > input:first-child\" fill hello"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::Css,
+                value: "form > input:first-child",
+                exact: false,
+                action: FindRoleAction::Fill("hello"),
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find xpath \"//section/button[2]\" text"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::XPath,
+                value: "//section/button[2]",
+                exact: false,
+                action: FindRoleAction::Text,
+            }))
+        ));
+        assert!(matches!(
             parse_command("find first .card text"),
             Ok(SessionCommand::Element(ElementCommand::FindLocator {
                 kind: FindLocatorKind::First,
@@ -1425,5 +1924,90 @@ mod tests {
         assert!(parse_command("find first .card --exact").is_err());
         assert!(parse_command("find nth -1 .card text").is_err());
         assert!(parse_command("find nth nope .card text").is_err());
+    }
+
+    #[test]
+    fn direct_selectors_parse_quoted_targets() {
+        assert!(matches!(
+            parse_command("click \"main > a.next\""),
+            Ok(SessionCommand::Element(ElementCommand::Click(
+                "main > a.next"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("fill \"form > input\" hello world"),
+            Ok(SessionCommand::Element(ElementCommand::Fill(
+                "form > input",
+                "hello world"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("get text \"//section/button[2]\""),
+            Ok(SessionCommand::Element(ElementCommand::GetText(
+                "//section/button[2]"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("get value \"form > input\""),
+            Ok(SessionCommand::Element(ElementCommand::GetValue(
+                "form > input"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("get attr \"section > article\" data-kind"),
+            Ok(SessionCommand::Element(ElementCommand::GetAttribute(
+                "section > article",
+                "data-kind"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("check \"form > input\""),
+            Ok(SessionCommand::Element(ElementCommand::Check(
+                "form > input"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("uncheck \"form > input\""),
+            Ok(SessionCommand::Element(ElementCommand::Uncheck(
+                "form > input"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("is checked \"form > input\""),
+            Ok(SessionCommand::Element(ElementCommand::IsChecked(
+                "form > input"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("is enabled \"form > button\""),
+            Ok(SessionCommand::Element(ElementCommand::IsEnabled(
+                "form > button"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("is visible \"section > article\""),
+            Ok(SessionCommand::Element(ElementCommand::IsVisible(
+                "section > article"
+            )))
+        ));
+        assert!(matches!(
+            parse_command("select \"form > select\" large value"),
+            Ok(SessionCommand::Element(ElementCommand::Select(
+                "form > select",
+                SelectCommandValues::Single("large value")
+            )))
+        ));
+        assert!(matches!(
+            build_direct_locator("css=main > button"),
+            Ok(Locator::Css(_))
+        ));
+        assert!(matches!(
+            build_direct_locator("xpath=//main/button"),
+            Ok(Locator::XPath(_))
+        ));
+        assert!(matches!(
+            build_direct_locator("//main/button"),
+            Ok(Locator::XPath(_))
+        ));
     }
 }

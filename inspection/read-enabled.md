@@ -2,9 +2,9 @@
 
 ## Summary
 
-Package callers submit `GetElementEnabled` with a current interactive reference.
+Package callers submit `GetElementEnabled` with a reference or `GetEnabledByLocator` with a locator.
 
-Session-mode callers send `is enabled <ref>` after an interactive snapshot.
+Session-mode callers send `is enabled <ref|selector>`. Direct selectors need no snapshot.
 
 The current subset supports native form controls and native links.
 
@@ -18,9 +18,9 @@ browser.jr returns false when that control has a `disabled` attribute. Other sup
 
 ```mermaid
 stateDiagram-v2
-    [*] --> checking_reference
-    checking_reference --> rejected : missing or stale reference
-    checking_reference --> checking_native_state : current reference
+    [*] --> resolving_target
+    resolving_target --> rejected : stale, missing, or non-unique target
+    resolving_target --> checking_native_state : current reference or strict locator
     checking_native_state --> unsupported : no native enabled state
     checking_native_state --> reporting : supported native element
     reporting --> finished
@@ -30,9 +30,9 @@ stateDiagram-v2
 
 ### Invoke
 
-The package request contains one typed reference.
+The package request contains one typed reference or locator.
 
-Session mode reads `is enabled` and one displayed reference.
+Session mode reads `is enabled` and one reference or selector.
 
 ### Exit immediately
 
@@ -44,7 +44,7 @@ An unknown session label reports invalid input. Neither path reads another eleme
 
 browser.jr resolves the reference through the latest interactive snapshot.
 
-Native buttons, inputs, selects, and textareas use their `disabled` attribute. Native links with `href` return true.
+Native buttons, inputs, selects, textareas, options, and optgroups use their `disabled` attribute. Native links with `href` return true.
 
 ### While running
 
@@ -56,9 +56,9 @@ The read does not dispatch events, run scripts, or change focus.
 
 ### Finish
 
-The package returns `ElementEnabled` with the reference and Boolean.
+The package returns `ElementEnabled` for references or `LocatorEnabled` for locators.
 
-Session mode reports `enabled ref=<ref> value=<boolean>` and flushes stdout.
+Reference output reports `enabled ref=<ref> value=<boolean>`. Direct selectors print the Boolean.
 
 The reference remains current after the read.
 
@@ -66,7 +66,7 @@ The reference remains current after the read.
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | The package and session commands take one reference. | No enabled-state flags exist. |
+| Flags and options | The package and session commands take one reference or locator. | No enabled-state flags exist. |
 | Project configuration | No enabled-state configuration exists. | Nothing reloads. |
 | Target matrix | The current page and snapshot select one element. | The read does not change it. |
 | Output channel | The package returns a Boolean. Session mode uses flushed text. | Output remains stable. |
@@ -110,12 +110,13 @@ The reference remains current after the read.
 - Explicit interactive roles without native behavior return unsupported.
 - `aria-disabled` does not change the result.
 - A direct read does not invalidate its reference.
+- Direct selectors resolve strictly without a prior snapshot.
 - A later snapshot invalidates references from the previous snapshot.
 
 ## Open questions and verification
 
 - Define disabled fieldset inheritance.
-- Define option and optgroup disabled behavior.
+- Define inherited disabled state for options under disabled optgroups.
 - Define ARIA-disabled observation separately from native state.
 - Define full actionability after stable layout and pointer targeting exist.
 

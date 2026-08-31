@@ -48,11 +48,11 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Snapshot.** An immutable capture of selected page evidence at a known point in the page's lifetime.
 
-**Interactive snapshot.** A snapshot containing the supported interactive roles, names, semantic identifiers, and ordered references.
+**Interactive snapshot.** A whole-page or locator-scoped snapshot containing supported interactive roles, names, semantic identifiers, and ordered references.
 
 **Interactive element reference.** A snapshot-owned target identity such as `@e1`. Another capture or document makes it stale.
 
-**Locator.** A reusable current-document query. Implemented kinds cover semantic text, source attributes, and positioned compound CSS selectors.
+**Locator.** A reusable current-document query. Implemented kinds cover semantic text, source attributes, CSS, and XPath.
 
 **Role locator.** A role and optional accessible-name query over the supported semantic index.
 
@@ -68,13 +68,19 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Test ID locator.** An exact, case-sensitive query over the `data-testid` attribute.
 
-**Compound CSS selector.** One supported selector made from a tag, ID, classes, or attribute tests without combinators.
+**CSS locator.** A CSS selector query over the current normalized HTML document. Resolution is strict unless the locator has a position.
 
-**Positioned CSS locator.** A compound CSS selector that chooses its first, last, or zero-based nth document-order match.
+**Positioned CSS locator.** A CSS locator that chooses its first, last, or zero-based nth document-order match.
+
+**XPath locator.** An XPath 1.0 element query over a namespace-free mirror of the current normalized HTML document.
+
+**Direct selector.** A CSS or XPath target supplied directly to a session action, state read, HTML read, text read, attribute read, value read, or count command.
 
 **Locator resolution.** Matching a locator against the current document. Non-positioned resolution rejects zero or multiple matches.
 
 **Locator match.** One resolved element's identifier, optional role, accessible name, and normalized text. It is not an interactive reference.
+
+**Locator collection.** Zero or more locator matches in current document order. Collection resolution does not require one unique match.
 
 **Role match.** A locator match whose semantic role is present and required.
 
@@ -86,13 +92,15 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Fill.** An action that replaces a supported text control's current value. Fill does not dispatch browser events yet.
 
-**Select.** An exact-value action on one current native single-select. Select does not dispatch browser events yet.
+**Select.** An exact value, label, or index action on one native select. Select does not dispatch browser events yet.
 
-**Value inspection.** A read of one current text-control or native single-select value through a snapshot or typed request.
+**Value inspection.** A read of one current text-control or native-select value through a snapshot or typed request. Multiple selects report their first selected value.
 
 **Checked state.** The current Boolean state of a supported native checkbox. Snapshots and typed requests expose it.
 
 **Element text.** Normalized descendant text from a loaded static element. It stays distinct from the accessible name.
+
+**Element HTML.** Normalized static child markup for one element. It excludes the selected element's outer tags.
 
 **Element attribute.** One parsed static source attribute. Attribute reads distinguish present, missing, and blocked-sensitive values.
 
@@ -184,7 +192,7 @@ These terms describe decided but unimplemented REPL behavior.
 
 **Human-readable output.** Text meant for a person. The CLI emits it now. The intended REPL will use the same result terms.
 
-**Machine-readable output.** Decided but unimplemented structured output for programs and AI agents. Session mode emits flushed line-oriented text, not this structured format.
+**Machine-readable output.** One JSON result for programs and AI agents. One-shot interactive snapshots implement the `success`, `data`, and `error` envelope. Session mode still emits flushed line-oriented text.
 
 **Watch mode.** A decided but unimplemented lint invocation that checks the target again after relevant page changes settle.
 

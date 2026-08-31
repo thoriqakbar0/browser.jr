@@ -2,9 +2,9 @@
 
 ## Summary
 
-Package callers submit `GetElementVisible` with a current interactive reference.
+Package callers submit `GetElementVisible` with a reference or `GetVisibleByLocator` with a locator.
 
-Session-mode callers send `is visible <ref>` after an interactive snapshot.
+Session-mode callers send `is visible <ref|selector>`. Direct selectors can target non-interactive elements.
 
 The read returns immediately. It does not wait for visibility to change.
 
@@ -22,9 +22,9 @@ The reference remains usable after the read.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> checking_reference
-    checking_reference --> rejected : missing or stale reference
-    checking_reference --> checking_style : current reference
+    [*] --> resolving_target
+    resolving_target --> rejected : stale, missing, or non-unique target
+    resolving_target --> checking_style : current reference or strict locator
     checking_style --> unsupported : style evidence unavailable
     checking_style --> hidden : supported hidden state
     checking_style --> checking_box : supported displayed state
@@ -40,9 +40,9 @@ stateDiagram-v2
 
 ### Invoke
 
-The package request contains one typed reference.
+The package request contains one typed reference or locator.
 
-Session mode reads `is visible` and one displayed reference.
+Session mode reads `is visible` and one reference or selector.
 
 ### Exit immediately
 
@@ -52,7 +52,7 @@ An unknown session label reports invalid input. Neither path reads another eleme
 
 ### Begin running
 
-browser.jr resolves the reference through the latest interactive snapshot.
+browser.jr resolves the reference through the latest interactive snapshot or the locator through the current document.
 
 The visibility definition needs a non-empty box and a supported computed `visibility` value.
 
@@ -86,9 +86,9 @@ The read does not check stability, pointer targeting, viewport intersection, or 
 
 ### Finish
 
-The package returns `ElementVisible` with the reference and Boolean.
+The package returns `ElementVisible` for references or `LocatorVisible` for locators.
 
-Session mode reports `visible ref=<ref> value=<boolean>` and flushes stdout.
+Reference output reports `visible ref=<ref> value=<boolean>`. Direct selectors print the Boolean.
 
 Unsupported evidence returns `SessionError::UnsupportedVisibility` instead of false.
 
@@ -98,7 +98,7 @@ The reference remains current after a successful or unsupported read.
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | The package and session commands take one reference. | No visibility flags exist. |
+| Flags and options | The package and session commands take one reference or locator. | No visibility flags exist. |
 | Project configuration | No visibility configuration exists. | Nothing reloads. |
 | Target matrix | The current page and snapshot select one element. | The read does not change it. |
 | Output channel | The package returns a typed result. Session mode uses flushed text. | Output remains stable. |
@@ -148,6 +148,7 @@ The reference remains current after a successful or unsupported read.
 - Definite hidden evidence takes priority over uncertain inline geometry.
 - Zero opacity still returns true when the box is otherwise supported.
 - A visibility read never changes the current reference set.
+- Direct selectors resolve strictly and can inspect non-interactive elements.
 - A later snapshot invalidates references from the previous snapshot.
 
 ## Open questions and verification

@@ -11,6 +11,7 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | ATTR-03 | P1 | pipe | Attribute names normalize ASCII case ([Begin running](../inspection/read-attribute.md#begin-running)). | Serve a `data-kind` attribute. | Request `DATA-KIND`. | The result name is lowercase and the value is present. | partial: package boundary test passed, 2026-08-31 |
 | ATTR-04 | P1 | pipe | Password values remain blocked ([While running](../inspection/read-attribute.md#while-running)). | Serve a password input with a source value. | Read `type`, then read `value`. | Type succeeds. Value returns `SensitiveAttribute`. | partial: package boundary test passed, 2026-08-31 |
 | ATTR-05 | P1 | pipe | Invalid names fail before attribute lookup ([Exit immediately](../inspection/read-attribute.md#exit-immediately)). | Open one interactive page. | Request a name containing whitespace. | The package returns `InvalidAttributeName`. | partial: package boundary test passed, 2026-08-31 |
+| ATTR-06 | P1 | pipe | Direct selectors read non-interactive source attributes ([Begin running](../inspection/read-attribute.md#begin-running)). | Serve a non-interactive card with `data-kind`. | Read the present and one missing attribute through CSS. | The present value returns. The missing value remains `null`. | partial: package, compiled-process, and controlled agent-browser present-value comparison passed, 2026-08-31 |
 
 Not checkable yet:
 

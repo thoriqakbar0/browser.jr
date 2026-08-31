@@ -12,6 +12,7 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | VISIBLE-04 | P1 | pipe | Empty non-replaced elements return false ([Edge cases](../inspection/read-visible.md#edge-cases)). | Serve an empty `div` with an interactive role and name. | Snapshot and read its visible state. | The read returns false. | partial: unit and package tests passed, 2026-08-31 |
 | VISIBLE-05 | P1 | pipe | Missing box evidence reports unsupported ([Finish](../inspection/read-visible.md#finish)). | Serve a button with inline width and an embedded stylesheet page. | Read visibility, then reuse the current reference. | Visibility reports unsupported. Another read still accepts the reference. | partial: unit and package tests passed, 2026-08-31 |
 | VISIBLE-06 | P2 | pipe | Session mode reports stable Boolean output ([Finish](../inspection/read-visible.md#finish)). | Serve visible and hidden buttons. | Send `is visible` for each reference. | Output reports each reference and an unquoted Boolean. | partial: compiled-process test passed, 2026-08-31 |
+| VISIBLE-07 | P1 | pipe | Direct selectors inspect non-interactive visibility without a snapshot ([Finish](../inspection/read-visible.md#finish)). | Serve a hidden non-interactive element. | Read visible state through CSS. | The result is false. | partial: package, compiled-process, and controlled agent-browser comparison passed, 2026-08-31 |
 
 Not checkable yet:
 

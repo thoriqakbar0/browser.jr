@@ -84,29 +84,33 @@ pub struct InteractiveSnapshot {
 }
 
 impl InteractiveSnapshot {
-    pub(crate) fn from_document(
+    pub(crate) fn from_document_indices(
         id: SnapshotId,
         document_epoch: u64,
         url: String,
         elements: &[InteractiveElementSource],
+        element_indices: &[usize],
     ) -> Self {
-        let elements = elements
+        let elements = element_indices
             .iter()
             .enumerate()
-            .map(|(index, source)| InteractiveElement {
-                reference: InteractiveElementRef::new(
-                    document_epoch,
-                    id,
-                    u64::try_from(index + 1).expect("interactive element count exceeds u64"),
-                ),
-                element: source.element().into(),
-                role: source.role().into(),
-                name: source.name().into(),
-                state: source
-                    .value()
-                    .map(|value| InteractiveElementState::Value(value.into()))
-                    .or_else(|| source.checked().map(InteractiveElementState::Checked))
-                    .unwrap_or(InteractiveElementState::Unavailable),
+            .map(|(ordinal, index)| {
+                let source = &elements[*index];
+                InteractiveElement {
+                    reference: InteractiveElementRef::new(
+                        document_epoch,
+                        id,
+                        u64::try_from(ordinal + 1).expect("interactive element count exceeds u64"),
+                    ),
+                    element: source.element().into(),
+                    role: source.role().into(),
+                    name: source.name().into(),
+                    state: source
+                        .value()
+                        .map(|value| InteractiveElementState::Value(value.into()))
+                        .or_else(|| source.checked().map(InteractiveElementState::Checked))
+                        .unwrap_or(InteractiveElementState::Unavailable),
+                }
             })
             .collect();
         Self { id, url, elements }

@@ -1,32 +1,35 @@
-# Select one option
+# Select options
 
 ## Summary
 
-Package callers submit `SelectElement` with a current interactive reference and one exact option value.
+Package callers use `SelectElement` or `SelectByLocator` for one exact option value.
 
-Session-mode callers send `select <ref> <value>` after an interactive snapshot.
+They use `SelectOptions` or `SelectOptionsByLocator` for a non-empty typed option list.
 
-Select supports native single-select controls. It does not dispatch browser events.
+Session mode accepts `select <ref|selector> <value>` for one value. Quoted values form a list.
+
+Select supports native single and multiple controls. It does not dispatch browser events.
 
 ## The simple case
 
-The caller opens a page and captures an interactive snapshot. It selects a combobox reference.
+The caller opens a page and targets a current select.
 
-The caller supplies one exact option value. browser.jr stores the first matching option and reports its value.
+One exact value replaces the current selection. A non-empty value list can select multiple options.
 
-The current reference remains usable. A later snapshot reports the selected value.
+A later value read and snapshot report the first selected value in document order.
 
 ## The interaction, event by event
 
 ```mermaid
 stateDiagram-v2
-    [*] --> checking_reference
-    checking_reference --> rejected : missing or stale reference
-    checking_reference --> checking_select : current reference
+    [*] --> resolving_target
+    resolving_target --> rejected : stale, missing, or non-unique target
+    resolving_target --> checking_select : current reference or strict locator
     checking_select --> unsupported : unsupported control or state
-    checking_select --> missing : no exact option value
-    checking_select --> disabled : first matching option is disabled
-    checking_select --> storing : enabled exact match
+    checking_select --> validating : native select and non-empty values
+    validating --> missing : one exact value is absent
+    validating --> disabled : one matched option is disabled
+    validating --> storing : every requested value is enabled
     storing --> reported
     rejected --> finished
     unsupported --> finished
@@ -37,31 +40,53 @@ stateDiagram-v2
 
 ### Invoke
 
-The package request contains one typed reference and one string.
+Single-value package requests contain one typed reference or locator and one string.
 
-Session mode reads the reference and treats the remaining line as the exact value.
+List requests contain `NonEmpty<SelectOptionTarget>`. An empty option list is not representable.
+
+Each package target is an exact value, exact label, or zero-based index.
+
+Session mode treats an unquoted remainder as one exact value, including spaces.
+
+Quoted values form a list: `select @e1 "b" "a"`. Every listed value must use quotes.
 
 ### Exit immediately
 
 A stale package reference returns `SessionError::StaleElementReference`.
 
-An unknown session label reports invalid input. Neither path changes selection state.
+An unknown session label reports invalid input. Locator failures follow [Find elements with locators](../inspection/query-elements.md).
+
+Malformed or incomplete quoted lists report invalid input before selection.
 
 ### Begin running
 
-browser.jr confirms that the source element is a native single `<select>`.
+browser.jr resolves the target and confirms that it is a native `<select>`.
 
-The engine compares the supplied string with each parsed option value in tree order.
+The engine resolves each typed target against parsed options in tree order.
 
 An option uses its `value` attribute when present. Otherwise, it uses normalized descendant text.
 
+An option label uses its `label` attribute when present. Otherwise, it uses normalized descendant text.
+
+The engine resolves and validates the complete request before mutation.
+
 ### While running
 
-The first exact match determines the result. A disabled first match rejects the action.
+Each value or label resolves to its first exact match. An index resolves directly from zero.
+
+Targets that resolve to the same option are de-duplicated.
+
+For a multiple select, all resolved options become selected. Earlier selections are cleared.
+
+For a single select, the first matching option in document order becomes selected.
+
+Any missing or disabled option rejects the complete request without changing selection.
 
 An option is disabled when it has `disabled`. A disabled ancestor `<optgroup>` also disables it.
 
 A disabled `<select>` remains readable but rejects selection changes.
+
+Locator selection also requires supported visible evidence before mutation.
 
 The action keeps the current reference usable. It changes no other control.
 
@@ -71,77 +96,93 @@ It does not run scripts, constraint validation, form submission, or browser acti
 
 ### Finish
 
-The package returns `SelectResult` with the reference and selected value.
+Single-value requests return `SelectResult` or `SelectByLocatorResult`.
 
-Session mode reports `selected ref=<ref> value=<quoted-value>` and flushes stdout.
+List requests return `SelectOptionsResult` or `SelectOptionsByLocatorResult`.
 
-A later interactive snapshot reports the current value. That capture makes the earlier reference stale.
+List results contain committed option values in request order after de-duplication.
+
+Single-select list requests return only the actual selected value.
+
+Reference output reports `value=<quoted-value>` for one value and `values=[...]` for a quoted list.
+
+A later value read or snapshot reports the first selected value in document order.
 
 ## Variants
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | The package takes a string. Session mode takes the rest of one line. | Select has no flags. |
-| Project configuration | No select configuration exists. | Nothing reloads. |
-| Target matrix | The current page and snapshot select one control. | Select does not navigate or create a page. |
-| Output channel | The package returns a typed result. Session mode uses flushed text. | A later snapshot exposes the selected value. |
+| Option shape | One exact value or `NonEmpty<SelectOptionTarget>`. | Multiple selects commit every resolved option. Single selects commit one. |
+| Session syntax | An unquoted remainder is one value. Quoted tokens form a list. | Select has no flags. |
+| Target | A current reference or strict locator. | Select does not navigate or create a page. |
+| Output channel | The package returns a typed result. Session mode uses flushed text. | A later snapshot exposes the first selected value. |
 
 ## Cancel and interrupt
 
 | Event | Before running | While running |
 | --- | --- | --- |
 | Ctrl+C once | The host or CLI process may exit. | Select has no asynchronous phase or graceful handler. |
-| Ctrl+C again before the evaluation stops | The process may already be gone. | No second-stage handler exists. |
+| Ctrl+C again before evaluation stops | The process may already be gone. | No second-stage handler exists. |
 | The process receives SIGTERM | The process may exit before the request. | In-memory state disappears with the process. |
 | The terminal closes | Package behavior is unchanged. | Session-mode output may fail. |
 | stdin or stdout closes | Package behavior is unchanged. | Closed stdin ends session mode. Closed stdout causes status three. |
-| The network fails or a request times out | Select uses no network. | The stored page already exists in memory. |
-| The inspected page changes | Another snapshot or navigation can stale the reference. | Select itself changes only the supported value. |
-| Another lint run targets the same page | It owns another session. | It cannot observe this in-memory value. |
+| The network fails or times out | Select uses no network. | The stored page already exists in memory. |
+| The inspected page changes | Another snapshot or navigation can stale a reference. | Select changes only supported selection state. |
+| Another lint run targets the page | It owns another session. | It cannot observe this in-memory state. |
 | The process exits outright | No selection occurs. | No selected value survives. |
 
 ## Interactions with other systems
 
-**Configuration precedence.** The request string is the only requested-value source.
+**Configuration precedence.** The request values are the only requested-selection source.
 
-**Output and exit status.** Package callers receive `SelectResult` or `SessionError`. Session failures use status two or three.
+**Output and exit status.** Package callers receive typed results or `SessionError`. Session failures use status two or three.
 
-**Resource limits.** No separate value limit exists. Session mode limits one value to one input line.
+**Resource limits.** No separate value limit exists. Session values fit on one input line.
 
 **Network and storage.** Select uses no network and writes no persistent storage.
 
-**Rendering compatibility.** Select mutates browser.jr's native single-select model. It does not implement browser event algorithms.
+**Rendering compatibility.** Select mutates browser.jr's static native-select model. It implements no browser event algorithms.
+
+**Playwright compatibility.** Value, label, index, lists, and single-select resolution follow [Playwright locator.selectOption](https://playwright.dev/docs/api/class-locator#locator-select-option) option behavior.
+
+**agent-browser compatibility.** Quoted lists match its command shape. browser.jr returns committed values, not merely requested values.
+
+An observed agent-browser 0.32.4 run accepted a disabled option. browser.jr keeps disabled-option rejection.
 
 **Isolation.** Selection state belongs to one session and document. Navigation replaces it.
 
-**Accessibility inspection.** A single select normally reports `combobox`. A select with `multiple` or `size > 1` reports `listbox`.
+**Accessibility inspection.** A normal single select reports `combobox`. Multiple or `size > 1` reports `listbox`.
 
 ## Edge cases
 
-- A present `selected` attribute establishes initial state.
-- When several options have `selected`, the last parsed option starts selected.
+- A multiple select preserves every initial `selected` attribute.
+- For a single select, the last parsed `selected` attribute establishes initial state.
 - Otherwise, a display size of one selects the first non-disabled option.
-- A single-select listbox may start without a selected option.
-- An empty selection value returns an empty string.
-- `select @e1 ` requests an empty value. `select @e1` is invalid input.
+- A listbox-shaped single select may start without a selected option.
+- A multiple select may start without a selected option.
+- Value reads return the first selected value, or an empty string when none exists.
+- `select @e1 ` requests one empty value. `select @e1` is invalid input.
 - Session values may contain spaces. They cannot contain line breaks.
-- Session mode removes delimiter whitespace and preserves trailing whitespace.
-- Duplicate values use the first match. A disabled first match rejects the action.
+- Quoted session values do not support quote escapes yet.
+- Duplicate requested values select one matching option and return one value.
+- Duplicate option values use the first option. A disabled first match rejects the action.
+- Labels match exactly. A `label` attribute takes priority over descendant text.
+- Indexes start at zero. An out-of-range index is not found.
 - A missing value returns `SessionError::SelectOptionNotFound`.
 - A disabled match returns `SessionError::SelectOptionDisabled`.
-- Multiple selects reject value reads and selection changes.
-- Label and index matching are not implemented.
+- Missing or disabled label and index targets return typed target errors.
 - A non-select reference rejects selection.
 - Repeated selection is idempotent.
+- Direct selectors resolve strictly without a prior snapshot.
 - Rejected actions preserve selection state and the current reference.
 - A later snapshot invalidates the action reference.
 
 ## Open questions and verification
 
-- Define multiple selection and its returned value shape.
-- Decide whether later matching options may bypass a disabled duplicate.
-- Add locator-based selection and index matching through separate typed request fields.
+- Define empty-list selection and explicit deselection.
+- Define label and index syntax for session mode.
 - Define event order before adding event dispatch.
 - Define form reset and submission behavior.
+- Define quote escaping for session value lists.
 
-Drafted from the Rust implementation and package and compiled-process tests on 2026-08-31.
+Drafted from the Rust implementation, controlled comparisons, and package and compiled-process tests on 2026-08-31.

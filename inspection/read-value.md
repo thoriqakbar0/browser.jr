@@ -2,13 +2,13 @@
 
 ## Summary
 
-Package callers submit `GetElementValue` with a current interactive reference.
+Package callers submit `GetElementValue` with a current interactive reference or `GetValueByLocator` with a locator.
 
-Session-mode callers send `get value <ref>` after an interactive snapshot in the same process.
+Session-mode callers send `get value <ref|selector>`. Direct selectors need no snapshot.
 
 Interactive snapshots also include each supported current value.
 
-Value inspection supports text controls and native single-select controls.
+Value inspection supports text controls and native select controls.
 
 ## The simple case
 
@@ -20,9 +20,9 @@ The caller requests its value. browser.jr returns the current string without cha
 
 ```mermaid
 stateDiagram-v2
-    [*] --> checking_reference
-    checking_reference --> rejected : missing or stale reference
-    checking_reference --> checking_value : current reference
+    [*] --> resolving_target
+    resolving_target --> rejected : missing, stale, or non-unique target
+    resolving_target --> checking_value : current reference or strict locator
     checking_value --> unsupported : value unavailable
     checking_value --> reporting : supported control value
     reporting --> finished
@@ -32,27 +32,27 @@ stateDiagram-v2
 
 ### Invoke
 
-The package request contains one typed reference.
+The package request contains one typed reference or locator.
 
-Session mode reads `get value` and one displayed reference.
+Session mode reads `get value` and one displayed reference or direct selector.
 
 ### Exit immediately
 
 A stale package reference returns `SessionError::StaleElementReference`.
 
-An unknown or stale session label reports invalid input. Neither path reads another element.
+An unknown or stale session label reports invalid input. Locator resolution follows [Find elements with locators](query-elements.md).
 
 ### Begin running
 
-browser.jr resolves the reference through the latest interactive snapshot.
+browser.jr resolves a reference through the latest interactive snapshot or a locator through the current document.
 
 Value inspection supports `textarea` and these `input` types: empty, `text`, `email`, `search`, `tel`, and `url`.
 
 Disabled and read-only controls in that subset remain readable.
 
-Native single selects are readable. Disabled single selects also remain readable.
+Native single and multiple selects are readable. Disabled selects also remain readable.
 
-[Select one option](../interaction/select-option.md) defines select values and selection behavior.
+[Select options](../interaction/select-option.md) defines select values and selection behavior.
 
 ### While running
 
@@ -62,9 +62,9 @@ The read does not dispatch events, run scripts, validate input, or change focus.
 
 ### Finish
 
-The package returns `ElementValue` with the reference and current string.
+The package returns `ElementValue` for a reference or `LocatorValue` for a locator.
 
-Session mode writes `value ref=<ref> <quoted-value>` and flushes stdout.
+Session mode writes `value ref=<ref> <quoted-value>` for references. Direct selectors print the current string.
 
 The reference remains current after the read.
 
@@ -72,7 +72,7 @@ The reference remains current after the read.
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | The package and session commands take one reference. | No value-read flags exist. |
+| Flags and options | The package and session commands take one reference or locator. | No value-read flags exist. |
 | Project configuration | No value-inspection configuration exists. | Nothing reloads. |
 | Target matrix | The current page and snapshot select one control. | The read does not change the target. |
 | Output channel | The package returns a typed value. Session mode uses escaped quoted text. | Session mode flushes after the command. |
@@ -112,16 +112,20 @@ The reference remains current after the read.
 - An empty supported value returns an empty string.
 - Disabled and read-only supported text controls remain readable.
 - Password values remain unavailable.
-- Number, checkbox, radio, range, multiple-select, button, link, and contenteditable values remain unavailable.
+- A multiple select returns its first selected value in document order.
+- A select without a selected option returns an empty string.
+- Number, checkbox, radio, range, button, link, and contenteditable values remain unavailable.
 - A successful fill or select changes the next direct read immediately.
 - A value read does not invalidate its reference.
+- Direct selectors resolve strictly without a prior snapshot.
 - A later snapshot invalidates references from the previous snapshot.
 - Session-mode output escapes quotes, backslashes, control characters, and line breaks.
 
 ## Open questions and verification
 
 - Define password reads without exposing secrets.
-- Define multiple-select values and other form-control value types.
+- Define a typed read that returns every selected option.
+- Define other form-control value types.
 - Define machine-readable response encoding.
 - Define value size limits.
 

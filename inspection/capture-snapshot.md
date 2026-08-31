@@ -4,11 +4,17 @@
 
 `browser.jr snapshot <url> --interactive` captures interactive semantic elements from one loopback HTTP page.
 
+`-s <css>` or `--selector <css>` limits the result to one strict CSS target and its descendants.
+
+`--json` writes one machine-readable result to stdout. It applies to successful snapshots and failures.
+
 The output gives each element a reference such as `@e1`. Package callers may use references with typed actions and observations.
 
-Package callers open the page through `OpenPage`. They capture it through `CaptureInteractiveSnapshot` in the same `Session`.
+Package callers open the page through `OpenPage`. They capture the complete page through `CaptureInteractiveSnapshot`.
 
-Session-mode callers send `open <url>` and `snapshot --interactive` through one process.
+`CaptureInteractiveSnapshotWithin` accepts any strict locator and captures its resolved subtree.
+
+Session-mode callers send `open <url>` and `snapshot --interactive [-s <css>]` through one process.
 
 ## The simple case
 
@@ -20,6 +26,12 @@ browser.jr loads the static HTML. It prints one snapshot header and the supporte
 snapshot=1 url=http://localhost:3000 mode=interactive elements=2
 - textbox "Email" [ref=@e1]: ""
 - button "Save" [ref=@e2]
+```
+
+JSON mode uses the same semantic projection with machine keys that omit `@`:
+
+```json
+{"success":true,"data":{"origin":"http://localhost:3000","refs":{"e1":{"name":"Email","role":"textbox"},"e2":{"name":"Save","role":"button"}},"snapshot":"- textbox \"Email\" [ref=e1]: \"\"\n- button \"Save\" [ref=e2]"},"error":null}
 ```
 
 ## The interaction, event by event
@@ -41,11 +53,19 @@ stateDiagram-v2
 
 The one-shot CLI reads the URL and requires `-i` or `--interactive`.
 
+An optional `-s` or `--selector` value must be one valid CSS selector.
+
+The caller may put `--json` before `snapshot` or among the snapshot options.
+
 Session mode reads the same snapshot flags after a successful `open` command.
 
 ### Exit immediately
 
 Missing, repeated, or unknown arguments exit with status two. Invalid targets fail before network access.
+
+Malformed CSS scope selectors fail before the one-shot command loads the page.
+
+When the request selects JSON, these failures write one failure envelope to stdout. Stderr stays empty.
 
 ### Begin running
 
@@ -63,6 +83,10 @@ The name subset reads `aria-label`, associated labels, wrapping labels, selected
 
 The engine assigns references in document order. Each capture creates fresh typed reference identities.
 
+A scoped capture first resolves exactly one target. It keeps interactive targets at or below that element.
+
+Scoped references use compact ordinals starting at `@e1`. An explicit map preserves their source-element identities.
+
 The snapshot does not filter those references by [visible state](read-visible.md).
 
 [Supported controls](read-value.md) include their current value. Snapshot values do not become accessible names.
@@ -71,13 +95,21 @@ The snapshot does not filter those references by [visible state](read-visible.md
 
 Capturing again makes every reference from the previous snapshot stale.
 
+A failed scoped capture preserves the latest successful snapshot and its references.
+
 Opening another document creates another document epoch. References from the previous document no longer compare equal.
 
 A successful open also invalidates layout evidence from the previous document.
 
 ### Finish
 
-The CLI prints the snapshot identifier, URL, mode, count, roles, names, references, and supported control state.
+Human output prints the snapshot identifier, URL, mode, count, roles, names, references, and supported control state.
+
+JSON output has top-level `success`, `data`, and `error` fields. Success data has `origin`, `refs`, and `snapshot`.
+
+Each `refs` key maps to its role and name. The `snapshot` string keeps document order and supported state.
+
+JSON failure data is `null`. Its `error` field contains the same diagnostic as human mode.
 
 Session mode keeps the typed references until another snapshot, open, or successful navigation replaces them.
 
@@ -87,10 +119,10 @@ A successful empty snapshot exits zero. Load or output failures exit three.
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | `-i` and `--interactive` select the implemented projection. | Flags stay fixed. |
+| Flags and options | `-i` and `--interactive` select the projection. `-s` and `--selector` set one CSS scope. `--json` selects the machine envelope. | Flags stay fixed. |
 | Project configuration | No snapshot configuration exists. | Nothing reloads. |
 | Target matrix | One-shot mode takes one URL. Session mode uses its current page. | A successful session open or navigation replaces the document. |
-| Output channel | Human-readable output uses stdout. Failures use stderr. | Session mode flushes both streams after each command. |
+| Output channel | Human results use stdout and human failures use stderr. JSON results and failures use stdout. | Session mode flushes both streams after each command. |
 
 ## Cancel and interrupt
 
@@ -110,13 +142,23 @@ A successful empty snapshot exits zero. Load or output failures exit three.
 
 **Configuration precedence.** No project or environment configuration affects this command.
 
-**Output and exit status.** Success uses stdout and status zero. Invalid input uses stderr and status two.
+**Output and exit status.** Success uses stdout and status zero. Human invalid input uses stderr and status two.
+
+JSON preserves status zero, two, or three. It writes one complete envelope to stdout when output succeeds.
 
 **Resource limits.** The body limit is one MiB. A wall-clock request timeout is not implemented yet.
 
 **Network and storage.** The command permits loopback HTTP only. It writes no snapshot file.
 
 **Rendering compatibility.** The snapshot uses static HTML semantics. It does not apply CSS visibility or JavaScript mutations.
+
+**Compatibility.** agent-browser also filters scoped membership in document order. Its current refs retain document-wide labels.
+
+browser.jr keeps its snapshot-owned compact labels. Exact ref-label compatibility remains open.
+
+The JSON envelope and `origin`, `refs`, and `snapshot` fields match agent-browser 0.32.4.
+
+browser.jr omits lifecycle metadata. Its snapshot string reports only browser.jr's static semantic and state subset.
 
 **Isolation.** Each CLI invocation creates one session. Session mode keeps it until exit or EOF. Package callers own their session lifetime.
 
@@ -125,15 +167,20 @@ A successful empty snapshot exits zero. Load or output failures exit three.
 ## Edge cases
 
 - A page without supported interactive elements returns `elements=0`.
+- An empty JSON snapshot has an empty `refs` object and empty `snapshot` string.
+- A matched scope without interactive descendants returns `elements=0`.
+- An interactive scope target includes itself as the first result.
+- A missing or ambiguous scope does not replace current references.
+- Scoped refs begin at `@e1` and map to their original page elements.
 - Hidden inputs do not receive references.
 - A link without `href` does not receive a native link role.
 - `aria-label` takes precedence over the implemented label and text sources.
 - Form values do not become names for selects, textareas, or text inputs.
 - Supported control values use an escaped quoted form after their reference.
 - Disabled and read-only text controls expose their value but reject fill.
-- Native single selects expose their selected value.
-- Disabled single selects expose their value but reject [selection](../interaction/select-option.md).
-- Multiple-select values remain unsupported.
+- Native selects expose their first selected value in document order.
+- A select without a selected option exposes an empty value.
+- Disabled selects expose their value but reject [selection](../interaction/select-option.md).
 - Unsupported controls and password fields do not expose a value.
 - Native checkboxes expose `[checked=true]` or `[checked=false]` after their reference.
 - Disabled native checkboxes expose state but reject [changes](../interaction/set-checked.md).
@@ -142,6 +189,10 @@ A successful empty snapshot exits zero. Load or output failures exit three.
 - Output escapes quotes and line breaks in names.
 - Repeated captures receive new snapshot identifiers and fresh typed references.
 - Human reference labels may restart after another document opens.
+- JSON ref keys omit the human `@` prefix.
+- A JSON parse, load, or scope failure writes `success=false`, `data=null`, and one error string.
+- Repeating `--json` reports invalid input through the JSON envelope.
+- Session mode remains line-oriented human text.
 - Checks cannot consume layout evidence from the previous document.
 - A failed package open preserves the previously open page.
 - Session mode maps labels only to its latest snapshot's typed references.
@@ -152,7 +203,8 @@ A successful empty snapshot exits zero. Load or output failures exit three.
 - Define `aria-labelledby`, fieldset, legend, and complete accessible-name behavior.
 - Define stylesheet-aware snapshot filtering before visibility changes snapshot membership.
 - Define password handling before password fields expose or accept values.
-- Define machine-readable snapshot output.
+- Define machine-readable session output and command identifiers.
+- Decide whether a compatibility adapter should retain document-wide labels for scoped snapshots.
 - Define stable-box and pointer-target evidence before actions claim complete actionability.
 
 Drafted from Rust implementation and automated boundary tests on 2026-08-31.

@@ -1,14 +1,18 @@
 use browser_jr::{
     ActionabilityCheck, AltLocator, ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot,
-    CheckElementWidth, ClickByLocator, ClickByLocatorResult, ClickByRole, ClickByRoleResult,
-    ClickElement, ClickResult, Comparison, CssLocator, ElementInput, ElementVisible, FillByLocator,
-    FillByRole, FillElement, FillResult, FindByLocator, FindByRole, GetElementAttribute,
-    GetElementChecked, GetElementEnabled, GetElementText, GetElementValue, GetElementVisible,
-    GetPageTitle, GetPageUrl, HoverByLocator, HoverByRole, InteractiveElementState, LabelLocator,
-    LayoutInput, LayoutMutation, LintLayout, Locator, LocatorAction, OpenPage, PlaceholderLocator,
-    ReloadPage, RoleAction, RoleLocator, RuleConstraint, RuleResult, SelectElement, SelectResult,
+    CaptureInteractiveSnapshotWithin, CheckElementWidth, ClickByLocator, ClickByLocatorResult,
+    ClickByRole, ClickByRoleResult, ClickElement, ClickResult, Comparison, CountByLocator,
+    CssLocator, ElementInput, ElementVisible, FillByLocator, FillByRole, FillElement, FillResult,
+    FindAllByLocator, FindByLocator, FindByRole, GetAttributeByLocator, GetCheckedByLocator,
+    GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementHtml, GetElementText,
+    GetElementValue, GetElementVisible, GetEnabledByLocator, GetHtmlByLocator, GetPageTitle,
+    GetPageUrl, GetValueByLocator, GetVisibleByLocator, HoverByLocator, HoverByRole,
+    InteractiveElementState, LabelLocator, LayoutInput, LayoutMutation, LintLayout, Locator,
+    LocatorAction, LocatorInspection, NonEmpty, OpenPage, PlaceholderLocator, ReloadPage,
+    RoleAction, RoleLocator, RuleConstraint, RuleResult, SelectByLocator, SelectElement,
+    SelectOptionTarget, SelectOptions, SelectOptionsByLocator, SelectOptionsResult, SelectResult,
     Session, SessionError, SetCheckedByLocator, SetCheckedByRole, SetElementChecked, TestIdLocator,
-    TextLocator, TitleLocator,
+    TextLocator, TitleLocator, XPathLocator,
 };
 use std::io::Write;
 use std::net::TcpListener;
@@ -16,6 +20,16 @@ use std::sync::{Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
 static NETWORK_TEST: Mutex<()> = Mutex::new(());
+
+fn value_targets(values: &[&str]) -> NonEmpty<SelectOptionTarget> {
+    NonEmpty::from_vec(
+        values
+            .iter()
+            .map(|value| SelectOptionTarget::Value((*value).into()))
+            .collect(),
+    )
+    .expect("test option targets are non-empty")
+}
 
 fn network_test_guard() -> MutexGuard<'static, ()> {
     NETWORK_TEST
@@ -96,6 +110,84 @@ fn package_session_assigns_fresh_refs_to_each_interactive_snapshot() {
     assert_eq!(first.elements[1].reference.to_string(), "@e2");
     assert_eq!(first.elements[1].role, "button");
     assert_eq!(first.elements[1].name, "Save");
+}
+
+#[test]
+fn scoped_snapshots_keep_only_descendants_and_map_refs_to_source_elements() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button id="outside">Outside</button>
+            <section id="scope">
+                <input aria-label="Email">
+                <button>Inside</button>
+            </section>
+            <section id="empty"><p>Nothing interactive</p></section>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let full = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let scoped = session
+        .execute(CaptureInteractiveSnapshotWithin {
+            locator: Locator::from(CssLocator::new("#scope").unwrap()),
+        })
+        .unwrap();
+    let inside = session
+        .execute(GetElementText {
+            reference: scoped.elements[1].reference,
+        })
+        .unwrap();
+    let missing_locator = Locator::from(CssLocator::new(".missing").unwrap());
+    let missing = session.execute(CaptureInteractiveSnapshotWithin {
+        locator: missing_locator.clone(),
+    });
+    let inside_after_failed_scope = session
+        .execute(GetElementText {
+            reference: scoped.elements[1].reference,
+        })
+        .unwrap();
+    let stale = session.execute(GetElementText {
+        reference: full.elements[0].reference,
+    });
+    let empty = session
+        .execute(CaptureInteractiveSnapshotWithin {
+            locator: Locator::from(CssLocator::new("#empty").unwrap()),
+        })
+        .unwrap();
+    let target = session
+        .execute(CaptureInteractiveSnapshotWithin {
+            locator: Locator::from(CssLocator::new("#outside").unwrap()),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        scoped
+            .elements
+            .iter()
+            .map(|element| (element.reference.to_string(), element.name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("@e1".into(), "Email"), ("@e2".into(), "Inside")]
+    );
+    assert_eq!(inside.text, "Inside");
+    assert_eq!(inside_after_failed_scope.text, "Inside");
+    assert_eq!(
+        missing,
+        Err(SessionError::LocatorNotFound {
+            locator: missing_locator,
+        })
+    );
+    assert_eq!(
+        stale,
+        Err(SessionError::StaleElementReference {
+            reference: full.elements[0].reference,
+        })
+    );
+    assert!(empty.elements.is_empty());
+    assert_eq!(target.elements.len(), 1);
+    assert_eq!(target.elements[0].name, "Outside");
 }
 
 #[test]
@@ -865,6 +957,367 @@ fn css_position_locators_select_document_order_without_ambiguity() {
 }
 
 #[test]
+fn document_css_and_xpath_locators_share_strict_resolution_and_state() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <form><input id="email" name="email" value="old"></form>
+            <section data-kind="cards">
+                <button id="first">One</button>
+                <button id="second">Two</button>
+            </section>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let email_ref = snapshot.elements[0].reference;
+
+    let filled = session
+        .execute(FillByLocator {
+            locator: Locator::from(
+                CssLocator::new("form > input[name='email']:first-child").unwrap(),
+            ),
+            value: "changed".into(),
+        })
+        .unwrap();
+    let xpath = session
+        .execute(FindByLocator {
+            locator: Locator::from(
+                XPathLocator::new("//section[@data-kind='cards']/button[2]").unwrap(),
+            ),
+        })
+        .unwrap();
+    let ambiguous_locator = Locator::from(CssLocator::new("section > button").unwrap());
+    let ambiguous = session.execute(FindByLocator {
+        locator: ambiguous_locator.clone(),
+    });
+    let scalar_locator = Locator::from(XPathLocator::new("count(//button)").unwrap());
+    let scalar = session.execute(FindByLocator {
+        locator: scalar_locator.clone(),
+    });
+    let preserved = session.execute(GetElementValue {
+        reference: email_ref,
+    });
+    drop(network_guard);
+
+    assert_eq!(filled.matched.element, "email");
+    assert_eq!(filled.value, "changed");
+    assert_eq!(xpath.element, "second");
+    assert_eq!(xpath.text, "Two");
+    assert_eq!(
+        ambiguous,
+        Err(SessionError::LocatorAmbiguous {
+            locator: ambiguous_locator,
+            match_count: 2,
+        })
+    );
+    assert!(matches!(
+        scalar,
+        Err(SessionError::LocatorQuery { locator, reason })
+            if locator == scalar_locator && reason.contains("did not return only elements")
+    ));
+    assert_eq!(preserved.unwrap().value, "changed");
+}
+
+#[test]
+fn locator_collections_return_document_order_and_allow_zero_matches() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <section class="cards">
+                <button id="first" class="card">One</button>
+                <button id="second" class="card">Two</button>
+                <button id="third" class="card">Three</button>
+            </section>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let all = session
+        .execute(FindAllByLocator {
+            locator: Locator::from(CssLocator::new("section.cards > .card").unwrap()),
+        })
+        .unwrap();
+    let xpath_count = session
+        .execute(CountByLocator {
+            locator: Locator::from(XPathLocator::new("//section/button").unwrap()),
+        })
+        .unwrap();
+    let missing = session
+        .execute(CountByLocator {
+            locator: Locator::from(CssLocator::new(".missing").unwrap()),
+        })
+        .unwrap();
+    let positioned = session
+        .execute(FindAllByLocator {
+            locator: Locator::from(CssLocator::nth(1, ".card").unwrap()),
+        })
+        .unwrap();
+    let scalar_locator = Locator::from(XPathLocator::new("count(//button)").unwrap());
+    let scalar = session.execute(CountByLocator {
+        locator: scalar_locator.clone(),
+    });
+    drop(network_guard);
+
+    assert_eq!(
+        all.matches
+            .iter()
+            .map(|matched| matched.element.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "second", "third"]
+    );
+    assert_eq!(xpath_count.count, 3);
+    assert_eq!(missing.count, 0);
+    assert_eq!(positioned.matches.len(), 1);
+    assert_eq!(positioned.matches[0].element, "second");
+    assert!(matches!(
+        scalar,
+        Err(SessionError::LocatorQuery { locator, reason })
+            if locator == scalar_locator && reason.contains("did not return only elements")
+    ));
+}
+
+#[test]
+fn locator_reads_and_form_actions_share_current_selector_state() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <input id="email" value="old">
+            <input id="terms" type="checkbox">
+            <select id="size">
+                <option value="small">Small</option>
+                <option value="large">Large</option>
+                <option value="blocked" disabled>Blocked</option>
+            </select>
+            <select id="many" multiple>
+                <option value="a" selected>A</option>
+                <option value="b">B</option>
+                <option value="blocked" disabled>Blocked</option>
+            </select>
+            <select id="locked" disabled><option value="only">Only</option></select>
+            <select id="invisible" hidden><option value="only">Only</option></select>
+            <button id="disabled" disabled>Save</button>
+            <div id="hidden" hidden>Hidden</div>
+            <div id="card" data-kind="demo">Card</div>
+            <input id="secret" type="password" value="private">
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let email_locator = Locator::from(CssLocator::new("#email").unwrap());
+    let terms_locator = Locator::from(CssLocator::new("#terms").unwrap());
+    let size_locator = Locator::from(CssLocator::new("#size").unwrap());
+    let many_locator = Locator::from(CssLocator::new("#many").unwrap());
+    let initial_email = session
+        .execute(GetValueByLocator {
+            locator: email_locator,
+        })
+        .unwrap();
+    let card_attribute = session
+        .execute(GetAttributeByLocator {
+            locator: Locator::from(CssLocator::new("#card").unwrap()),
+            name: "DATA-KIND".into(),
+        })
+        .unwrap();
+    let initial_checked = session
+        .execute(GetCheckedByLocator {
+            locator: terms_locator.clone(),
+        })
+        .unwrap();
+    let disabled = session
+        .execute(GetEnabledByLocator {
+            locator: Locator::from(CssLocator::new("#disabled").unwrap()),
+        })
+        .unwrap();
+    let hidden = session
+        .execute(GetVisibleByLocator {
+            locator: Locator::from(CssLocator::new("#hidden").unwrap()),
+        })
+        .unwrap();
+    session
+        .execute(SetCheckedByLocator {
+            locator: terms_locator.clone(),
+            checked: true,
+        })
+        .unwrap();
+    let selected = session
+        .execute(SelectByLocator {
+            locator: size_locator.clone(),
+            value: "large".into(),
+        })
+        .unwrap();
+    let current_checked = session
+        .execute(GetCheckedByLocator {
+            locator: terms_locator,
+        })
+        .unwrap();
+    let current_size = session
+        .execute(GetValueByLocator {
+            locator: size_locator.clone(),
+        })
+        .unwrap();
+    let selected_many = session
+        .execute(SelectOptionsByLocator {
+            locator: many_locator.clone(),
+            options: value_targets(&["b", "a"]),
+        })
+        .unwrap();
+    let current_many = session
+        .execute(GetValueByLocator {
+            locator: many_locator.clone(),
+        })
+        .unwrap();
+    let blocked_many = session.execute(SelectOptionsByLocator {
+        locator: many_locator.clone(),
+        options: value_targets(&["a", "blocked"]),
+    });
+    let current_many_after_failure = session
+        .execute(GetValueByLocator {
+            locator: many_locator.clone(),
+        })
+        .unwrap();
+    let disabled_option = session.execute(SelectByLocator {
+        locator: size_locator,
+        value: "blocked".into(),
+    });
+    let locked_locator = Locator::from(CssLocator::new("#locked").unwrap());
+    let locked = session.execute(SelectByLocator {
+        locator: locked_locator.clone(),
+        value: "only".into(),
+    });
+    let invisible_locator = Locator::from(CssLocator::new("#invisible").unwrap());
+    let invisible = session.execute(SelectByLocator {
+        locator: invisible_locator.clone(),
+        value: "only".into(),
+    });
+    let secret_locator = Locator::from(CssLocator::new("#secret").unwrap());
+    let secret = session.execute(GetAttributeByLocator {
+        locator: secret_locator.clone(),
+        name: "value".into(),
+    });
+    drop(network_guard);
+
+    assert_eq!(initial_email.value, "old");
+    assert_eq!(card_attribute.name, "data-kind");
+    assert_eq!(card_attribute.value.as_deref(), Some("demo"));
+    assert!(!initial_checked.checked);
+    assert!(!disabled.enabled);
+    assert!(!hidden.visible);
+    assert!(current_checked.checked);
+    assert_eq!(selected.value, "large");
+    assert_eq!(current_size.value, "large");
+    assert_eq!(
+        selected_many.selected,
+        NonEmpty::from_vec(vec!["b".into(), "a".into()]).unwrap()
+    );
+    assert_eq!(current_many.value, "a");
+    assert_eq!(
+        blocked_many,
+        Err(SessionError::LocatorSelectOptionDisabled {
+            locator: many_locator,
+            value: "blocked".into(),
+        })
+    );
+    assert_eq!(current_many_after_failure.value, "a");
+    assert_eq!(
+        disabled_option,
+        Err(SessionError::LocatorSelectOptionDisabled {
+            locator: Locator::from(CssLocator::new("#size").unwrap()),
+            value: "blocked".into(),
+        })
+    );
+    assert!(matches!(
+        locked,
+        Err(SessionError::LocatorActionBlocked {
+            locator,
+            action: LocatorAction::Select,
+            check: ActionabilityCheck::Enabled,
+            ..
+        }) if locator == locked_locator
+    ));
+    assert!(matches!(
+        invisible,
+        Err(SessionError::LocatorActionBlocked {
+            locator,
+            action: LocatorAction::Select,
+            check: ActionabilityCheck::Visible,
+            ..
+        }) if locator == invisible_locator
+    ));
+    assert_eq!(
+        secret,
+        Err(SessionError::SensitiveLocatorAttribute {
+            locator: secret_locator,
+            name: "value".into(),
+        })
+    );
+}
+
+#[test]
+fn inner_html_reads_share_normalized_dom_and_block_sensitive_descendants() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <section id="card"><span data-x="a&amp;b">Hello &amp; <b>world</b></span><!-- note --></section>
+            <button id="action"><span>Save</span></button>
+            <div id="secret" role="button"><input type="password" value="private"></div>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let expected = r#"<span data-x="a&amp;b">Hello &amp; <b>world</b></span><!-- note -->"#;
+    let css = session
+        .execute(GetHtmlByLocator {
+            locator: Locator::from(CssLocator::new("#card").unwrap()),
+        })
+        .unwrap();
+    let xpath = session
+        .execute(GetHtmlByLocator {
+            locator: Locator::from(XPathLocator::new("//section[@id='card']").unwrap()),
+        })
+        .unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let reference = session
+        .execute(GetElementHtml {
+            reference: snapshot.elements[0].reference,
+        })
+        .unwrap();
+    let secret_locator = Locator::from(CssLocator::new("#secret").unwrap());
+    let sensitive_locator = session.execute(GetHtmlByLocator {
+        locator: secret_locator.clone(),
+    });
+    let sensitive_reference = session.execute(GetElementHtml {
+        reference: snapshot.elements[1].reference,
+    });
+    drop(network_guard);
+
+    assert_eq!(css.html, expected);
+    assert_eq!(xpath.html, expected);
+    assert_eq!(reference.html, "<span>Save</span>");
+    assert!(matches!(
+        sensitive_locator,
+        Err(SessionError::UnsupportedLocatorInspection {
+            locator,
+            inspection: LocatorInspection::Html,
+            reason,
+        }) if locator == secret_locator && reason.contains("password value")
+    ));
+    assert!(matches!(
+        sensitive_reference,
+        Err(SessionError::UnsupportedHtml { reason, .. })
+            if reason.contains("password value")
+    ));
+}
+
+#[test]
 fn opening_a_new_document_replaces_interactive_refs() {
     let network_guard = network_test_guard();
     let (first_url, first_server) = serve_page(r#"<button>First</button>"#);
@@ -1138,7 +1591,7 @@ fn text_value_actions_update_and_read_current_state() {
 }
 
 #[test]
-fn select_actions_update_single_selects_and_preserve_failure_state() {
+fn select_actions_update_native_selects_and_preserve_failure_state() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(
         r#"
@@ -1149,7 +1602,11 @@ fn select_actions_update_single_selects_and_preserve_failure_state() {
                 <optgroup disabled><option value="group">Group</option></optgroup>
             </select>
             <select aria-label="Locked" disabled><option value="fixed">Fixed</option></select>
-            <select aria-label="Many" multiple><option value="a" selected>A</option></select>
+            <select aria-label="Many" multiple>
+                <option value="a" selected>A</option>
+                <option value="b" selected>B</option>
+                <option value="disabled" disabled>Disabled</option>
+            </select>
             <button>Save</button>
         "#,
     );
@@ -1169,6 +1626,18 @@ fn select_actions_update_single_selects_and_preserve_failure_state() {
         })
         .unwrap();
     let repeated = session
+        .execute(SelectElement {
+            reference: size,
+            value: "large value".into(),
+        })
+        .unwrap();
+    let single_from_many_values = session
+        .execute(SelectOptions {
+            reference: size,
+            options: value_targets(&["large value", "s"]),
+        })
+        .unwrap();
+    session
         .execute(SelectElement {
             reference: size,
             value: "large value".into(),
@@ -1196,11 +1665,32 @@ fn select_actions_update_single_selects_and_preserve_failure_state() {
         reference: locked,
         value: "fixed".into(),
     });
-    let multiple_value = session.execute(GetElementValue { reference: many });
-    let multiple_select = session.execute(SelectElement {
+    let initial_multiple_value = session
+        .execute(GetElementValue { reference: many })
+        .unwrap();
+    let single_multiple_select = session
+        .execute(SelectElement {
+            reference: many,
+            value: "b".into(),
+        })
+        .unwrap();
+    let multiple_select = session
+        .execute(SelectOptions {
+            reference: many,
+            options: value_targets(&["b", "a"]),
+        })
+        .unwrap();
+    let disabled_multiple = session.execute(SelectOptions {
         reference: many,
-        value: "a".into(),
+        options: value_targets(&["b", "disabled"]),
     });
+    let missing_multiple = session.execute(SelectOptions {
+        reference: many,
+        options: value_targets(&["b", "missing"]),
+    });
+    let final_multiple_value = session
+        .execute(GetElementValue { reference: many })
+        .unwrap();
     let wrong_role = session.execute(SelectElement {
         reference: button,
         value: "anything".into(),
@@ -1222,7 +1712,7 @@ fn select_actions_update_single_selects_and_preserve_failure_state() {
     );
     assert_eq!(
         before.elements[2].state,
-        InteractiveElementState::Unavailable
+        InteractiveElementState::Value("a".into())
     );
     assert_eq!(
         selected,
@@ -1232,6 +1722,7 @@ fn select_actions_update_single_selects_and_preserve_failure_state() {
         }
     );
     assert_eq!(repeated, selected);
+    assert_eq!(single_from_many_values.selected, NonEmpty::one("s".into()));
     assert_eq!(current.value, "large value");
     assert_eq!(locked_value.value, "fixed");
     assert_eq!(
@@ -1259,14 +1750,30 @@ fn select_actions_update_single_selects_and_preserve_failure_state() {
         locked_select,
         Err(SessionError::UnsupportedSelect { reference, .. }) if reference == locked
     ));
-    assert!(matches!(
-        multiple_value,
-        Err(SessionError::UnsupportedValue { reference, .. }) if reference == many
-    ));
-    assert!(matches!(
+    assert_eq!(initial_multiple_value.value, "a");
+    assert_eq!(single_multiple_select.value, "b");
+    assert_eq!(
         multiple_select,
-        Err(SessionError::UnsupportedSelect { reference, .. }) if reference == many
-    ));
+        SelectOptionsResult {
+            reference: many,
+            selected: NonEmpty::from_vec(vec!["b".into(), "a".into()]).unwrap(),
+        }
+    );
+    assert_eq!(
+        disabled_multiple,
+        Err(SessionError::SelectOptionDisabled {
+            reference: many,
+            value: "disabled".into(),
+        })
+    );
+    assert_eq!(
+        missing_multiple,
+        Err(SessionError::SelectOptionNotFound {
+            reference: many,
+            value: "missing".into(),
+        })
+    );
+    assert_eq!(final_multiple_value.value, "a");
     assert!(matches!(
         wrong_role,
         Err(SessionError::UnsupportedSelect { reference, .. }) if reference == button
@@ -1276,9 +1783,105 @@ fn select_actions_update_single_selects_and_preserve_failure_state() {
         InteractiveElementState::Value("large value".into())
     );
     assert_eq!(
+        after.elements[2].state,
+        InteractiveElementState::Value("a".into())
+    );
+    assert_eq!(
         stale,
         Err(SessionError::StaleElementReference { reference: size })
     );
+}
+
+#[test]
+fn select_options_match_labels_and_indexes_transactionally() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <select id="many" aria-label="Many" multiple>
+                <option value="a" label="Alpha label" selected>Alpha text</option>
+                <option value="b">Bravo text</option>
+                <option value="c" label="Charlie label" disabled>Charlie text</option>
+            </select>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let many = snapshot.elements[0].reference;
+    let locator = Locator::from(CssLocator::new("#many").unwrap());
+
+    let selected = session
+        .execute(SelectOptions {
+            reference: many,
+            options: NonEmpty::from_vec(vec![
+                SelectOptionTarget::Label("Bravo text".into()),
+                SelectOptionTarget::Index(0),
+            ])
+            .unwrap(),
+        })
+        .unwrap();
+    let selected_by_locator = session
+        .execute(SelectOptionsByLocator {
+            locator: locator.clone(),
+            options: NonEmpty::from_vec(vec![
+                SelectOptionTarget::Label("Alpha label".into()),
+                SelectOptionTarget::Index(1),
+            ])
+            .unwrap(),
+        })
+        .unwrap();
+    let missing_label = session.execute(SelectOptions {
+        reference: many,
+        options: NonEmpty::from_vec(vec![
+            SelectOptionTarget::Index(1),
+            SelectOptionTarget::Label("missing".into()),
+        ])
+        .unwrap(),
+    });
+    let disabled_index = session.execute(SelectOptions {
+        reference: many,
+        options: NonEmpty::one(SelectOptionTarget::Index(2)),
+    });
+    let missing_index = session.execute(SelectOptionsByLocator {
+        locator: locator.clone(),
+        options: NonEmpty::one(SelectOptionTarget::Index(3)),
+    });
+    let current = session
+        .execute(GetElementValue { reference: many })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        selected.selected,
+        NonEmpty::from_vec(vec!["b".into(), "a".into()]).unwrap()
+    );
+    assert_eq!(
+        selected_by_locator.selected,
+        NonEmpty::from_vec(vec!["a".into(), "b".into()]).unwrap()
+    );
+    assert_eq!(
+        missing_label,
+        Err(SessionError::SelectOptionTargetNotFound {
+            reference: many,
+            target: SelectOptionTarget::Label("missing".into()),
+        })
+    );
+    assert_eq!(
+        disabled_index,
+        Err(SessionError::SelectOptionTargetDisabled {
+            reference: many,
+            target: SelectOptionTarget::Index(2),
+        })
+    );
+    assert_eq!(
+        missing_index,
+        Err(SessionError::LocatorSelectOptionTargetNotFound {
+            locator,
+            target: SelectOptionTarget::Index(3),
+        })
+    );
+    assert_eq!(current.value, "a");
 }
 
 #[test]

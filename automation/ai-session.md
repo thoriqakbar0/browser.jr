@@ -4,9 +4,11 @@
 
 `browser.jr session` keeps one engine session alive while it reads line commands from stdin.
 
-The implemented commands cover pages, locators, snapshots, links, text values, selects, checkboxes, visibility, URLs, and titles. They include `help` and `exit`.
+The implemented commands cover pages, locators, snapshots, links, HTML, text values, selects, checkboxes, visibility, URLs, and titles. They include `help` and `exit`.
 
 This text protocol lets an AI agent reuse page and snapshot state. It is separate from the planned JavaScript REPL.
+
+The one-shot snapshot command supports JSON. Session mode does not use that envelope yet.
 
 ## The simple case
 
@@ -60,35 +62,43 @@ Inside session mode, malformed commands report an error. The process then reads 
 
 `snapshot --interactive` captures supported semantic elements from the current page.
 
-`find` supports role, text, label, placeholder, alt, title, test ID, and positioned compound CSS locators.
+`snapshot --interactive -s <css>` limits a capture to one strict CSS subtree.
+
+`find` supports role, text, label, placeholder, alt, title, test ID, CSS, XPath, and positioned CSS locators.
 
 Each locator kind composes click, fill, check, uncheck, hover, and text operations.
 
 Locator commands default to click. [`inspection/query-elements.md`](../inspection/query-elements.md) owns their matching and action behavior.
 
-`click` resolves its label only through the latest reported snapshot.
+`click` resolves a current reference or direct selector.
 
-`fill` resolves the same label and replaces a supported text-control value.
+`fill` resolves a current reference or direct selector and replaces a supported text-control value.
 
-`select` resolves the same label and selects one exact native option value.
+`select` resolves a current reference or direct selector. An unquoted remainder selects one exact value.
 
-`get value` reads that current value without creating another snapshot.
+Quoted values select a non-empty value list: `select @e1 "b" "a"`.
 
-`get text` reads normalized descendant text from a current interactive reference.
+`get value` reads a current reference or direct selector without creating another snapshot.
 
-`get attr` reads one static attribute. Missing values report `null`.
+`get html` reads normalized static child markup from a current reference or direct selector.
+
+`get text` reads normalized descendant text from a current reference or direct selector.
+
+`get attr` reads one static attribute from a current reference or direct selector. Missing values report `null`.
+
+`get count` prints the number of current direct-selector matches.
 
 `get url` reads the current page URL without requiring a snapshot.
 
 `get title` reads the current normalized page title without requiring a snapshot.
 
-`check` and `uncheck` replace supported native checkbox state.
+`check` and `uncheck` replace supported native checkbox state through a reference or direct selector.
 
-`is checked` reads that current state without another snapshot.
+`is checked` reads that current state through a reference or direct selector.
 
-`is enabled` reads supported native disabled state without another snapshot.
+`is enabled` reads supported native disabled state through a reference or direct selector.
 
-`is visible` reads supported static box and visibility state without another snapshot.
+`is visible` reads supported static box and visibility state through a reference or direct selector.
 
 ### While running
 
@@ -96,7 +106,9 @@ The adapter owns one `Session`. It keeps the current page and latest reference s
 
 Each successful snapshot replaces the previous reference set. Human labels may repeat, but their typed identities do not.
 
-Locator text, fill, check, and uncheck preserve the current reference set. Failed locator actions also preserve it.
+Failed scoped captures preserve the previous reference set.
+
+Locator reads, collections, fill, select, check, and uncheck preserve the current reference set. Failed locator actions also preserve it.
 
 A successful locator link click installs a fresh document and clears the current reference set.
 
@@ -111,6 +123,8 @@ Successful and unsupported fills also preserve the current reference set.
 Successful and rejected selects preserve the current reference set.
 
 Value reads never change the reference set.
+
+HTML reads never change the reference set.
 
 Text reads never change the reference set.
 
@@ -140,7 +154,7 @@ Any command error affects the final exit status even when later commands succeed
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | `session` accepts no flags. | `snapshot -i` equals `snapshot --interactive`. Find, fill, and select parse their documented remaining text. |
+| Flags and options | `session` accepts no flags. | `snapshot -i` equals `snapshot --interactive`. Snapshot scopes accept one quoted CSS selector. |
 | Project configuration | No session configuration exists. | Commands cannot reload configuration. |
 | Target matrix | The first successful `open` selects one page. | Another successful `open` or link click replaces its document. |
 | Output channel | Results use stdout. Errors use stderr. | Both streams flush after each command. |
@@ -185,6 +199,9 @@ Status three takes priority over status two. Session mode does not run a finding
 - `snapshot` before `open` reports an error and keeps the process alive.
 - A snapshot header gives the number of following element lines.
 - An empty snapshot installs an empty reference set.
+- A scoped snapshot reports only interactive elements in its resolved subtree.
+- Scoped snapshot labels start at `@e1` and resolve through the snapshot's source map.
+- A failed scoped snapshot preserves the current reference set.
 - A locator action does not require an earlier snapshot.
 - A locator command without an action defaults to click.
 - Locator text, fill, check, and uncheck preserve the current reference set.
@@ -205,6 +222,8 @@ Status three takes priority over status two. Session mode does not run a finding
 - Select values may contain spaces. They cannot contain line breaks.
 - Select trims delimiter whitespace before the value. It preserves trailing whitespace.
 - A trailing delimiter lets select request an empty value.
+- An unquoted select remainder is one value, including spaces.
+- Quoted select values form one non-empty list. Every list value must use quotes.
 - A failed open keeps the current page and reference set.
 - A failed reload keeps the current page and reference set.
 - A successful reload clears the current reference set.
@@ -212,10 +231,12 @@ Status three takes priority over status two. Session mode does not run a finding
 - A successful or unsupported fill keeps the current reference set.
 - A successful or rejected select keeps the current reference set.
 - A value read keeps the current reference set.
+- An HTML read keeps the current reference set.
 - A text read keeps the current reference set.
 - Elements without descendant text return an empty quoted string.
 - Missing attributes report `null`.
 - Password input `value` attributes remain blocked.
+- HTML reads block when child markup contains a password input source value.
 - `get url` before a successful open reports that no page is open.
 - `get title` before a successful open reports that no page is open.
 - A missing HTML title produces `title=""`.
@@ -224,13 +245,14 @@ Status three takes priority over status two. Session mode does not run a finding
 - Checked-state reads reject controls without supported native state.
 - Enabled-state reads reject explicit roles without supported native behavior.
 - Visibility reads reject unavailable stylesheet or box evidence.
-- Multiple selects and disabled options reject selection changes.
+- Single and multiple native selects accept exact values.
+- A missing or disabled option rejects the complete selection without mutation.
 - A successful click clears references before the next command.
 - `exit` ignores later input lines.
 
 ## Open questions and verification
 
-- Define machine-readable output and command identifiers.
+- Define line-oriented machine-readable session output and command identifiers.
 - Define command cancellation without losing a healthy session.
 - Define input length limits and backpressure.
 - Expand CSS selector grammar and add XPath locators through typed request fields.

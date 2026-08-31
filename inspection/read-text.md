@@ -2,9 +2,9 @@
 
 ## Summary
 
-Package callers submit `GetElementText` with a current interactive reference.
+Package callers submit `GetElementText` with a reference or read `LocatorMatch::text` through `FindByLocator`.
 
-Session-mode callers send `get text <ref>` after an interactive snapshot.
+Session-mode callers send `get text <ref|selector>`. Direct selectors need no snapshot.
 
 The result contains normalized descendant text from the loaded static HTML.
 
@@ -18,9 +18,9 @@ browser.jr returns the element's descendant text. It collapses whitespace before
 
 ```mermaid
 stateDiagram-v2
-    [*] --> checking_reference
-    checking_reference --> rejected : missing or stale reference
-    checking_reference --> reading : current reference
+    [*] --> resolving_target
+    resolving_target --> rejected : stale, missing, or non-unique target
+    resolving_target --> reading : current reference or strict locator
     reading --> reporting : normalized text
     reporting --> finished
     rejected --> finished
@@ -28,9 +28,9 @@ stateDiagram-v2
 
 ### Invoke
 
-The package request contains one typed reference.
+The package request contains one typed reference or locator.
 
-Session mode reads `get text` and one displayed reference.
+Session mode reads `get text` and one reference or selector.
 
 ### Exit immediately
 
@@ -40,9 +40,9 @@ An unknown session label reports invalid input. Neither path reads another eleme
 
 ### Begin running
 
-browser.jr resolves the reference through the latest interactive snapshot.
+browser.jr resolves a reference through the latest interactive snapshot or a locator through the current document.
 
-Every supported interactive element has a text result. Elements without descendant text return an empty string.
+Every parsed locator element has a text result. Elements without descendant text return an empty string.
 
 ### While running
 
@@ -52,9 +52,9 @@ The read does not capture, dispatch events, run scripts, or change focus.
 
 ### Finish
 
-The package returns `ElementText` with the reference and string.
+The package returns `ElementText` for a reference or `LocatorMatch` for a locator.
 
-Session mode reports `text ref=<ref> <quoted-text>` and flushes stdout.
+Reference output reports `text ref=<ref> <quoted-text>`. Direct selectors print normalized text.
 
 The reference remains current after the read.
 
@@ -62,7 +62,7 @@ The reference remains current after the read.
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | The package and session commands take one reference. | No text-read flags exist. |
+| Flags and options | The package and session commands take one reference or locator. | No text-read flags exist. |
 | Project configuration | No text-inspection configuration exists. | Nothing reloads. |
 | Target matrix | The current page and snapshot select one element. | The read does not change it. |
 | Output channel | The package returns a typed string. Session mode uses quoted text. | Session mode flushes stdout. |
@@ -105,13 +105,13 @@ The reference remains current after the read.
 - An `aria-label` does not replace descendant text.
 - Text-control fills do not change source descendant text.
 - A direct read does not invalidate its reference.
+- Direct selectors resolve non-interactive elements strictly without a snapshot.
 - A later snapshot invalidates references from the previous snapshot.
 - Session output escapes quotes, backslashes, controls, and line breaks.
 
 ## Open questions and verification
 
 - Define CSS-aware rendered text after visibility and layout support expands.
-- Define text reads for non-interactive element locators.
 - Define machine-readable response encoding.
 
 Drafted from Rust package and compiled-process tests on 2026-08-31.

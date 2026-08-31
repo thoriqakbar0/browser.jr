@@ -20,6 +20,12 @@ Inspect interactive elements:
 ./browser.jr snapshot http://localhost:3000 --interactive
 ```
 
+Pipe one interactive snapshot as JSON:
+
+```sh
+./browser.jr --json snapshot http://localhost:3000 --interactive
+```
+
 Keep one page alive across commands:
 
 ```sh
@@ -32,19 +38,22 @@ printf 'open http://localhost:3000\nsnapshot --interactive\nget title\nexit\n' \
 - bounded loopback HTTP loading
 - static HTML parsing
 - a small inline CSS and horizontal layout subset
-- role, text, label, attribute, and compound CSS locators
-- text input, checkbox, single-select, and same-context link actions
-- URL, title, text, value, attribute, enabled, and visibility reads
-- interactive snapshots with a tested accessibility subset
+- role, text, label, attribute, CSS, and XPath locators
+- direct CSS and XPath targets for implemented session actions, reads, and counts
+- text input, checkbox, native single-select, multiple-select, and same-context link actions
+- URL, title, HTML, text, value, attribute, enabled, and visibility reads
+- whole-page and CSS-scoped interactive snapshots with a tested accessibility subset
+- one-shot snapshot JSON with structured success and failure envelopes
 - two deterministic layout checks
 - transactional incremental layout for `x` and `width`
+- validated screenshot regions, paint commands, RGBA output, and lazy raster-process activation
 
 ## What does not work
 
 - JavaScript
 - DOM events
 - a complete DOM, CSS cascade, or layout engine
-- painting, screenshots, or compositing
+- page paint-list construction, screenshot output, or compositing
 - Playwright or `agent-browser` protocol compatibility
 - remote websites or HTTPS
 - a browser window
@@ -96,6 +105,7 @@ Evidence date: 31 August 2026.
 | `verification/check-state.md` | drafted |
 | `verification/read-text.md` | drafted |
 | `verification/read-attribute.md` | drafted |
+| `verification/read-html.md` | drafted |
 | `verification/read-enabled.md` | drafted |
 | `verification/read-visible.md` | drafted |
 | `verification/reload-page.md` | drafted |
@@ -122,6 +132,7 @@ Evidence date: 31 August 2026.
 | `inspection/read-checked.md` | drafted |
 | `inspection/read-text.md` | drafted |
 | `inspection/read-attribute.md` | drafted |
+| `inspection/read-html.md` | drafted |
 | `inspection/read-enabled.md` | drafted |
 | `inspection/read-visible.md` | drafted |
 | `inspection/inspect-layout.md` | not started |
