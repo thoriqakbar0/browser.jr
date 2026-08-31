@@ -1,10 +1,12 @@
 # browser.jr
 
-A memory-safe browser engine for programs and AI agents.
+A small browser for agents, built in Rust.
 
-browser.jr aims to let an agent inspect and control a page through one deterministic Rust session. It is a new engine, not a Chromium controller or wrapper around another browser.
+browser.jr is an attempt to give agents a small browser for verifying their own work. Its interfaces aim to support Playwright and `agent-browser` workflows.
 
-The first working slices load local pages, expose supported semantics, change native controls, follow links, compute limited layout, and run design checks. The CLI and Rust package share the same session model.
+This repository holds proof-of-concept engine slices. It tests the architecture and behavior before browser.jr becomes a complete browser.
+
+The current slices load local pages, expose supported semantics, change native controls, follow links, compute limited layout, and run design checks. The CLI and Rust package share the same session model.
 
 ## Current status
 
@@ -132,13 +134,15 @@ The element argument is a semantic element identifier. An HTML `id` supplies tha
 
 ## Purpose
 
-browser.jr gives programs and AI agents a browser they can inspect and control through typed requests.
+browser.jr explores whether a small Rust browser can help agents verify the interfaces they build.
 
 The engine returns semantic state and supported rendered evidence without requiring pixels or simulated pointer input. Actions resolve against the current document and report unsupported behavior explicitly.
 
 Design lint is the first verification workflow. It checks supported rendered evidence for measurable interface defects.
 
-The engine is a new implementation. It is not defined as a wrapper around an existing browser.
+The repository is a proof of concept. Its interfaces may change as each browser layer gains evidence.
+
+Compatibility with Playwright and `agent-browser` is a product goal. The current CLI and package do not implement either complete protocol.
 
 The primary experience is `browser.jr lint <url>` against a running development server. Package callers use the same typed observations.
 
@@ -257,9 +261,9 @@ A document becomes `drafted` after code evidence or an explicit product decision
 These decisions define intended scope. The [current status](#current-status) section records implementation evidence.
 
 - **Primary surface.** `browser.jr lint <url>` checks a live local page. Watch mode repeats checks during development.
-- **Product identity.** browser.jr is a new browser engine and package. Existing engines may inform conformance tests but do not define its architecture.
+- **Product identity.** browser.jr is a Rust proof of concept for a small browser that helps agents verify their work.
 - **First job.** Design lint reports measurable rendered-page defects. Grid inspection and user-agent comparison are first-class checks.
-- **AI access.** AI agents script the engine through the same session model as the REPL. A separate chat interface is outside scope.
+- **AI access.** Agents use the same session model as the CLI and package. Playwright and `agent-browser` compatibility remain product goals.
 - **Consumer browsing.** Tabs, bookmarks, accounts, extensions, saved history, and password management are outside scope.
 - **Compatibility.** Full web-platform compatibility is not assumed. Supported behavior must be explicit and tested.
 - **Performance.** "Small" and "fast" require numeric budgets before implementation can claim them.

@@ -4,7 +4,7 @@ The vocabulary used across these documents. Each definition states intended mean
 
 ## The engine
 
-**browser.jr.** The product and package described by this repository. It is a new browser engine for programmable interface verification.
+**browser.jr.** A Rust proof of concept for a small browser that helps agents verify their work. Playwright and `agent-browser` compatibility are product goals.
 
 **Engine.** The code that loads a page, interprets supported web content, computes rendered state, and exposes that state for inspection.
 
