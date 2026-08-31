@@ -83,6 +83,28 @@ pnpm browsers:install
 pnpm bench
 ```
 
+## Benchmark snapshot
+
+A clean Apple M3 run used 10 measured samples after 1 warmup. Every supported scenario passed its correctness check.
+
+| Adapter | Full-workflow median |
+| --- | ---: |
+| browser.jr | 22.55 ms |
+| Chrome | 375.36 ms |
+| Firefox | 643.46 ms |
+| WebKit | 681.95 ms |
+| Lightpanda | 492.45 ms |
+| agent-browser with Chrome | 7,366.00 ms |
+| agent-browser with Lightpanda | 1,693.90 ms |
+
+The workflow opens the fixture, inspects it, changes controls, reads their state, follows a link, and reads the destination title.
+
+browser.jr ran this workflow within its current static HTML boundary. It did not run the JavaScript evaluation or screenshot scenarios.
+
+These numbers measure browser-control latency, not rendering-engine speed or browser compatibility. agent-browser timings include its CLI and daemon overhead.
+
+[Read the complete result](benchmarks/results/README.md) for p95 values, scenario tables, runtime versions, and comparison limits.
+
 ## Project notes
 
 - [`architecture.md`](architecture.md) describes the proposed engine design.

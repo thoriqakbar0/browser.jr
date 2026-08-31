@@ -4,6 +4,8 @@ This suite compares browser.jr with Chrome, Firefox Gecko, WebKit, Lightpanda, a
 
 It measures browser-control workflows, not rendering-engine internals.
 
+[Read the latest recorded result](results/README.md) for a plain-language summary and latency tables.
+
 Chrome, Firefox, and WebKit use Playwright.
 
 Lightpanda uses Puppeteer over CDP, matching Lightpanda's published benchmark.
@@ -85,6 +87,8 @@ Use `pnpm bench -- --list` to print accepted engine and scenario names.
 The default result path is `benchmarks/results/latest.json`.
 
 The result records versions, host facts, git state, assertions, and latency distributions.
+
+The repository ignores raw JSON results. Update the recorded Markdown result only after a complete run passes.
 
 Any unavailable engine or incorrect result makes the command exit nonzero.
 
