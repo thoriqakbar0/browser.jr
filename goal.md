@@ -1,6 +1,6 @@
 # Goal: maintain the browser.jr product description
 
-You are working in the `browser.jr` repository. Read `README.md` and `glossary.md` first. The README defines the product, document template, fixed interaction shape, structure, and coverage table.
+You are working in the `browser.jr` repository. Read `README.md` and `glossary.md` first. The README defines the product, current status, project notes, and coverage table. This file defines the documentation workflow.
 
 The repository is at `/Users/thor/work/browser.jr`. Read the README's dated status before describing implementation.
 
