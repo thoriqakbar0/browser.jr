@@ -183,6 +183,14 @@ pub struct LayoutInput {
     pub elements: Vec<ElementInput>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundingBox {
+    pub x: i64,
+    pub y: i64,
+    pub width: u64,
+    pub height: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LayoutMutation {
     SetX { element: String, x: i64 },

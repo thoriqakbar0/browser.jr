@@ -1,8 +1,32 @@
 # Architecture draft
 
-Status: proposed internal architecture, 28 August 2026. Implementation evidence updated 31 August 2026.
+Status: proposed internal architecture, 28 August 2026. Implementation evidence updated 1 September 2026.
 
-The current source loads loopback HTML and computes a horizontal layout subset. It applies supported inline and embedded CSS declarations. It evaluates two rules and supports transactional `x` and `width` mutation batches. A session retains one static page and its URL and title. It reloads that page and navigates same-context links. It resolves semantic, attribute, CSS, and XPath locators at each action. Descendant and child selectors traverse normalized HTML ancestry. It inspects supported static visibility. It changes text, native checkbox, and native single-select or multiple-select state. Supported actions record native DOM events and their target-to-root paths. The CLI session adapter keeps that state across stdin commands. Many Rust types below remain design sketches. They do not define the package API.
+The current source loads loopback HTML. It computes horizontal and static block-flow layout subsets.
+
+html5ever builds normalized ancestry. Descendant and child selectors traverse that tree.
+
+The page applies supported inline and embedded CSS declarations.
+
+It evaluates two rules and supports transactional `x` and `width` mutation batches.
+
+A session retains one static page, URL, and title. It reloads pages and follows supported same-context navigation.
+
+Each action resolves semantic, attribute, CSS, or XPath locators against the current document.
+
+The page exposes supported static visibility and complete fixed or normal-flow boxes.
+
+It owns a configurable viewport, supported document extent, and bounded scroll offsets.
+
+The viewport defaults to 1280 by 720 CSS pixels.
+
+It changes text, native checkbox, radio, and select state. The CLI session keeps that state across stdin commands.
+
+Supported actions record native events and target-to-root paths.
+
+The CLI session also writes bounded solid-box PNG screenshots for supported capture targets.
+
+Many Rust types below remain design sketches. They do not define the package API.
 
 This document owns internal responsibilities and data flow. The [product description](README.md) owns user-visible scope. The [research note](research/browser-engine-and-design-lint-papers.md) records external evidence.
 
@@ -55,9 +79,17 @@ let observation: Observation = session.execute(observe_request).await?;
 
 Transport adapters may decode a closed wire command. They must convert it into a typed core request before execution. Wire types never enter the engine model.
 
-The implemented `cli_session` adapter stores typed references from the latest interactive snapshot. It resolves a displayed `@eN` only from that set. A successful open or navigation clears the set. A new snapshot replaces it.
+The implemented `cli_session` adapter stores typed references from the latest snapshot.
 
-The implemented `locator` module owns locator variants, text matching, test ID equality, selector validation, and document-order positions.
+It resolves a displayed `@eN` only from that sparse document-order set.
+
+A successful open or navigation clears the set. A new snapshot replaces it.
+
+The `cli_session_json` adapter wraps each input line in one JSON result. Sequence identifiers stay outside engine requests.
+
+The implemented `keyboard` module owns press keys, held modifiers, UTF-16 selections, and per-scalar focused text input.
+
+The implemented `locator` module owns locator variants, role filters, text matching, test ID equality, selector validation, and document-order positions.
 
 The implemented `page::selectors` module owns HTML5 document queries, source-element identity mapping, CSS selection, and XPath evaluation.
 
@@ -69,21 +101,57 @@ Role-specific requests preserve a required-role reply. Each typed locator action
 
 Typed locator reads resolve the same current candidate and return state without creating interactive references.
 
-Scoped interactive captures resolve a locator, collect subtree interactive indices, and store an explicit reference map.
+Scoped captures resolve a locator and collect its supported accessibility subtree.
 
-Fill, select, and checked-state locator requests mutate only after supported actionability checks pass.
+Interactive captures project reference targets. Full captures keep ordered role and text nodes.
 
-Supported link clicks install a new document only after loading succeeds. Failed actions preserve the current document and snapshot references.
+Both store sparse document-order reference maps.
 
-The implemented `page::interactive` module owns title normalization, semantic and source-attribute locator evidence, snapshots, actions, and controls.
-
-The implemented `page::visibility` module owns supported static visibility evidence.
+Snapshot elements keep resolved target URLs only for semantic links. Output adapters decide whether to print them.
 
 `page::dom` lets html5ever construct normalized HTML ancestry. `page` projects content, metadata, style text, and layout evidence from that tree.
 
 The implemented `page::style` module parses embedded rules and applies source order, selector specificity, and inline precedence. Linked stylesheets and unsupported CSS syntax block dependent evidence.
 
-`Session` records supported native DOM events. `TakeDomEvents` drains them through the package API. Session mode exposes the same queue with `events`.
+Fill, select, click, hover, and changed checked-state requests mutate only after supported actionability checks pass.
+
+Successful supported actions append data-minimized `DomEvent` records to a session-owned queue.
+
+Focused keyboard type records the portable per-scalar sequence measured across Playwright engines.
+
+Complete press records portable text and same-target native-control sequences.
+
+Held-key state remembers whether one supported down phase can later record its matching key-up.
+
+It also stores one pending native `Space` activation and its original event target.
+
+Matching key-up applies that effect only when the original target still owns focus.
+
+Records contain target structure and event metadata, not text or control values.
+
+`TakeDomEvents` drains the queue. Navigation replaces the document but preserves already recorded events and their source epoch.
+
+This transcript is an observation boundary. It does not execute JavaScript or deliver events to page handlers.
+
+Supported link and GET form navigation install a document only after loading succeeds.
+
+Failed actions preserve the current document and snapshot references.
+
+The implemented `page::interactive` module owns role mapping, accessibility-tree projection, names, state, source evidence, actions, and controls.
+
+Its content-name walk preserves descendant order and substitutes supported non-presentational image `alt` text.
+
+Its static stability evidence rejects inline animation and transition declarations in the target ancestry.
+
+The tokenizer preserves ordered element and direct-text children for accessibility projection.
+
+The implemented `page::visibility` module owns actionability and accessibility visibility evidence. `page` keeps tokenization and layout extraction.
+
+Page loading resolves one supported box tree and its positive document extent.
+
+Geometry and visibility reads project the same stored evidence.
+
+The current page subtracts scroll offsets from normal boxes. Fixed boxes remain viewport relative.
 
 ## System shape
 
@@ -117,19 +185,29 @@ The default engine stops after it creates structured fragments and evidence. It 
 
 ## Optional screenshot boundary
 
-The package defines the first screenshot boundary. `CaptureTarget` distinguishes a viewport, locator-resolved element, and explicit CSS-pixel rectangle. `CaptureRect` rejects empty regions and coordinate overflow. `PaintScene` contains browser.jr-owned paint commands. `RasterImage` accepts only complete RGBA buffers.
+The package screenshot boundary supports viewport, full-page, locator-resolved, and explicit rectangle targets. `CaptureRect` rejects empty regions and coordinate overflow. `PaintScene` contains browser.jr-owned paint commands. `RasterImage` accepts only complete RGBA buffers.
 
-`OnDemandRasterProcess` owns lazy activation. Construction performs no raster work. The first render starts one `RasterProcess`, and later renders reuse it. `Session` does not own this process, so ordinary structured inspection keeps the raster path outside its runtime state.
+`OnDemandRasterProcess` owns lazy activation. Construction performs no raster work. The first render starts one `RasterProcess`, and later renders reuse it. The session CLI adapter owns this value. `Session` owns no renderer state.
 
-The process implementation, page paint-list construction, effect-bound expansion, encoding, screenshot command, and renderer adapter remain unimplemented. A future process adapter must parse its wire protocol at both ends, bound allocations, and release the child on every exit. Skia belongs behind that process boundary if the screenshot bake-off selects it.
+`PrepareScreenshot` builds a white canvas and ordered solid background or border fills. It blocks text, native controls, replaced content, stylesheets, clipping, stacking controls, and effects. Locator capture scrolls first. Full-page capture uses the supported document extent.
+
+The software rasterizer clips flat fills and applies source-over RGBA compositing. It rejects images above 16,777,216 pixels. It also rejects paint work above 67,108,864 clipped fill pixels. Both checks run before image allocation. The CLI encodes PNG files after a complete raster succeeds.
+
+The separate helper process, effect-bound expansion, text, images, clips, stacking contexts, and complete renderer remain unimplemented. A future process adapter must parse both protocol ends, bound allocations, and release its child. Skia belongs behind that boundary if the screenshot bake-off selects it.
 
 ## Ownership
 
 `Engine` owns process resources and creates sessions.
 
-`Session` owns capability policy, pages, runs, and snapshot retention. The first implementation uses one mutable session owner. It does not add an actor or lock before a caller needs concurrent commands.
+`Session` owns capability policy, pages, runs, snapshot retention, keyboard state, and the native event transcript. The first implementation uses one mutable session owner. It does not add an actor or lock before a caller needs concurrent commands.
 
-`Page` owns one user-agent profile, one viewport, and one current `LiveDocument`. Navigation replaces the current document.
+`Page` owns one user-agent profile, one viewport, page scroll offsets, and one current `LiveDocument`.
+
+Navigation replaces the current document and resets its offsets.
+
+Local pointer actions validate first, auto-scroll a supported target box, then commit their state change.
+
+Rejected actions preserve offsets. Unsupported target geometry skips auto-scroll without blocking validated action behavior.
 
 `LiveDocument` owns the DOM, cascade state, box state, fragment state, and `LayoutKernel`.
 
@@ -203,7 +281,13 @@ pub(crate) struct EvidenceRef {
 }
 ```
 
-The implemented interactive reference stores a document epoch, snapshot identity, and document-order ordinal. Every capture refreshes its identity.
+The implemented reference stores a document epoch, snapshot identity, and document-order ordinal.
+
+Every capture refreshes its identity. Scoped captures retain document ordinals and may expose gaps.
+
+Element-backed accessibility nodes retain their source owner and optional reference source.
+
+Generated list markers have document origin. Scoped and compact captures exclude them.
 
 Another capture changes the snapshot identity. Opening another document also increments the epoch.
 
@@ -589,4 +673,4 @@ The clean-layout, typed overflow, field store, dirty index, priority queue, and 
 
 The next Spineless Traversal layer needs generational layout identities and ordered insertion or removal. A live mutation adapter can follow after those invariants have differential tests.
 
-The next locator layer needs auto-waiting, pointer dispatch, configurable test ID attributes, and broader accessibility computation.
+The next locator layer needs auto-waiting, receives-events checks, pointer dispatch, configurable test ID attributes, and complete accessibility computation.

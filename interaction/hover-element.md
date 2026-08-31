@@ -1,0 +1,170 @@
+# Hover an element
+
+## Summary
+
+Package callers submit `HoverElement`, `HoverByLocator`, or `HoverByRole`.
+
+Session callers send `hover <ref|selector>` or use `find ... hover`.
+
+A successful hover stores one visible element as the current pointer target.
+
+It reveals an off-screen target when browser.jr has complete box geometry.
+
+Hover does not dispatch pointer or mouse events. It does not apply CSS `:hover` rules.
+
+## The simple case
+
+The caller opens a page and captures an interactive snapshot.
+
+It sends `hover @e1`. browser.jr checks visibility and stores that source element.
+
+The caller can read the target through `is hovered @e1`.
+
+## The interaction, event by event
+
+```mermaid
+stateDiagram-v2
+    [*] --> resolving
+    resolving --> rejected : missing, stale, or ambiguous target
+    resolving --> checking : one current target
+    checking --> blocked : hidden, unstable, or unsupported evidence
+    checking --> scrolling : visible stable target
+    scrolling --> storing
+    storing --> reporting
+    rejected --> finished
+    blocked --> finished
+    reporting --> finished
+```
+
+### Invoke
+
+Reference hover requires a current interactive snapshot reference.
+
+Locator hover resolves one current match when the request executes.
+
+Direct selectors use CSS unless the selector selects XPath explicitly.
+
+### Exit immediately
+
+A stale reference returns `SessionError::StaleElementReference`.
+
+Missing or ambiguous locators return their strict-resolution errors.
+
+These failures preserve the current pointer target and references.
+
+### Begin running
+
+Hover requires supported visible evidence. Hidden targets reject the action.
+
+Embedded or linked stylesheets block visibility evidence today.
+
+Disabled native controls may become the pointer target.
+
+Hover requires supported static stability evidence.
+
+Inline animation or transition declarations on the target or its ancestors block that evidence.
+
+browser.jr does not sample animation frames or check event receipt.
+
+Unsupported box geometry leaves offsets unchanged. It does not block a visible hover target.
+
+### While running
+
+A successful hover reveals its supported target box before replacing the previous pointer target.
+
+A rejected hover preserves page offsets and the previous pointer target.
+
+The target may be interactive or structural when selected through a locator.
+
+Reference hover targets the source element represented by that reference.
+
+The action does not move focus or change native control state.
+
+The action preserves the current document and interactive references.
+
+### Finish
+
+`HoverResult` returns the current reference.
+
+`HoverByLocatorResult` returns the resolved match.
+
+`HoverByRoleResult` returns the resolved role match.
+
+Session output reports target identity. It does not claim event dispatch.
+
+## Variants
+
+| Modifier | Set at invocation | Changed while running |
+| --- | --- | --- |
+| Flags and options | Hover accepts one reference or locator. | Hover has no coordinates, force, trial, or modifiers. |
+| Project configuration | No hover configuration exists. | Nothing reloads. |
+| Target matrix | The current page supplies one target. | Hover does not navigate. |
+| Output channel | Package requests return typed values. Session mode uses flushed text. | Output does not expose page content. |
+
+## Cancel and interrupt
+
+| Event | Before running | While running |
+| --- | --- | --- |
+| Ctrl+C once | The host or CLI process may exit. | Hover has no asynchronous phase. |
+| Ctrl+C again before the evaluation stops | The process may already be gone. | No second-stage handler exists. |
+| The process receives SIGTERM | The process may exit first. | In-memory hover state disappears. |
+| The terminal closes | Package behavior is unchanged. | Session output may fail. |
+| stdin or stdout closes | Package behavior is unchanged. | Closed stdin ends session mode. |
+| The network fails or a request times out | Hover uses no network. | The current page already exists. |
+| The inspected page changes | Document replacement clears hover state. | Static pages do not mutate themselves. |
+| Another lint run targets the same page | It owns another session. | It cannot observe this target. |
+| The process exits outright | No hover request runs. | No hover state survives. |
+
+## Interactions with other systems
+
+**Configuration precedence.** The target is the only hover input.
+
+**Output and exit status.** Invalid targets use status two. Blocked targets use status three.
+
+**Resource limits.** Hover stores one optional source index.
+
+**Network and storage.** Hover uses no network and writes no persistent storage.
+
+**Rendering compatibility.** Playwright hover checks visibility, stability, and event receipt.
+
+browser.jr checks strict resolution, supported static visibility, and static stability.
+
+It auto-scrolls supported target boxes. It does not calculate pointer coordinates or dispatch browser events.
+
+See Playwright's [`locator.hover()`](https://playwright.dev/docs/api/class-locator#locator-hover) and [actionability table](https://playwright.dev/docs/actionability).
+
+A controlled `agent-browser` 0.32.4 Chromium run accepted visible, disabled, and hidden targets.
+
+Its next command did not observe a persistent DOM `:hover` match.
+
+This evidence does not prove browser.jr event or CSS parity.
+
+**Isolation.** Hover state belongs to one session and document.
+
+**Accessibility inspection.** Semantic locators use the implemented role and accessible-name subset.
+
+## Edge cases
+
+- Hovering the current target again is idempotent.
+- Inline animation or transition declarations block without replacing the current target.
+- Hovering an off-screen supported box reveals it before storing pointer state.
+- Unsupported target geometry leaves offsets unchanged and still stores a visible target.
+- Hovering another target removes current-target state from the previous element.
+- A failed hover preserves page offsets and the previous target.
+- Disabled native controls can become the pointer target.
+- Hidden targets cannot become the pointer target.
+- Embedded stylesheet evidence blocks hover before mutation.
+- A successful hover preserves current interactive references.
+- Another snapshot preserves hover state but replaces earlier references.
+- Open, reload, link or form navigation, back, and forward clear hover state after success.
+- Failed document replacement preserves hover state with the current page.
+
+## Open questions and verification
+
+- Implement receives-events evidence and frame sampling for supported motion.
+- Define pointer coordinates, nested scrolling, modifiers, force, trial, and timeouts.
+- Implement pointer and mouse event order.
+- Apply dynamic CSS `:hover` matching and style invalidation.
+- Decide whether hovered-state inspection should include hovered ancestors.
+
+Drafted from Rust tests, Playwright documentation, and controlled `agent-browser` evidence on 2026-09-01.

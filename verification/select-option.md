@@ -19,10 +19,11 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | SELECT-11 | P1 | pipe | Single selects commit one document-order match from a value list ([While running](../interaction/select-option.md#while-running)). | Serve a single select with two enabled options. | Request both values in reverse document order. | The first matching option in document order becomes selected and is the only returned value. | partial: package boundary test passed, 2026-08-31 |
 | SELECT-12 | P1 | pipe | Package selection matches exact labels and zero-based indexes ([Begin running](../interaction/select-option.md#begin-running)). | Serve labeled and unlabeled options in one multiple select. | Select by fallback label, label attribute, and index through reference and locator requests. | Every target resolves its option. Results contain committed values in request order. | partial: package boundary test passed, 2026-08-31 |
 | SELECT-13 | P1 | pipe | Missing and disabled typed targets preserve selection ([While running](../interaction/select-option.md#while-running)). | Commit a multiple selection with one disabled option. | Request a missing label, disabled index, and out-of-range index. Then read the value. | Each request returns its typed boundary. The committed selection remains. | partial: package boundary test passed, 2026-08-31 |
-| SELECT-14 | P1 | pipe | Changed selection records input before change ([While running](../interaction/select-option.md#while-running)). | Serve a nested single-select with two values. | Select the second value, select it again, then drain events. | One input and one change event appear in order. The idempotent action adds none. | partial: package test passed, 2026-08-31 |
+| SELECT-14 | P1 | package | Every successful selection records native events ([While running](../interaction/select-option.md#while-running)). | Serve one native select. | Select a value, repeat it, then drain events. | Each success records `input`, `change`. Records omit option values. | partial: package and compiled-process tests passed, 2026-08-31 |
+| SELECT-15 | P1 | package | Select events preserve normalized ancestry ([While running](../interaction/select-option.md#while-running)). | Serve a nested single-select with two values. | Select the second value, repeat it, then drain events. | Each success records `input`, `change` with target-to-root paths. | partial: package test passed, 2026-08-31 |
 
 Not checkable yet:
 
 - Empty-list deselection does not exist.
 - Session label and index syntax does not exist.
-- Focus, pointer, keyboard, listener invocation, and native validation do not exist.
+- Page-script event delivery and native validation do not exist.

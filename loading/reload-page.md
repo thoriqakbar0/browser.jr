@@ -51,11 +51,19 @@ It applies the same target, response, content-type, body, and transfer limits as
 
 The current page remains installed while loading proceeds.
 
-A load failure returns `SessionError::Load`. It preserves the document and latest reference set.
+A load failure returns `SessionError::Load`. It preserves the document, latest reference set, and focus.
 
 ### Finish
 
 A successful reload installs a fresh document epoch. It clears snapshots, layout evidence, and reported references.
+
+It also clears the previous page's stored [focus](../interaction/focus-element.md).
+
+The fresh page starts [page scroll](../interaction/scroll-page.md) at zero on both axes.
+
+It keeps the configured [viewport size](../interaction/set-viewport.md).
+
+Reload preserves the current [navigation history](history-navigation.md) position and adds no entry.
 
 The package returns `OpenedPage`. Session mode reports the URL and interactive element count.
 
@@ -109,12 +117,14 @@ The caller must capture again before another reference action or observation.
 - A successful reload invalidates old layout evidence.
 - A failed reload preserves the current title and document.
 - A failed reload preserves the latest interactive references.
+- A failed reload preserves the current focus.
+- A failed reload preserves current page scroll offsets.
 - Redirects and unsupported content remain load failures.
 
 ## Open questions and verification
 
 - Define cache and conditional-request behavior.
-- Define reload after client-side history exists.
+- Define reload with cached document restoration.
 - Define graceful cancellation while preserving the prior document.
 - Define machine-readable response encoding.
 

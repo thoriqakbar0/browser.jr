@@ -8,7 +8,9 @@ They use `SelectOptions` or `SelectOptionsByLocator` for a non-empty typed optio
 
 Session mode accepts `select <ref|selector> <value>` for one value. Quoted values form a list.
 
-Select supports native single and multiple controls. A changed selection records bubbling `input` and `change` events.
+Select supports native single and multiple controls.
+
+Every successful request records `input`, then `change` in the native event transcript.
 
 ## The simple case
 
@@ -30,8 +32,8 @@ stateDiagram-v2
     validating --> missing : one exact value is absent
     validating --> disabled : one matched option is disabled
     validating --> storing : every requested value is enabled
-    storing --> dispatching_events
-    dispatching_events --> reported
+    storing --> recording
+    recording --> reported
     rejected --> finished
     unsupported --> finished
     missing --> finished
@@ -91,9 +93,17 @@ Locator selection also requires supported visible evidence before mutation.
 
 The action keeps the current reference usable. It changes no other control.
 
-When selection changes, the implementation records `input`, then `change`. Both events bubble.
+Every successful selection records `input`, then `change`, including an unchanged repeated selection.
 
-Selecting the current value records no event. The implementation does not invoke listeners or dispatch focus, pointer, or keyboard events.
+Both records bubble. `input` composes. `change` does not compose.
+
+The records contain target structure, not requested or committed option values.
+
+Rejected selection records nothing.
+
+Select does not record focus, pointer, or keyboard events.
+
+The transcript does not deliver events to page scripts.
 
 It does not run scripts, constraint validation, form submission, or browser activation algorithms.
 
@@ -108,6 +118,8 @@ List results contain committed option values in request order after de-duplicati
 Single-select list requests return only the actual selected value.
 
 Reference output reports `value=<quoted-value>` for one value and `values=[...]` for a quoted list.
+
+Package callers drain records with `TakeDomEvents`. Session callers use `events`.
 
 A later value read or snapshot reports the first selected value in document order.
 
@@ -144,9 +156,15 @@ A later value read or snapshot reports the first selected value in document orde
 
 **Network and storage.** Select uses no network and writes no persistent storage.
 
-**Rendering compatibility.** Select mutates browser.jr's static native-select model. It implements no browser event algorithms.
+**Rendering compatibility.** Select mutates browser.jr's static native-select model.
+
+It records the Playwright `input`, `change` order for every successful request.
+
+It does not run browser event handlers.
 
 **Playwright compatibility.** Value, label, index, lists, and single-select resolution follow [Playwright locator.selectOption](https://playwright.dev/docs/api/class-locator#locator-select-option) option behavior.
+
+Controlled Playwright 1.62.1 Chromium, Firefox, and WebKit runs recorded both events for repeated selection.
 
 **agent-browser compatibility.** Quoted lists match its command shape. browser.jr returns committed values, not merely requested values.
 
@@ -175,7 +193,7 @@ An observed agent-browser 0.32.4 run accepted a disabled option. browser.jr keep
 - A disabled match returns `SessionError::SelectOptionDisabled`.
 - Missing or disabled label and index targets return typed target errors.
 - A non-select reference rejects selection.
-- Repeated selection is idempotent.
+- Repeated selection keeps the same state but records `input` and `change`.
 - Direct selectors resolve strictly without a prior snapshot.
 - Rejected actions preserve selection state and the current reference.
 - A later snapshot invalidates the action reference.
@@ -184,7 +202,7 @@ An observed agent-browser 0.32.4 run accepted a disabled option. browser.jr keep
 
 - Define empty-list selection and explicit deselection.
 - Define label and index syntax for session mode.
-- Define focus, listener, and native activation behavior before broadening event dispatch.
+- Add page-script event delivery after JavaScript exists.
 - Define form reset and submission behavior.
 - Define quote escaping for session value lists.
 

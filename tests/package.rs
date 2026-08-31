@@ -1,18 +1,29 @@
 use browser_jr::{
-    ActionabilityCheck, AltLocator, ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot,
-    CaptureInteractiveSnapshotWithin, CheckElementWidth, ClickByLocator, ClickByLocatorResult,
-    ClickByRole, ClickByRoleResult, ClickElement, ClickResult, Comparison, CountByLocator,
-    CssLocator, DomEventType, ElementInput, ElementVisible, FillByLocator, FillByRole, FillElement,
-    FillResult, FindAllByLocator, FindByLocator, FindByRole, GetAttributeByLocator,
-    GetCheckedByLocator, GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementHtml,
-    GetElementText, GetElementValue, GetElementVisible, GetEnabledByLocator, GetHtmlByLocator,
-    GetPageTitle, GetPageUrl, GetValueByLocator, GetVisibleByLocator, HoverByLocator, HoverByRole,
-    InteractiveElementState, LabelLocator, LayoutInput, LayoutMutation, LintLayout, Locator,
-    LocatorAction, LocatorInspection, NonEmpty, OpenPage, PlaceholderLocator, ReloadPage,
-    RoleAction, RoleLocator, RuleConstraint, RuleResult, SelectByLocator, SelectElement,
+    AccessibilitySnapshotOptions, ActionabilityCheck, AltLocator, ApplyMutation, ApplyMutations,
+    BoundingBox, CaptureAccessibilitySnapshot, CaptureAccessibilitySnapshotWithin,
+    CaptureInteractiveSnapshot, CaptureInteractiveSnapshotWithin, CaptureTarget, CheckElementWidth,
+    ClickByLocator, ClickByLocatorResult, ClickByRole, ClickByRoleResult, ClickElement,
+    ClickResult, Comparison, CountByLocator, CssLocator, DomEventType, ElementBoundingBox,
+    ElementInput, ElementVisible, FillByLocator, FillByRole, FillElement, FillResult,
+    FindAllByLocator, FindByLocator, FindByRole, FocusByLocator, FocusElement, FocusResult,
+    GetAttributeByLocator, GetBoundingBoxByLocator, GetCheckedByLocator, GetEditableByLocator,
+    GetElementAttribute, GetElementBoundingBox, GetElementChecked, GetElementEditable,
+    GetElementEnabled, GetElementFocused, GetElementHovered, GetElementHtml, GetElementText,
+    GetElementValue, GetElementVisible, GetEnabledByLocator, GetFocusedByLocator,
+    GetHoveredByLocator, GetHtmlByLocator, GetPageText, GetPageTitle, GetPageUrl,
+    GetValueByLocator, GetViewportSize, GetVisibleByLocator, GoBack, GoForward,
+    HistoryNavigationResult, HoverByLocator, HoverByRole, HoverElement, InteractiveElementState,
+    KeyDown, KeyUp, KeyboardEventKey, KeyboardInsertText, KeyboardKey, KeyboardModifier,
+    KeyboardTextEffect, KeyboardType, LabelLocator, LayoutInput, LayoutMutation, LintLayout,
+    Locator, LocatorAction, LocatorInspection, NonEmpty, OnDemandRasterProcess, OpenPage,
+    PageScroll, PageText, PlaceholderLocator, PrepareScreenshot, PressByLocator, PressKey,
+    PressResult, ReloadPage, RoleAction, RoleLocator, RuleConstraint, RuleResult, ScrollDirection,
+    ScrollElementIntoView, ScrollIntoViewByLocator, ScrollPage, SelectByLocator, SelectElement,
     SelectOptionTarget, SelectOptions, SelectOptionsByLocator, SelectOptionsResult, SelectResult,
-    Session, SessionError, SetCheckedByLocator, SetCheckedByRole, SetElementChecked, TakeDomEvents,
-    TestIdLocator, TextLocator, TitleLocator, XPathLocator,
+    Session, SessionError, SetCheckedByLocator, SetCheckedByRole, SetElementChecked,
+    SetViewportSize, SoftwareRasterProcessFactory, TakeDomEvents, TestIdLocator, TextLocator,
+    TextPressEffect, TitleLocator, TypeByLocator, TypeElement, TypeResult, ViewportSize,
+    XPathLocator,
 };
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -29,6 +40,10 @@ fn value_targets(values: &[&str]) -> NonEmpty<SelectOptionTarget> {
             .collect(),
     )
     .expect("test option targets are non-empty")
+}
+
+fn text_press(result: &PressResult) -> &TextPressEffect {
+    result.text().expect("expected a text press effect")
 }
 
 fn network_test_guard() -> MutexGuard<'static, ()> {
@@ -67,6 +82,38 @@ fn read_request_headers(stream: &std::net::TcpStream) {
             return;
         }
     }
+}
+
+fn serve_pages_recording_requests(bodies: Vec<&'static str>) -> (String, JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        let mut requests = Vec::with_capacity(bodies.len());
+        for body in bodies {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request_line = String::new();
+            {
+                let mut reader = BufReader::new(&mut stream);
+                reader.read_line(&mut request_line).unwrap();
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header == "\r\n" || header.is_empty() {
+                        break;
+                    }
+                }
+            }
+            requests.push(request_line.trim_end().into());
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+        requests
+    });
+    (format!("http://{address}/"), handle)
 }
 
 #[test]
@@ -121,6 +168,205 @@ fn package_session_assigns_fresh_refs_to_each_interactive_snapshot() {
     assert_eq!(first.elements[1].reference.to_string(), "@e2");
     assert_eq!(first.elements[1].role, "button");
     assert_eq!(first.elements[1].name, "Save");
+}
+
+#[test]
+fn accessibility_snapshot_exposes_typed_tree_nodes_and_resolvable_heading_refs() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<button>Outside</button><main id="content"><h1>Hello <em>there</em></h1><a href="/docs">Docs</a></main>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let snapshot = session
+        .execute(CaptureAccessibilitySnapshotWithin {
+            locator: Locator::from(CssLocator::new("#content").unwrap()),
+            options: AccessibilitySnapshotOptions::default(),
+        })
+        .unwrap();
+    let heading = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.role() == "heading")
+        .unwrap();
+    let heading_reference = heading.reference.unwrap();
+    let text = session
+        .execute(GetElementText {
+            reference: heading_reference,
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(snapshot.nodes[0].role(), "main");
+    assert_eq!(snapshot.nodes[0].depth, 0);
+    assert_eq!(heading.depth, 1);
+    assert_eq!(heading.name(), "Hello there");
+    assert_eq!(heading_reference.to_string(), "@e2");
+    assert!(
+        snapshot
+            .nodes
+            .iter()
+            .any(|node| { node.role() == "emphasis" && node.name() == "there" && node.depth == 2 })
+    );
+    assert_eq!(text.text, "Hello there");
+}
+
+#[test]
+fn accessibility_snapshot_emits_list_markers_only_for_unscoped_non_compact_trees() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<main id="content"><ul><li>Alpha</li><li hidden>Hidden</li><li>Beta<ul><li>Nested</li></ul></li></ul><ol start="3"><li>Third</li><li value="7">Seventh</li><li>Eighth</li></ol></main>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let full = session
+        .execute(CaptureAccessibilitySnapshot {
+            options: AccessibilitySnapshotOptions::default(),
+        })
+        .unwrap();
+    let compact = session
+        .execute(CaptureAccessibilitySnapshot {
+            options: AccessibilitySnapshotOptions {
+                compact: true,
+                max_depth: None,
+            },
+        })
+        .unwrap();
+    let scoped = session
+        .execute(CaptureAccessibilitySnapshotWithin {
+            locator: Locator::from(CssLocator::new("#content").unwrap()),
+            options: AccessibilitySnapshotOptions::default(),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    let markers = full
+        .nodes
+        .iter()
+        .filter(|node| node.role() == "ListMarker")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        markers.iter().map(|node| node.name()).collect::<Vec<_>>(),
+        ["• ", "• ", "• ", "1. ", "2. ", "3. "]
+    );
+    assert!(markers.iter().all(|node| node.depth == 0));
+    assert!(markers.iter().all(|node| node.reference.is_none()));
+    assert!(compact.nodes.iter().all(|node| node.role() != "ListMarker"));
+    assert!(scoped.nodes.iter().all(|node| node.role() != "ListMarker"));
+}
+
+#[test]
+fn accessibility_snapshot_requires_an_open_page() {
+    let result = Session::new().execute(CaptureAccessibilitySnapshot {
+        options: AccessibilitySnapshotOptions::default(),
+    });
+
+    assert_eq!(result, Err(SessionError::NoPage));
+}
+
+#[test]
+fn interactive_snapshots_resolve_link_target_urls() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<a href="guide/next?q=1#details">Next</a><button>Save</button><a href="action" role="button">Open</a>"#,
+    );
+    let mut session = Session::new();
+
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        snapshot.elements[0].target_url(),
+        Some(format!("{url}guide/next?q=1#details").as_str())
+    );
+    assert_eq!(snapshot.elements[1].target_url(), None);
+    assert_eq!(snapshot.elements[2].target_url(), None);
+}
+
+#[test]
+fn package_prepares_scroll_aware_locator_and_full_page_screenshots() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body style="margin-left:0;margin-right:0;margin-top:0;margin-bottom:0">
+                <div style="width:100px;height:150px"></div>
+                <main id="target" style="width:20px;height:10px;background-color:#ff0000"></main>
+            </body>
+        "#,
+    );
+    let mut session = Session::new();
+    session
+        .execute(SetViewportSize {
+            width: 100,
+            height: 100,
+        })
+        .unwrap();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let locator = Locator::from(CssLocator::new("#target").unwrap());
+    let element = session
+        .execute(PrepareScreenshot {
+            target: CaptureTarget::Element(locator.clone()),
+        })
+        .unwrap();
+    let scroll = session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Down,
+            distance: 0,
+        })
+        .unwrap();
+    let full_page = session
+        .execute(PrepareScreenshot {
+            target: CaptureTarget::FullPage,
+        })
+        .unwrap();
+    let mut raster = OnDemandRasterProcess::new(SoftwareRasterProcessFactory);
+    let image = raster.render(&element).unwrap();
+    drop(network_guard);
+
+    assert_eq!(element.target, CaptureTarget::Element(locator));
+    assert_eq!(element.scene.capture_bounds.x(), 0);
+    assert_eq!(element.scene.capture_bounds.y(), 150);
+    assert_eq!(element.scene.capture_bounds.width(), 20);
+    assert_eq!(element.scene.capture_bounds.height(), 10);
+    assert_eq!(scroll.y, 60);
+    assert_eq!(full_page.scene.capture_bounds.width(), 100);
+    assert_eq!(full_page.scene.capture_bounds.height(), 160);
+    assert_eq!(image.width(), 20);
+    assert_eq!(image.height(), 10);
+    assert!(
+        image
+            .rgba()
+            .chunks_exact(4)
+            .all(|pixel| pixel == [255, 0, 0, 255])
+    );
+}
+
+#[test]
+fn package_blocks_screenshots_when_visible_paint_is_unsupported() {
+    let network_guard = network_test_guard();
+    let (url, server) =
+        serve_page(r#"<main style="width:100px;height:20px;background-color:#fff">hello</main>"#);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let result = session.execute(PrepareScreenshot {
+        target: CaptureTarget::Viewport,
+    });
+    drop(network_guard);
+
+    assert!(matches!(
+        result,
+        Err(SessionError::UnsupportedScreenshot { reason, .. }) if reason.contains("text paint")
+    ));
 }
 
 #[test]
@@ -180,7 +426,7 @@ fn scoped_snapshots_keep_only_descendants_and_map_refs_to_source_elements() {
             .iter()
             .map(|element| (element.reference.to_string(), element.name.as_str()))
             .collect::<Vec<_>>(),
-        vec![("@e1".into(), "Email"), ("@e2".into(), "Inside")]
+        vec![("@e2".into(), "Email"), ("@e3".into(), "Inside")]
     );
     assert_eq!(inside.text, "Inside");
     assert_eq!(inside_after_failed_scope.text, "Inside");
@@ -224,6 +470,42 @@ fn role_locators_resolve_without_a_prior_snapshot() {
     assert_eq!(found.role, "button");
     assert_eq!(found.name, "Save Draft");
     assert_eq!(found.text, "Save Draft");
+}
+
+#[test]
+fn role_locators_use_descendant_image_alt_text_in_accessible_names() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button id="save"><span><img alt="Save image"></span></button>
+            <button id="presentational"><img role="presentation" alt="Ignored"></button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let found = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Save image"),
+        })
+        .unwrap();
+    let ignored = session.execute(FindByRole {
+        locator: RoleLocator::new("button")
+            .unwrap()
+            .with_exact_name("Ignored"),
+    });
+    drop(network_guard);
+
+    assert_eq!(found.element, "save");
+    assert_eq!(found.name, "Save image");
+    assert_eq!(found.text, "");
+    assert!(matches!(
+        ignored,
+        Err(SessionError::RoleLocatorNotFound { .. })
+    ));
 }
 
 #[test]
@@ -344,6 +626,402 @@ fn role_locators_resolve_structural_roles_and_role_specific_names() {
         banner_named_from_contents,
         Err(SessionError::RoleLocatorNotFound { .. })
     ));
+}
+
+#[test]
+fn role_locators_cover_current_implicit_html_role_mappings() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <map><area href="/map" alt="Map target"></map>
+            <table role="grid"><caption>Data</caption><tr><td>Cell</td></tr></table>
+            <code>code</code><datalist id="cities"></datalist><dd>definition</dd>
+            <del>old</del><dfn>term</dfn><em>emphasis</em><ins>new</ins><mark>mark</mark>
+            <math></math><meter value="1" max="2"></meter><optgroup label="group"></optgroup>
+            <search></search><strong>strong</strong><sub>sub</sub><sup>sup</sup><time>now</time>
+            <input list="cities" aria-label="City"><input type="file" aria-label="Upload">
+            <img alt=""><img alt="" title="Chart">
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let expected_roles = [
+        "link",
+        "grid",
+        "caption",
+        "gridcell",
+        "code",
+        "listbox",
+        "definition",
+        "deletion",
+        "term",
+        "emphasis",
+        "insertion",
+        "mark",
+        "math",
+        "meter",
+        "group",
+        "search",
+        "strong",
+        "subscript",
+        "superscript",
+        "time",
+        "combobox",
+        "button",
+        "presentation",
+        "img",
+    ];
+    for role in expected_roles {
+        let matched = session
+            .execute(FindByRole {
+                locator: RoleLocator::new(role).unwrap(),
+            })
+            .unwrap();
+        assert_eq!(matched.role, role);
+    }
+    let area = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("link")
+                .unwrap()
+                .with_exact_name("Map target"),
+        })
+        .unwrap();
+    let titled_image = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("img").unwrap().with_exact_name("Chart"),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(area.name, "Map target");
+    assert_eq!(titled_image.name, "Chart");
+}
+
+#[test]
+fn presentational_roles_yield_to_focus_and_global_aria_conflicts() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button role="presentation">Focusable</button>
+            <h2 role="none" tabindex="-1">Heading</h2>
+            <img role="presentation" alt="Busy chart" aria-busy="false">
+            <code role="presentation" aria-label="Prohibited label">code</code>
+            <button role="presentation" disabled>Disabled</button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let button = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Focusable"),
+        })
+        .unwrap();
+    let heading = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("heading")
+                .unwrap()
+                .with_exact_name("Heading"),
+        })
+        .unwrap();
+    let image = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("img")
+                .unwrap()
+                .with_exact_name("Busy chart"),
+        })
+        .unwrap();
+    let presentations = session
+        .execute(CountByLocator {
+            locator: Locator::from(RoleLocator::new("presentation").unwrap()),
+        })
+        .unwrap();
+    let prohibited_name = session.execute(FindByRole {
+        locator: RoleLocator::new("presentation")
+            .unwrap()
+            .with_exact_name("Prohibited label"),
+    });
+    drop(network_guard);
+
+    assert_eq!(button.name, "Focusable");
+    assert_eq!(heading.name, "Heading");
+    assert_eq!(image.name, "Busy chart");
+    assert_eq!(presentations.count, 2);
+    assert!(matches!(
+        prohibited_name,
+        Err(SessionError::RoleLocatorNotFound { .. })
+    ));
+}
+
+#[test]
+fn role_locators_match_accessible_descriptions_in_precedence_order() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <p id="first" hidden>First hint</p>
+            <p id="second" aria-label="Second hint">ignored</p>
+            <button aria-describedby="first second" aria-description="lower priority" title="lowest priority">Save</button>
+            <button aria-description="Opens settings">Settings</button>
+            <button aria-label="Same" title="Same">ignored name</button>
+            <button title="Title only"></button>
+            <button aria-describedby="" aria-description="ignored fallback">Empty reference</button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let described_by = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Save")
+                .with_exact_description("First hint Second hint"),
+        })
+        .unwrap();
+    let aria_description = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_description("OPENS SETTINGS"),
+        })
+        .unwrap();
+    let title_not_used_for_name = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Same")
+                .with_exact_description("Same"),
+        })
+        .unwrap();
+    let title_used_for_name = session.execute(FindByRole {
+        locator: RoleLocator::new("button")
+            .unwrap()
+            .with_exact_name("Title only")
+            .with_exact_description("Title only"),
+    });
+    let empty_described_by_wins = session.execute(FindByRole {
+        locator: RoleLocator::new("button")
+            .unwrap()
+            .with_exact_name("Empty reference")
+            .with_exact_description("ignored fallback"),
+    });
+    drop(network_guard);
+
+    assert_eq!(described_by.name, "Save");
+    assert_eq!(aria_description.name, "Settings");
+    assert_eq!(title_not_used_for_name.name, "Same");
+    assert!(matches!(
+        title_used_for_name,
+        Err(SessionError::RoleLocatorNotFound { .. })
+    ));
+    assert!(matches!(
+        empty_described_by_wins,
+        Err(SessionError::RoleLocatorNotFound { .. })
+    ));
+}
+
+#[test]
+fn role_locators_filter_accessibility_state_and_current_control_state() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <h1>Overview</h1><h2 aria-level="1">Overview</h2>
+            <label><input type="checkbox" checked>Terms</label>
+            <button disabled>Save</button>
+            <button aria-expanded="true">Menu</button>
+            <button aria-expanded="invalid">Closed</button>
+            <button>Pin</button>
+            <div role="tab" aria-selected="TRUE">Details</div>
+            <div role="application" aria-label="Editor" aria-expanded="true"></div>
+            <div role="group" aria-disabled="true">
+                <button aria-disabled="false">Override</button><button>Inherited</button>
+            </div>
+            <fieldset disabled>
+                <legend><button>Legend</button></legend><button>Blocked</button>
+            </fieldset>
+            <div aria-hidden="true"><button>Ghost</button></div>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let heading = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("heading")
+                .unwrap()
+                .with_exact_name("Overview")
+                .with_level(2)
+                .unwrap(),
+        })
+        .unwrap();
+    let checked_locator = RoleLocator::new("checkbox")
+        .unwrap()
+        .with_exact_name("Terms")
+        .with_checked(true)
+        .unwrap();
+    session
+        .execute(SetCheckedByRole {
+            locator: checked_locator,
+            checked: false,
+        })
+        .unwrap();
+    let unchecked = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("checkbox")
+                .unwrap()
+                .with_exact_name("Terms")
+                .with_checked(false)
+                .unwrap(),
+        })
+        .unwrap();
+    let disabled = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Save")
+                .with_disabled(true),
+        })
+        .unwrap();
+    let expanded = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Menu")
+                .with_expanded(true)
+                .unwrap(),
+        })
+        .unwrap();
+    let collapsed = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Closed")
+                .with_expanded(false)
+                .unwrap(),
+        })
+        .unwrap();
+    let pressed = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Pin")
+                .with_pressed(false)
+                .unwrap(),
+        })
+        .unwrap();
+    let selected = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("tab")
+                .unwrap()
+                .with_exact_name("Details")
+                .with_selected(true)
+                .unwrap(),
+        })
+        .unwrap();
+    let application = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("application")
+                .unwrap()
+                .with_exact_name("Editor")
+                .with_expanded(true)
+                .unwrap(),
+        })
+        .unwrap();
+    let disabled_override = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Override")
+                .with_disabled(false),
+        })
+        .unwrap();
+    let inherited_disabled = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Inherited")
+                .with_disabled(true),
+        })
+        .unwrap();
+    let legend_enabled = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Legend")
+                .with_disabled(false),
+        })
+        .unwrap();
+    let fieldset_disabled = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Blocked")
+                .with_disabled(true),
+        })
+        .unwrap();
+    let hidden_locator = RoleLocator::new("button").unwrap().with_exact_name("Ghost");
+    let hidden = session.execute(FindByRole {
+        locator: hidden_locator.clone(),
+    });
+    let included = session
+        .execute(FindByRole {
+            locator: hidden_locator.with_include_hidden(true),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(heading.role, "heading");
+    assert_eq!(unchecked.name, "Terms");
+    assert_eq!(disabled.name, "Save");
+    assert_eq!(expanded.name, "Menu");
+    assert_eq!(collapsed.name, "Closed");
+    assert_eq!(pressed.name, "Pin");
+    assert_eq!(selected.name, "Details");
+    assert_eq!(application.name, "Editor");
+    assert_eq!(disabled_override.name, "Override");
+    assert_eq!(inherited_disabled.name, "Inherited");
+    assert_eq!(legend_enabled.name, "Legend");
+    assert_eq!(fieldset_disabled.name, "Blocked");
+    assert!(matches!(
+        hidden,
+        Err(SessionError::RoleLocatorNotFound { .. })
+    ));
+    assert_eq!(included.name, "Ghost");
+}
+
+#[test]
+fn role_locators_report_unknown_stylesheet_visibility() {
+    let network_guard = network_test_guard();
+    let (url, server) =
+        serve_page(r#"<link rel="stylesheet" href="theme.css"><button>Save</button>"#);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let locator = RoleLocator::new("button").unwrap().with_exact_name("Save");
+
+    let unavailable = session.execute(FindByRole {
+        locator: locator.clone(),
+    });
+    let included = session
+        .execute(FindByRole {
+            locator: locator.with_include_hidden(true),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert!(matches!(
+        unavailable,
+        Err(SessionError::LocatorQuery { reason, .. })
+            if reason.contains("linked stylesheet loading is not implemented")
+    ));
+    assert_eq!(included.name, "Save");
 }
 
 #[test]
@@ -475,7 +1153,8 @@ fn role_actions_report_actionability_and_unsupported_behavior() {
 
     let hidden_locator = RoleLocator::new("textbox")
         .unwrap()
-        .with_exact_name("Hidden");
+        .with_exact_name("Hidden")
+        .with_include_hidden(true);
     let hidden = session.execute(FillByRole {
         locator: hidden_locator.clone(),
         value: "no".into(),
@@ -525,14 +1204,187 @@ fn role_actions_report_actionability_and_unsupported_behavior() {
             ..
         }) if locator == heading_locator
     ));
-    assert_eq!(
-        hover,
-        Err(SessionError::UnsupportedRoleAction {
-            locator: hover_locator,
-            action: RoleAction::Hover,
-            reason: "hover state and pointer event dispatch are not implemented".into(),
-        })
+    assert_eq!(hover.unwrap().matched.element, "button[3]");
+}
+
+#[test]
+fn pointer_actions_require_supported_static_stability_evidence_before_mutation() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button id="reference-click" style="position:fixed;left:0;top:0;width:100px;height:40px;transition:all 1s">Reference click</button>
+            <input id="reference-check" type="checkbox" aria-label="Reference check" style="position:fixed;left:0;top:50px;width:20px;height:20px;transition:all 1s">
+            <button id="locator-click" style="position:fixed;left:0;top:80px;width:100px;height:40px;transition:all 1s">Locator click</button>
+            <input id="locator-check" type="checkbox" aria-label="Locator check" style="position:fixed;left:0;top:130px;width:20px;height:20px;transition:all 1s">
+            <button id="reference-hover" style="position:fixed;left:0;top:160px;width:100px;height:40px;transition:all 1s">Reference hover</button>
+            <div id="locator-hover" style="position:fixed;left:0;top:210px;width:100px;height:40px;transition:all 1s">Locator hover</div>
+            <div id="moving-parent" style="transition:all 1s">
+                <div id="nested-hover">Nested hover</div>
+            </div>
+            <a id="locator-link" href="/next" style="transition:all 1s">Moving link</a>
+        "#,
     );
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let reference_click = snapshot.elements[0].reference;
+    let reference_check = snapshot.elements[1].reference;
+    let reference_hover = snapshot.elements[4].reference;
+
+    let click_by_reference = session.execute(ClickElement {
+        reference: reference_click,
+    });
+    let click_locator = Locator::from(CssLocator::new("#locator-click").unwrap());
+    let click_by_locator = session.execute(ClickByLocator {
+        locator: click_locator.clone(),
+    });
+    let role_click_locator = RoleLocator::new("button")
+        .unwrap()
+        .with_exact_name("Locator click");
+    let click_by_role = session.execute(ClickByRole {
+        locator: role_click_locator.clone(),
+    });
+    let check_by_reference = session.execute(SetElementChecked {
+        reference: reference_check,
+        checked: true,
+    });
+    let check_locator = Locator::from(CssLocator::new("#locator-check").unwrap());
+    let check_by_locator = session.execute(SetCheckedByLocator {
+        locator: check_locator.clone(),
+        checked: true,
+    });
+    let hover_by_reference = session.execute(HoverElement {
+        reference: reference_hover,
+    });
+    let hover_locator = Locator::from(CssLocator::new("#locator-hover").unwrap());
+    let hover_by_locator = session.execute(HoverByLocator {
+        locator: hover_locator.clone(),
+    });
+    let nested_hover_locator = Locator::from(CssLocator::new("#nested-hover").unwrap());
+    let nested_hover = session.execute(HoverByLocator {
+        locator: nested_hover_locator.clone(),
+    });
+    let link_locator = Locator::from(CssLocator::new("#locator-link").unwrap());
+    let link_click = session.execute(ClickByLocator {
+        locator: link_locator.clone(),
+    });
+    let reference_checked = session
+        .execute(GetElementChecked {
+            reference: reference_check,
+        })
+        .unwrap();
+    let locator_checked = session
+        .execute(GetCheckedByLocator {
+            locator: check_locator,
+        })
+        .unwrap();
+    let reference_hovered = session
+        .execute(GetElementHovered {
+            reference: reference_hover,
+        })
+        .unwrap();
+    let locator_hovered = session
+        .execute(GetHoveredByLocator {
+            locator: hover_locator.clone(),
+        })
+        .unwrap();
+    let nested_hovered = session
+        .execute(GetHoveredByLocator {
+            locator: nested_hover_locator.clone(),
+        })
+        .unwrap();
+    let events = session.execute(TakeDomEvents).unwrap();
+    let current_url = session.execute(GetPageUrl).unwrap();
+    drop(network_guard);
+
+    assert!(
+        matches!(
+            &click_by_reference,
+            Err(SessionError::UnsupportedClick { reference, reason })
+                if *reference == reference_click
+                    && reason == "stable check failed: inline transition stability is not implemented for reference-click"
+        ),
+        "unexpected click result: {click_by_reference:?}"
+    );
+    assert!(matches!(
+        click_by_locator,
+        Err(SessionError::LocatorActionBlocked {
+            locator,
+            action: LocatorAction::Click,
+            check: ActionabilityCheck::Stable,
+            reason,
+        }) if locator == click_locator
+            && reason == "inline transition stability is not implemented for locator-click"
+    ));
+    assert!(matches!(
+        click_by_role,
+        Err(SessionError::RoleActionBlocked {
+            locator,
+            action: RoleAction::Click,
+            check: ActionabilityCheck::Stable,
+            reason,
+        }) if locator == role_click_locator
+            && reason == "inline transition stability is not implemented for locator-click"
+    ));
+    assert!(matches!(
+        check_by_reference,
+        Err(SessionError::UnsupportedCheck { reference, reason })
+            if reference == reference_check
+                && reason == "stable check failed: inline transition stability is not implemented for reference-check"
+    ));
+    assert!(matches!(
+        check_by_locator,
+        Err(SessionError::LocatorActionBlocked {
+            action: LocatorAction::Check,
+            check: ActionabilityCheck::Stable,
+            reason,
+            ..
+        }) if reason == "inline transition stability is not implemented for locator-check"
+    ));
+    assert!(matches!(
+        hover_by_reference,
+        Err(SessionError::UnsupportedHover { reference, reason })
+            if reference == reference_hover
+                && reason == "stable check failed: inline transition stability is not implemented for reference-hover"
+    ));
+    assert!(matches!(
+        hover_by_locator,
+        Err(SessionError::LocatorActionBlocked {
+            locator,
+            action: LocatorAction::Hover,
+            check: ActionabilityCheck::Stable,
+            reason,
+        }) if locator == hover_locator
+            && reason == "inline transition stability is not implemented for locator-hover"
+    ));
+    assert!(matches!(
+        nested_hover,
+        Err(SessionError::LocatorActionBlocked {
+            locator,
+            action: LocatorAction::Hover,
+            check: ActionabilityCheck::Stable,
+            reason,
+        }) if locator == nested_hover_locator
+            && reason == "inline transition stability is not implemented for moving-parent"
+    ));
+    assert!(matches!(
+        link_click,
+        Err(SessionError::LocatorActionBlocked {
+            locator,
+            action: LocatorAction::Click,
+            check: ActionabilityCheck::Stable,
+            reason,
+        }) if locator == link_locator
+            && reason == "inline transition stability is not implemented for locator-link"
+    ));
+    assert!(!reference_checked.checked);
+    assert!(!locator_checked.checked);
+    assert!(!reference_hovered.hovered);
+    assert!(!locator_hovered.hovered);
+    assert!(!nested_hovered.hovered);
+    assert!(events.is_empty());
+    assert_eq!(current_url.url, url);
 }
 
 #[test]
@@ -607,7 +1459,8 @@ fn role_actions_block_when_visibility_evidence_is_unavailable() {
     server.join().unwrap();
     let locator = RoleLocator::new("textbox")
         .unwrap()
-        .with_exact_name("Styled");
+        .with_exact_name("Styled")
+        .with_include_hidden(true);
 
     let result = session.execute(FillByRole {
         locator: locator.clone(),
@@ -826,16 +1679,122 @@ fn locator_actions_resolve_strictly_and_preserve_state_on_failure() {
             ..
         }) if locator == hidden_locator
     ));
-    assert!(matches!(
-        hover,
-        Err(SessionError::UnsupportedLocatorAction {
-            locator,
-            action: LocatorAction::Hover,
-            ..
-        }) if locator == hover_locator
-    ));
+    assert_eq!(hover.unwrap().matched.element, "button[4]");
     assert_eq!(preserved.unwrap().value, "first");
     assert_eq!(preserved_ref.unwrap().text, "Save");
+}
+
+#[test]
+fn hover_tracks_one_visible_target_across_reference_and_locator_paths() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button id="first">First</button>
+            <div id="card">Card</div>
+            <button id="disabled" disabled>Disabled</button>
+            <button id="hidden" hidden>Hidden</button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let first = snapshot.elements[0].reference;
+    let disabled = snapshot.elements[1].reference;
+    let hidden = snapshot.elements[2].reference;
+
+    let initial = session
+        .execute(GetElementHovered { reference: first })
+        .unwrap();
+    let first_hover = session.execute(HoverElement { reference: first }).unwrap();
+    let first_state = session
+        .execute(GetElementHovered { reference: first })
+        .unwrap();
+    let other_state = session
+        .execute(GetElementHovered {
+            reference: disabled,
+        })
+        .unwrap();
+    let card_locator = Locator::from(CssLocator::new("#card").unwrap());
+    let card_hover = session
+        .execute(HoverByLocator {
+            locator: card_locator.clone(),
+        })
+        .unwrap();
+    let card_state = session
+        .execute(GetHoveredByLocator {
+            locator: card_locator,
+        })
+        .unwrap();
+    let old_state = session
+        .execute(GetElementHovered { reference: first })
+        .unwrap();
+    let disabled_hover = session.execute(HoverElement {
+        reference: disabled,
+    });
+    let hidden_hover = session.execute(HoverElement { reference: hidden });
+    let preserved = session.execute(GetElementHovered {
+        reference: disabled,
+    });
+    drop(network_guard);
+
+    assert!(!initial.hovered);
+    assert_eq!(first_hover.reference, first);
+    assert!(first_state.hovered);
+    assert!(!other_state.hovered);
+    assert_eq!(card_hover.matched.element, "card");
+    assert!(card_state.hovered);
+    assert!(!old_state.hovered);
+    assert_eq!(disabled_hover.unwrap().reference, disabled);
+    assert!(matches!(
+        hidden_hover,
+        Err(SessionError::UnsupportedHover { reference, .. }) if reference == hidden
+    ));
+    assert!(preserved.unwrap().hovered);
+}
+
+#[test]
+fn failed_locator_hover_preserves_the_previous_target_and_document_replacement_clears_it() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"<button id="visible">Visible</button><button id="hidden" hidden>Hidden</button>"#,
+        r#"<button id="visible">Visible</button><button id="hidden" hidden>Hidden</button>"#,
+    ]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    let visible = Locator::from(CssLocator::new("#visible").unwrap());
+    let hidden = Locator::from(CssLocator::new("#hidden").unwrap());
+    session
+        .execute(HoverByLocator {
+            locator: visible.clone(),
+        })
+        .unwrap();
+    let blocked = session.execute(HoverByLocator {
+        locator: hidden.clone(),
+    });
+    let preserved = session
+        .execute(GetHoveredByLocator {
+            locator: visible.clone(),
+        })
+        .unwrap();
+    session.execute(ReloadPage).unwrap();
+    server.join().unwrap();
+    let cleared = session
+        .execute(GetHoveredByLocator { locator: visible })
+        .unwrap();
+    drop(network_guard);
+
+    assert!(matches!(
+        blocked,
+        Err(SessionError::LocatorActionBlocked {
+            locator,
+            action: LocatorAction::Hover,
+            check: ActionabilityCheck::Visible,
+            ..
+        }) if locator == hidden
+    ));
+    assert!(preserved.hovered);
+    assert!(!cleared.hovered);
 }
 
 #[test]
@@ -1395,6 +2354,571 @@ fn clicking_a_link_navigates_and_invalidates_the_previous_ref() {
 }
 
 #[test]
+fn native_actions_record_data_minimized_dom_event_sequences() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"
+            <main id="root">
+                <label>Name<input id="name" value="old"></label>
+                <input id="locked" value="fixed" readonly>
+                <label><input id="terms" type="checkbox">Terms</label>
+                <select id="size"><option value="s">Small</option><option value="l">Large</option></select>
+                <button id="save" type="button">Save</button>
+                <input id="starter" type="radio" name="plan" checked>
+                <input id="pro" type="radio" name="plan">
+                <a id="next" href="/next">Next</a>
+            </main>
+        "#,
+        r#"<h1 id="arrived">Arrived</h1>"#,
+    ]);
+    let mut session = Session::new();
+    assert!(session.execute(TakeDomEvents).unwrap().is_empty());
+    session.execute(OpenPage { url }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let name = snapshot.elements[0].reference;
+    let terms = snapshot.elements[2].reference;
+    let size = snapshot.elements[3].reference;
+    let save = snapshot.elements[4].reference;
+    let pro = snapshot.elements[6].reference;
+    let next = snapshot.elements[7].reference;
+
+    session
+        .execute(FillElement {
+            reference: name,
+            value: "updated".into(),
+        })
+        .unwrap();
+    session
+        .execute(FillElement {
+            reference: name,
+            value: "updated".into(),
+        })
+        .unwrap();
+    let blocked_fill = session.execute(FillByLocator {
+        locator: Locator::from(CssLocator::new("#locked").unwrap()),
+        value: "do not record".into(),
+    });
+    assert!(blocked_fill.is_err());
+    session
+        .execute(SetElementChecked {
+            reference: terms,
+            checked: true,
+        })
+        .unwrap();
+    session
+        .execute(SetElementChecked {
+            reference: terms,
+            checked: true,
+        })
+        .unwrap();
+    session
+        .execute(SelectElement {
+            reference: size,
+            value: "l".into(),
+        })
+        .unwrap();
+    session
+        .execute(SelectElement {
+            reference: size,
+            value: "l".into(),
+        })
+        .unwrap();
+    session.execute(ClickElement { reference: save }).unwrap();
+    session.execute(ClickElement { reference: pro }).unwrap();
+    session.execute(ClickElement { reference: pro }).unwrap();
+    session.execute(ClickElement { reference: next }).unwrap();
+    server.join().unwrap();
+
+    let events = session.execute(TakeDomEvents).unwrap();
+    drop(network_guard);
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| (event.event_type, event.target.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (DomEventType::BeforeInput, "name"),
+            (DomEventType::Input, "name"),
+            (DomEventType::BeforeInput, "name"),
+            (DomEventType::Input, "name"),
+            (DomEventType::Click, "terms"),
+            (DomEventType::Input, "terms"),
+            (DomEventType::Change, "terms"),
+            (DomEventType::Input, "size"),
+            (DomEventType::Change, "size"),
+            (DomEventType::Input, "size"),
+            (DomEventType::Change, "size"),
+            (DomEventType::Click, "save"),
+            (DomEventType::Click, "pro"),
+            (DomEventType::Input, "pro"),
+            (DomEventType::Change, "pro"),
+            (DomEventType::Click, "pro"),
+            (DomEventType::Click, "next"),
+        ]
+    );
+    let document_epoch = events[0].document_epoch;
+    assert!(events.iter().all(|event| {
+        event.document_epoch == document_epoch
+            && event.bubbles
+            && event.composed == (event.event_type != DomEventType::Change)
+            && event.target_ordinal > 0
+            && event.path.first() == Some(&event.target)
+            && event.path.iter().any(|element| element == "root")
+    }));
+    assert!(session.execute(TakeDomEvents).unwrap().is_empty());
+}
+
+#[test]
+fn native_clicks_focus_buttons_and_toggle_checkboxes_without_invalidating_refs() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button id="save" type="button">Save</button>
+            <label><input id="terms" type="checkbox">Accept terms</label>
+            <input id="locked" type="checkbox" aria-label="Locked" disabled>
+            <button id="hidden" type="button" hidden>Hidden</button>
+            <form><button id="reset" type="reset">Reset</button></form>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let save = snapshot.elements[0].reference;
+    let terms = snapshot.elements[1].reference;
+    let locked = snapshot.elements[2].reference;
+    let hidden = snapshot.elements[3].reference;
+
+    let activated = session.execute(ClickElement { reference: save }).unwrap();
+    let save_focused = session
+        .execute(GetElementFocused { reference: save })
+        .unwrap();
+    let located_activation = session
+        .execute(ClickByLocator {
+            locator: Locator::from(CssLocator::new("#save").unwrap()),
+        })
+        .unwrap();
+    let role_activation = session
+        .execute(ClickByRole {
+            locator: RoleLocator::new("button").unwrap().with_exact_name("Save"),
+        })
+        .unwrap();
+    let checked = session
+        .execute(ClickByRole {
+            locator: RoleLocator::new("checkbox")
+                .unwrap()
+                .with_exact_name("Accept terms"),
+        })
+        .unwrap();
+    let terms_focused = session
+        .execute(GetElementFocused { reference: terms })
+        .unwrap();
+    let save_after_checkbox = session
+        .execute(GetElementFocused { reference: save })
+        .unwrap();
+    let unchecked = session
+        .execute(ClickByLocator {
+            locator: Locator::from(CssLocator::new("#terms").unwrap()),
+        })
+        .unwrap();
+    let current = session
+        .execute(GetElementChecked { reference: terms })
+        .unwrap();
+    let disabled = session.execute(ClickElement { reference: locked });
+    let invisible = session.execute(ClickElement { reference: hidden });
+    let reset_locator = RoleLocator::new("button").unwrap().with_exact_name("Reset");
+    let reset = session.execute(ClickByRole {
+        locator: reset_locator.clone(),
+    });
+    let preserved = session.execute(GetElementText { reference: save }).unwrap();
+    drop(network_guard);
+
+    assert_eq!(activated, ClickResult::Activated { reference: save });
+    assert!(save_focused.focused);
+    assert!(matches!(
+        located_activation,
+        ClickByLocatorResult::Activated { matched } if matched.element == "save"
+    ));
+    assert!(matches!(
+        role_activation,
+        ClickByRoleResult::Activated { matched } if matched.name == "Save"
+    ));
+    assert!(matches!(
+        checked,
+        ClickByRoleResult::Checked { matched, checked: true }
+            if matched.name == "Accept terms"
+    ));
+    assert!(terms_focused.focused);
+    assert!(!save_after_checkbox.focused);
+    assert!(matches!(
+        unchecked,
+        ClickByLocatorResult::Checked { matched, checked: false }
+            if matched.element == "terms"
+    ));
+    assert!(!current.checked);
+    assert!(matches!(
+        disabled,
+        Err(SessionError::UnsupportedClick { reference, .. }) if reference == locked
+    ));
+    assert!(matches!(
+        invisible,
+        Err(SessionError::UnsupportedClick { reference, .. }) if reference == hidden
+    ));
+    assert!(matches!(
+        reset,
+        Err(SessionError::UnsupportedRoleAction {
+            locator,
+            action: RoleAction::Click,
+            ..
+        }) if locator == reset_locator
+    ));
+    assert_eq!(preserved.text, "Save");
+}
+
+#[test]
+fn get_form_click_serializes_current_successful_controls_and_navigates() {
+    let network_guard = network_test_guard();
+    let form = r#"
+        <form action="/search?discard=old" method="get">
+            <input id="query" name="q" value="old">
+            <textarea id="note" name="note">old note</textarea>
+            <input type="hidden" name="token" value="a b">
+            <label><input id="rust" type="checkbox" name="tag" value="rust" checked>Rust</label>
+            <label><input id="go" type="checkbox" name="tag" value="go">Go</label>
+            <select name="size"><option>small</option><option value="large" selected>Large</option></select>
+            <select name="multi" multiple>
+                <option value="a" selected>A</option>
+                <option value="skip" selected disabled>Skip</option>
+                <option value="b" selected>B</option>
+            </select>
+            <input name="ignored" value="x" disabled>
+            <input value="no-name">
+            <button name="commit" value="save">Search</button>
+        </form>
+    "#;
+    let (url, server) = serve_pages_recording_requests(vec![form, "<h1>Results</h1>"]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let old_reference = snapshot.elements[0].reference;
+    session
+        .execute(FillByLocator {
+            locator: Locator::from(CssLocator::new("#query").unwrap()),
+            value: "rust é".into(),
+        })
+        .unwrap();
+    session
+        .execute(FillByLocator {
+            locator: Locator::from(CssLocator::new("#note").unwrap()),
+            value: "line one\nline two".into(),
+        })
+        .unwrap();
+    session
+        .execute(SetCheckedByLocator {
+            locator: Locator::from(CssLocator::new("#go").unwrap()),
+            checked: true,
+        })
+        .unwrap();
+
+    let result = session
+        .execute(ClickByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Search"),
+        })
+        .unwrap();
+    let requests = server.join().unwrap();
+    let stale = session.execute(GetElementValue {
+        reference: old_reference,
+    });
+    drop(network_guard);
+
+    let query = "discard=old&q=rust+%C3%A9&note=line+one%0D%0Aline+two&token=a+b&tag=rust&tag=go&size=large&multi=a&multi=b&commit=save";
+    let expected_url = format!("{url}search?{query}");
+    assert!(matches!(
+        result,
+        ClickByRoleResult::Navigated { matched, page }
+            if matched.name == "Search" && page.url == expected_url
+    ));
+    assert_eq!(requests[0], "GET / HTTP/1.1");
+    assert_eq!(requests[1], format!("GET /search?{query} HTTP/1.1"));
+    assert_eq!(
+        stale,
+        Err(SessionError::StaleElementReference {
+            reference: old_reference,
+        })
+    );
+}
+
+#[test]
+fn form_activation_keys_use_submitter_overrides_and_external_form_controls() {
+    let network_guard = network_test_guard();
+    let form = r#"
+        <form id="search" action="/ignored" method="post">
+            <input name="q" value="one">
+            <button id="submit" name="commit" value="go"
+                formaction="/find?discard=old" formmethod="get">Go</button>
+        </form>
+        <input form="search" name="outside" value="two">
+    "#;
+    let (url, server) =
+        serve_pages_recording_requests(vec![form, "<h1>Found</h1>", form, "<h1>Found</h1>"]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+
+    let enter = session
+        .execute(PressByLocator {
+            locator: Locator::from(CssLocator::new("#submit").unwrap()),
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    session.execute(GoBack).unwrap();
+    let space = session
+        .execute(PressByLocator {
+            locator: Locator::from(CssLocator::new("#submit").unwrap()),
+            key: KeyboardKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    let requests = server.join().unwrap();
+    drop(network_guard);
+
+    let expected_url = format!("{url}find?discard=old&q=one&commit=go&outside=two");
+    assert_eq!(enter.matched.element, "submit");
+    assert_eq!(enter.press.navigated().unwrap().url, expected_url);
+    assert_eq!(space.press.navigated().unwrap().url, expected_url);
+    assert_eq!(
+        requests[1],
+        "GET /find?discard=old&q=one&commit=go&outside=two HTTP/1.1"
+    );
+    assert_eq!(requests[3], requests[1]);
+}
+
+#[test]
+fn implicit_enter_uses_the_first_default_submitter_and_current_values() {
+    let network_guard = network_test_guard();
+    let form = r#"
+        <button id="external" form="search" name="commit" value="external"
+            formaction="/external">External</button>
+        <form id="search" action="/fallback" method="get">
+            <label for="query">Query</label>
+            <input id="query" name="q" value="old">
+            <button id="inside" name="commit" value="inside"
+                formaction="/inside">Inside</button>
+        </form>
+    "#;
+    let (url, server) = serve_pages_recording_requests(vec![form, "<h1>Results</h1>"]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let old_query = snapshot.elements[1].reference;
+    session
+        .execute(FillByLocator {
+            locator: Locator::from(CssLocator::new("#query").unwrap()),
+            value: "rust browser".into(),
+        })
+        .unwrap();
+
+    let result = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    let stale = session.execute(GetElementValue {
+        reference: old_query,
+    });
+    let requests = server.join().unwrap();
+    drop(network_guard);
+
+    let expected_url = format!("{url}external?commit=external&q=rust+browser");
+    assert_eq!(result.navigated().unwrap().element.element, "query");
+    assert_eq!(result.navigated().unwrap().url, expected_url);
+    assert_eq!(requests[0], "GET / HTTP/1.1");
+    assert_eq!(
+        requests[1],
+        "GET /external?commit=external&q=rust+browser HTTP/1.1"
+    );
+    assert_eq!(
+        stale,
+        Err(SessionError::StaleElementReference {
+            reference: old_query,
+        })
+    );
+}
+
+#[test]
+fn implicit_enter_without_a_submitter_obeys_the_blocking_field_count() {
+    let network_guard = network_test_guard();
+    let form = r#"
+        <form id="multi" action="/multi" method="get">
+            <input id="first" name="first" value="one">
+            <input id="second" name="second" value="two">
+        </form>
+        <form id="solo" action="/solo" method="get">
+            <input id="solo-field" name="q" value="one">
+            <textarea name="note">line one</textarea>
+            <input type="hidden" name="token" value="a b">
+        </form>
+    "#;
+    let (url, server) = serve_pages_recording_requests(vec![form, "<h1>Solo</h1>"]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let first = snapshot.elements[0].reference;
+
+    let ignored = session
+        .execute(PressByLocator {
+            locator: Locator::from(CssLocator::new("#first").unwrap()),
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    let current_url = session.execute(GetPageUrl).unwrap();
+    let preserved = session
+        .execute(GetElementValue { reference: first })
+        .unwrap();
+    let navigated = session
+        .execute(PressByLocator {
+            locator: Locator::from(CssLocator::new("#solo-field").unwrap()),
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    let requests = server.join().unwrap();
+    drop(network_guard);
+
+    assert_eq!(ignored.press.ignored().unwrap().element, "first");
+    assert_eq!(current_url.url, url);
+    assert_eq!(preserved.value, "one");
+    assert_eq!(
+        navigated.press.navigated().unwrap().url,
+        format!("{url}solo?q=one&note=line+one&token=a+b")
+    );
+    assert_eq!(requests[0], "GET / HTTP/1.1");
+    assert_eq!(
+        requests[1],
+        "GET /solo?q=one&note=line+one&token=a+b HTTP/1.1"
+    );
+}
+
+#[test]
+fn implicit_enter_preserves_state_for_disabled_defaults_and_unsupported_methods() {
+    let network_guard = network_test_guard();
+    let form = r#"
+        <form id="disabled-default" action="/disabled" method="get">
+            <input id="disabled-field" name="q" value="one">
+            <button disabled name="commit" value="blocked">Blocked</button>
+            <button name="commit" value="enabled">Enabled</button>
+        </form>
+        <form id="post" action="/post" method="post">
+            <input id="post-field" name="q" value="two">
+        </form>
+        <input id="outside" value="three">
+    "#;
+    let (url, server) = serve_page(form);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let disabled_field = snapshot.elements[0].reference;
+    let post_field = snapshot.elements[3].reference;
+    let outside = snapshot.elements[4].reference;
+
+    let ignored = session
+        .execute(PressByLocator {
+            locator: Locator::from(CssLocator::new("#disabled-field").unwrap()),
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    let unsupported = session.execute(PressByLocator {
+        locator: Locator::from(CssLocator::new("#post-field").unwrap()),
+        key: KeyboardKey::new("Enter").unwrap(),
+    });
+    session
+        .execute(FillElement {
+            reference: outside,
+            value: "updated".into(),
+        })
+        .unwrap();
+    let outside_ignored = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    let first_value = session
+        .execute(GetElementValue {
+            reference: disabled_field,
+        })
+        .unwrap();
+    let second_value = session
+        .execute(GetElementValue {
+            reference: post_field,
+        })
+        .unwrap();
+    let current_url = session.execute(GetPageUrl).unwrap();
+    drop(network_guard);
+
+    assert_eq!(ignored.press.ignored().unwrap().element, "disabled-field");
+    assert!(matches!(
+        unsupported,
+        Err(SessionError::UnsupportedLocatorAction {
+            action: LocatorAction::Press,
+            reason,
+            ..
+        }) if reason == "form method \"post\" is not implemented"
+    ));
+    assert_eq!(outside_ignored.ignored().unwrap().element, "outside");
+    assert_eq!(first_value.value, "one");
+    assert_eq!(second_value.value, "two");
+    assert_eq!(current_url.url, url);
+}
+
+#[test]
+fn unsupported_form_submission_modes_preserve_the_page_and_references() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <form method="post"><button>Post</button></form>
+            <form><input type="file" name="upload"><button>Upload</button></form>
+            <form action="http://example.com/away"><button>Remote</button></form>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let post_reference = snapshot.elements[0].reference;
+
+    let post = session.execute(ClickByRole {
+        locator: RoleLocator::new("button").unwrap().with_exact_name("Post"),
+    });
+    let upload = session.execute(ClickByRole {
+        locator: RoleLocator::new("button")
+            .unwrap()
+            .with_exact_name("Upload"),
+    });
+    let remote = session.execute(ClickByRole {
+        locator: RoleLocator::new("button")
+            .unwrap()
+            .with_exact_name("Remote"),
+    });
+    let preserved = session.execute(GetElementText {
+        reference: post_reference,
+    });
+    drop(network_guard);
+
+    assert!(matches!(
+        post,
+        Err(SessionError::UnsupportedRoleAction { reason, .. })
+            if reason == "form method \"post\" is not implemented"
+    ));
+    assert!(matches!(
+        upload,
+        Err(SessionError::UnsupportedRoleAction { reason, .. })
+            if reason == "file input form submission is not implemented"
+    ));
+    assert!(matches!(remote, Err(SessionError::RoleNavigation { .. })));
+    assert_eq!(preserved.unwrap().text, "Post");
+}
+
+#[test]
 fn reload_replaces_the_document_and_failed_reload_preserves_it() {
     let network_guard = network_test_guard();
     let (url, server) = serve_pages(vec![
@@ -1436,9 +2960,135 @@ fn reload_replaces_the_document_and_failed_reload_preserves_it() {
 }
 
 #[test]
+fn history_navigation_moves_transactionally_and_truncates_forward_entries() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"<title>One</title><a href="/two">Next</a>"#,
+        r#"<title>Two</title><button>Two</button>"#,
+        r#"<title>One return</title><a href="/two">Next</a>"#,
+        r#"<title>Two return</title><button>Two</button>"#,
+        r#"<title>One again</title><a href="/two">Next</a>"#,
+        r#"<title>Branch</title><button>Branch</button>"#,
+    ]);
+    let second_url = format!("{url}two");
+    let branch_url = format!("{url}branch");
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    let first = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let link = first.elements[0].reference;
+
+    let no_previous = session.execute(GoBack).unwrap();
+    let preserved = session.execute(GetElementText { reference: link }).unwrap();
+    session.execute(ClickElement { reference: link }).unwrap();
+    let stale = session.execute(GetElementText { reference: link });
+    let back = session.execute(GoBack).unwrap();
+    let back_title = session.execute(GetPageTitle).unwrap();
+    let forward = session.execute(GoForward).unwrap();
+    let forward_title = session.execute(GetPageTitle).unwrap();
+    session.execute(GoBack).unwrap();
+    session
+        .execute(OpenPage {
+            url: branch_url.clone(),
+        })
+        .unwrap();
+    let no_forward = session.execute(GoForward).unwrap();
+    let branch_title = session.execute(GetPageTitle).unwrap();
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        no_previous,
+        HistoryNavigationResult::NoEntry {
+            current_url: url.clone(),
+        }
+    );
+    assert_eq!(preserved.text, "Next");
+    assert_eq!(
+        stale,
+        Err(SessionError::StaleElementReference { reference: link })
+    );
+    assert_eq!(
+        back,
+        HistoryNavigationResult::Navigated(browser_jr::OpenedPage {
+            url: url.clone(),
+            interactive_element_count: 1,
+        })
+    );
+    assert_eq!(back_title.title, "One return");
+    assert_eq!(
+        forward,
+        HistoryNavigationResult::Navigated(browser_jr::OpenedPage {
+            url: second_url,
+            interactive_element_count: 1,
+        })
+    );
+    assert_eq!(forward_title.title, "Two return");
+    assert_eq!(
+        no_forward,
+        HistoryNavigationResult::NoEntry {
+            current_url: branch_url,
+        }
+    );
+    assert_eq!(branch_title.title, "Branch");
+}
+
+#[test]
+fn failed_history_load_preserves_the_page_reference_and_history_position() {
+    let network_guard = network_test_guard();
+    let (first_url, first_server) = serve_page(r#"<button>First</button>"#);
+    let mut session = Session::new();
+    session
+        .execute(OpenPage {
+            url: first_url.clone(),
+        })
+        .unwrap();
+    first_server.join().unwrap();
+    let (second_url, second_server) = serve_page(r#"<button>Second</button>"#);
+    session
+        .execute(OpenPage {
+            url: second_url.clone(),
+        })
+        .unwrap();
+    second_server.join().unwrap();
+    let second = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let reference = second.elements[0].reference;
+
+    let failed = session.execute(GoBack);
+    let current_url = session.execute(GetPageUrl).unwrap();
+    let current_text = session.execute(GetElementText { reference }).unwrap();
+    drop(network_guard);
+
+    assert!(matches!(failed, Err(SessionError::Load(_))));
+    assert_eq!(current_url.url, second_url);
+    assert_eq!(current_text.text, "Second");
+}
+
+#[test]
+fn reload_replaces_the_document_without_adding_a_history_entry() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"<title>First</title><button>First</button>"#,
+        r#"<title>Reloaded</title><button>Reloaded</button>"#,
+    ]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    session.execute(ReloadPage).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let reference = snapshot.elements[0].reference;
+
+    let back = session.execute(GoBack).unwrap();
+    let current = session.execute(GetElementText { reference }).unwrap();
+    drop(network_guard);
+
+    assert_eq!(back, HistoryNavigationResult::NoEntry { current_url: url });
+    assert_eq!(current.text, "Reloaded");
+}
+
+#[test]
 fn a_new_snapshot_invalidates_previous_refs() {
     let network_guard = network_test_guard();
-    let (url, server) = serve_page(r#"<button>Save</button>"#);
+    let (url, server) = serve_page(r#"<div role="button">Save</div>"#);
     let mut session = Session::new();
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
@@ -1470,7 +3120,7 @@ fn a_new_snapshot_invalidates_previous_refs() {
 fn unsupported_clicks_preserve_the_current_snapshot() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(
-        r#"<button>Save</button><a href="/new" target="_blank">New</a><a href="/file" download>File</a>"#,
+        r#"<div role="button">Save</div><a href="/new" target="_blank">New</a><a href="/file" download>File</a>"#,
     );
     let mut session = Session::new();
     session.execute(OpenPage { url }).unwrap();
@@ -1526,6 +3176,9 @@ fn text_value_actions_update_and_read_current_state() {
             value: "hello world".into(),
         })
         .unwrap();
+    let note_focused = session
+        .execute(GetElementFocused { reference: note })
+        .unwrap();
     let current_email = session
         .execute(GetElementValue { reference: email })
         .unwrap();
@@ -1536,6 +3189,9 @@ fn text_value_actions_update_and_read_current_state() {
         reference: locked,
         value: "changed".into(),
     });
+    let note_after_failed_fill = session
+        .execute(GetElementFocused { reference: note })
+        .unwrap();
     let button_value = session.execute(GetElementValue { reference: button });
     let after = session.execute(CaptureInteractiveSnapshot).unwrap();
     let stale = session.execute(FillElement {
@@ -1569,6 +3225,8 @@ fn text_value_actions_update_and_read_current_state() {
         }
     );
     assert_eq!(note_result.value, "hello world");
+    assert!(note_focused.focused);
+    assert!(note_after_failed_fill.focused);
     assert_eq!(current_email.value, "hello@example.com");
     assert_eq!(current_locked.value, "fixed");
     assert!(matches!(
@@ -1599,6 +3257,1926 @@ fn text_value_actions_update_and_read_current_state() {
         stale_value,
         Err(SessionError::StaleElementReference { reference: email })
     );
+}
+
+#[test]
+fn type_actions_append_text_and_preserve_failure_state() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <label for="email">Email</label><input id="email" value="old">
+            <textarea id="note" aria-label="Note">draft</textarea>
+            <input id="locked" aria-label="Locked" value="fixed" readonly>
+            <button>Save</button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let before = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let email = before.elements[0].reference;
+    let note = before.elements[1].reference;
+    let locked = before.elements[2].reference;
+    let button = before.elements[3].reference;
+
+    let typed = session
+        .execute(TypeElement {
+            reference: email,
+            text: " plus".into(),
+        })
+        .unwrap();
+    let typed_by_locator = session
+        .execute(TypeByLocator {
+            locator: Locator::from(CssLocator::new("#email").unwrap()),
+            text: " more".into(),
+        })
+        .unwrap();
+    let empty = session
+        .execute(TypeElement {
+            reference: note,
+            text: String::new(),
+        })
+        .unwrap();
+    let locked_type = session.execute(TypeElement {
+        reference: locked,
+        text: " changed".into(),
+    });
+    let locked_locator = Locator::from(CssLocator::new("#locked").unwrap());
+    let locked_type_by_locator = session.execute(TypeByLocator {
+        locator: locked_locator.clone(),
+        text: " changed".into(),
+    });
+    let unsupported = session.execute(TypeElement {
+        reference: button,
+        text: "ignored".into(),
+    });
+    let current_locked = session
+        .execute(GetElementValue { reference: locked })
+        .unwrap();
+    let after = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let stale = session.execute(TypeElement {
+        reference: email,
+        text: " stale".into(),
+    });
+    drop(network_guard);
+
+    assert_eq!(
+        typed,
+        TypeResult {
+            reference: email,
+            value: "old plus".into(),
+        }
+    );
+    assert_eq!(typed_by_locator.value, "old plus more");
+    assert_eq!(empty.value, "draft");
+    assert_eq!(current_locked.value, "fixed");
+    assert!(matches!(
+        locked_type,
+        Err(SessionError::UnsupportedType { reference, .. }) if reference == locked
+    ));
+    assert!(matches!(
+        locked_type_by_locator,
+        Err(SessionError::LocatorActionBlocked {
+            locator,
+            action: LocatorAction::Type,
+            check: ActionabilityCheck::Editable,
+            ..
+        }) if locator == locked_locator
+    ));
+    assert!(matches!(
+        unsupported,
+        Err(SessionError::UnsupportedType { reference, .. }) if reference == button
+    ));
+    assert_eq!(
+        after.elements[0].state,
+        InteractiveElementState::Value("old plus more".into())
+    );
+    assert_eq!(
+        after.elements[1].state,
+        InteractiveElementState::Value("draft".into())
+    );
+    assert_eq!(
+        stale,
+        Err(SessionError::StaleElementReference { reference: email })
+    );
+}
+
+#[test]
+fn focus_and_press_use_page_owned_focus_and_control_owned_selection() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <label for="email">Email</label><input id="email" value="old">
+            <textarea id="note" aria-label="Note">draft</textarea>
+            <input id="locked" aria-label="Locked" value="fixed" readonly>
+            <input id="disabled" aria-label="Disabled" value="fixed" disabled>
+            <button>Save</button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let email = snapshot.elements[0].reference;
+    let locked = snapshot.elements[2].reference;
+    let disabled = snapshot.elements[3].reference;
+    let button = snapshot.elements[4].reference;
+
+    assert_eq!(
+        session.execute(PressKey {
+            key: KeyboardKey::new("X").unwrap(),
+        }),
+        Err(SessionError::NoFocusedElement)
+    );
+    assert_eq!(
+        session.execute(FocusElement { reference: email }).unwrap(),
+        FocusResult {
+            reference: email,
+            element: "email".into(),
+        }
+    );
+    let character = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Z").unwrap(),
+        })
+        .unwrap();
+    let note_focus = session
+        .execute(FocusByLocator {
+            locator: Locator::from(CssLocator::new("#note").unwrap()),
+        })
+        .unwrap();
+    let enter = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    let unicode = session
+        .execute(PressKey {
+            key: KeyboardKey::new("é").unwrap(),
+        })
+        .unwrap();
+    session.execute(FocusElement { reference: email }).unwrap();
+    let rejected_focus = session.execute(FocusElement {
+        reference: disabled,
+    });
+    let ambiguous_locator = Locator::from(RoleLocator::new("textbox").unwrap());
+    let ambiguous_focus = session.execute(FocusByLocator {
+        locator: ambiguous_locator.clone(),
+    });
+    let after_rejected_focus = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Y").unwrap(),
+        })
+        .unwrap();
+    session.execute(FocusElement { reference: locked }).unwrap();
+    let readonly_press = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Q").unwrap(),
+        })
+        .unwrap();
+    session.execute(FocusElement { reference: button }).unwrap();
+    let button_enter = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    session.execute(FocusElement { reference: email }).unwrap();
+    let space = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    let email_value = session
+        .execute(GetElementValue { reference: email })
+        .unwrap();
+    drop(network_guard);
+
+    let character = text_press(&character);
+    let enter = text_press(&enter);
+    let unicode = text_press(&unicode);
+    let after_rejected_focus = text_press(&after_rejected_focus);
+    let readonly_press = text_press(&readonly_press);
+    let space = text_press(&space);
+
+    assert_eq!(character.value, "Zold");
+    assert!(character.changed);
+    assert_eq!(
+        (character.selection.start(), character.selection.end()),
+        (1, 1)
+    );
+    assert_eq!(note_focus.matched.element, "note");
+    assert_eq!(enter.value, "\ndraft");
+    assert_eq!(unicode.value, "\nédraft");
+    assert!(matches!(
+        rejected_focus,
+        Err(SessionError::UnsupportedFocus { reference, .. }) if reference == disabled
+    ));
+    assert!(matches!(
+        ambiguous_focus,
+        Err(SessionError::LocatorAmbiguous { locator, .. }) if locator == ambiguous_locator
+    ));
+    assert_eq!(after_rejected_focus.value, "ZYold");
+    assert_eq!(readonly_press.value, "fixed");
+    assert!(!readonly_press.changed);
+    assert_eq!(
+        (
+            readonly_press.selection.start(),
+            readonly_press.selection.end()
+        ),
+        (0, 0)
+    );
+    assert!(
+        button_enter
+            .activated()
+            .unwrap()
+            .element
+            .starts_with("button")
+    );
+    assert_eq!(space.value, "ZY old");
+    assert_eq!(email_value.value, "ZY old");
+    assert_eq!(KeyboardKey::new(" "), KeyboardKey::new("Space"));
+    assert!(KeyboardKey::new("").is_err());
+    assert!(KeyboardKey::new("Backspace").is_ok());
+    assert!(KeyboardKey::new("Escape").is_err());
+}
+
+#[test]
+fn control_activation_keys_share_native_click_state_and_preserve_refs() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button id="save" type="button">Save</button>
+            <label><input id="terms" type="checkbox">Accept terms</label>
+            <form><button id="reset" type="reset">Reset</button></form>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let save = snapshot.elements[0].reference;
+    let terms = snapshot.elements[1].reference;
+
+    let button_space = session
+        .execute(PressByLocator {
+            locator: Locator::from(CssLocator::new("#save").unwrap()),
+            key: KeyboardKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    let checkbox_space = session
+        .execute(PressByLocator {
+            locator: Locator::from(
+                RoleLocator::new("checkbox")
+                    .unwrap()
+                    .with_exact_name("Accept terms"),
+            ),
+            key: KeyboardKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    let checkbox_again = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    let checkbox_enter = session.execute(PressKey {
+        key: KeyboardKey::new("Enter").unwrap(),
+    });
+    let form_button = session.execute(PressByLocator {
+        locator: Locator::from(CssLocator::new("#reset").unwrap()),
+        key: KeyboardKey::new("Enter").unwrap(),
+    });
+    let current = session
+        .execute(GetElementChecked { reference: terms })
+        .unwrap();
+    let preserved = session.execute(GetElementText { reference: save }).unwrap();
+    drop(network_guard);
+
+    assert_eq!(button_space.matched.element, "save");
+    assert_eq!(button_space.press.activated().unwrap().element, "save");
+    assert_eq!(checkbox_space.matched.element, "terms");
+    assert!(checkbox_space.press.checked().unwrap().1);
+    assert!(!checkbox_again.checked().unwrap().1);
+    assert!(matches!(
+        checkbox_enter,
+        Err(SessionError::UnsupportedPress { element, .. }) if element == "terms"
+    ));
+    assert!(matches!(
+        form_button,
+        Err(SessionError::UnsupportedLocatorAction {
+            action: LocatorAction::Press,
+            reason,
+            ..
+        }) if reason == "form reset is not implemented"
+    ));
+    assert!(!current.checked);
+    assert_eq!(preserved.text, "Save");
+}
+
+#[test]
+fn link_enter_navigates_through_locator_and_current_focus_paths() {
+    let network_guard = network_test_guard();
+    let first = r#"<a id="next" href="/next">Next</a>"#;
+    let destination = r#"<title>Arrived</title><h1>Arrived</h1>"#;
+    let (url, server) = serve_pages(vec![first, destination, first, destination]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    let first_snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let old_link = first_snapshot.elements[0].reference;
+
+    let locator_press = session
+        .execute(PressByLocator {
+            locator: Locator::from(RoleLocator::new("link").unwrap().with_exact_name("Next")),
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    let stale = session.execute(GetElementText {
+        reference: old_link,
+    });
+    session.execute(GoBack).unwrap();
+    let second_snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let current_link = second_snapshot.elements[0].reference;
+    session
+        .execute(FocusElement {
+            reference: current_link,
+        })
+        .unwrap();
+    let focused_press = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    let title = session.execute(GetPageTitle).unwrap();
+    server.join().unwrap();
+    drop(network_guard);
+
+    let locator_navigation = locator_press.press.navigated().unwrap();
+    assert_eq!(locator_press.matched.element, "next");
+    assert_eq!(locator_navigation.element.element, "next");
+    assert_eq!(locator_navigation.url, format!("{url}next"));
+    assert_eq!(locator_navigation.interactive_element_count, 1);
+    assert!(matches!(
+        stale,
+        Err(SessionError::StaleElementReference { reference }) if reference == old_link
+    ));
+    let focused_navigation = focused_press.navigated().unwrap();
+    assert_eq!(focused_navigation.element.element, "next");
+    assert_eq!(focused_navigation.url, format!("{url}next"));
+    assert_eq!(title.title, "Arrived");
+}
+
+#[test]
+fn failed_link_enter_preserves_the_page_focus_and_reference() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(r#"<a id="next" href="/missing">Next</a>"#);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let link = snapshot.elements[0].reference;
+    session.execute(FocusElement { reference: link }).unwrap();
+
+    let failed = session.execute(PressKey {
+        key: KeyboardKey::new("Enter").unwrap(),
+    });
+    let current_url = session.execute(GetPageUrl).unwrap();
+    let current_text = session.execute(GetElementText { reference: link }).unwrap();
+    let current_focus = session
+        .execute(GetElementFocused { reference: link })
+        .unwrap();
+    drop(network_guard);
+
+    assert!(matches!(
+        failed,
+        Err(SessionError::PressNavigation { key, element, .. })
+            if key == KeyboardKey::new("Enter").unwrap() && element == "next"
+    ));
+    assert_eq!(current_url.url, url);
+    assert_eq!(current_text.text, "Next");
+    assert!(current_focus.focused);
+}
+
+#[test]
+fn focused_state_reads_follow_page_focus_and_strict_locators() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body>
+                <button id="first">First</button>
+                <label for="second">Second</label>
+                <input id="second" placeholder="Work email" data-testid="second-input" title="Current field">
+                <div id="plain">Plain</div>
+                <img alt="Avatar">
+            </body>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let first = snapshot.elements[0].reference;
+    let second = snapshot.elements[1].reference;
+
+    let initial_first = session
+        .execute(GetElementFocused { reference: first })
+        .unwrap();
+    let initial_body = session
+        .execute(GetFocusedByLocator {
+            locator: Locator::from(CssLocator::new("body").unwrap()),
+        })
+        .unwrap();
+    assert!(!initial_first.focused);
+    assert!(initial_body.focused);
+
+    session
+        .execute(FocusByLocator {
+            locator: Locator::from(
+                RoleLocator::new("textbox")
+                    .unwrap()
+                    .with_exact_name("Second"),
+            ),
+        })
+        .unwrap();
+    let first_state = session
+        .execute(GetElementFocused { reference: first })
+        .unwrap();
+    let second_state = session
+        .execute(GetElementFocused { reference: second })
+        .unwrap();
+    let semantic_state = session
+        .execute(GetFocusedByLocator {
+            locator: Locator::from(
+                RoleLocator::new("textbox")
+                    .unwrap()
+                    .with_exact_name("Second"),
+            ),
+        })
+        .unwrap();
+    let structural_state = session
+        .execute(GetFocusedByLocator {
+            locator: Locator::from(CssLocator::new("#plain").unwrap()),
+        })
+        .unwrap();
+    let body_while_element_focused = session
+        .execute(GetFocusedByLocator {
+            locator: Locator::from(CssLocator::new("body").unwrap()),
+        })
+        .unwrap();
+    assert!(!first_state.focused);
+    assert!(second_state.focused);
+    assert_eq!(semantic_state.matched.element, "second");
+    assert!(semantic_state.focused);
+    assert_eq!(structural_state.matched.element, "plain");
+    assert!(!structural_state.focused);
+    assert!(!body_while_element_focused.focused);
+
+    let focused_locators = [
+        Locator::from(
+            RoleLocator::new("textbox")
+                .unwrap()
+                .with_exact_name("Second"),
+        ),
+        Locator::from(LabelLocator::new("Second").unwrap().exact()),
+        Locator::from(PlaceholderLocator::new("Work email").unwrap().exact()),
+        Locator::from(TestIdLocator::new("second-input").unwrap()),
+        Locator::from(TitleLocator::new("Current field").unwrap().exact()),
+        Locator::from(CssLocator::new("#second").unwrap()),
+        Locator::from(XPathLocator::new("//input[@id='second']").unwrap()),
+        Locator::from(CssLocator::first("input").unwrap()),
+        Locator::from(CssLocator::last("input").unwrap()),
+        Locator::from(CssLocator::nth(0, "input").unwrap()),
+    ];
+    for locator in focused_locators {
+        assert!(
+            session
+                .execute(GetFocusedByLocator { locator })
+                .unwrap()
+                .focused
+        );
+    }
+    let structural_locators = [
+        Locator::from(TextLocator::new("Plain").unwrap().exact()),
+        Locator::from(AltLocator::new("Avatar").unwrap().exact()),
+    ];
+    for locator in structural_locators {
+        assert!(
+            !session
+                .execute(GetFocusedByLocator { locator })
+                .unwrap()
+                .focused
+        );
+    }
+
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Tab").unwrap(),
+        })
+        .unwrap();
+    let second_after_tab = session
+        .execute(GetElementFocused { reference: second })
+        .unwrap();
+    let body_after_tab = session
+        .execute(GetFocusedByLocator {
+            locator: Locator::from(CssLocator::new("body").unwrap()),
+        })
+        .unwrap();
+    assert!(!second_after_tab.focused);
+    assert!(body_after_tab.focused);
+
+    session.execute(FocusElement { reference: first }).unwrap();
+    let fresh_snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let stale = session.execute(GetElementFocused { reference: first });
+    let fresh = session
+        .execute(GetElementFocused {
+            reference: fresh_snapshot.elements[0].reference,
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert!(matches!(
+        stale,
+        Err(SessionError::StaleElementReference { reference }) if reference == first
+    ));
+    assert!(fresh.focused);
+
+    let mut empty = Session::new();
+    assert_eq!(
+        empty.execute(GetFocusedByLocator {
+            locator: Locator::from(CssLocator::new("body").unwrap()),
+        }),
+        Err(SessionError::NoPage)
+    );
+}
+
+#[test]
+fn editing_keys_match_playwright_caret_and_selection_boundaries() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <input id="plain" value="abc">
+            <input id="unicode" value="a😀b">
+            <textarea id="note">ab
+cd</textarea>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let plain = snapshot.elements[0].reference;
+    let unicode = snapshot.elements[1].reference;
+    let note = snapshot.elements[2].reference;
+
+    session.execute(FocusElement { reference: plain }).unwrap();
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("ArrowRight").unwrap(),
+        })
+        .unwrap();
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Shift+ArrowRight").unwrap(),
+        })
+        .unwrap();
+    let replacement = session
+        .execute(PressKey {
+            key: KeyboardKey::new("X").unwrap(),
+        })
+        .unwrap();
+    let replacement = text_press(&replacement);
+    assert_eq!(replacement.value, "aXc");
+    assert_eq!(
+        (replacement.selection.start(), replacement.selection.end()),
+        (2, 2)
+    );
+
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Home").unwrap(),
+        })
+        .unwrap();
+    let deleted = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Delete").unwrap(),
+        })
+        .unwrap();
+    let deleted = text_press(&deleted);
+    assert_eq!(deleted.value, "Xc");
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("End").unwrap(),
+        })
+        .unwrap();
+    let backspaced = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Backspace").unwrap(),
+        })
+        .unwrap();
+    let backspaced = text_press(&backspaced);
+    assert_eq!(backspaced.value, "X");
+
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("ControlOrMeta+A").unwrap(),
+        })
+        .unwrap();
+    let selected_all = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Z").unwrap(),
+        })
+        .unwrap();
+    let selected_all = text_press(&selected_all);
+    assert_eq!(selected_all.value, "Z");
+
+    session
+        .execute(TypeElement {
+            reference: plain,
+            text: "tail".into(),
+        })
+        .unwrap();
+    let after_type = session
+        .execute(PressKey {
+            key: KeyboardKey::new("X").unwrap(),
+        })
+        .unwrap();
+    let after_type = text_press(&after_type);
+    assert_eq!(after_type.value, "ZXtail");
+    session
+        .execute(FillElement {
+            reference: plain,
+            value: "hi😀".into(),
+        })
+        .unwrap();
+    let after_fill = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Backspace").unwrap(),
+        })
+        .unwrap();
+    let after_fill = text_press(&after_fill);
+    assert_eq!(after_fill.value, "hi");
+    assert_eq!(
+        (after_fill.selection.start(), after_fill.selection.end()),
+        (2, 2)
+    );
+
+    session
+        .execute(FocusElement { reference: unicode })
+        .unwrap();
+    for _ in 0..2 {
+        session
+            .execute(PressKey {
+                key: KeyboardKey::new("ArrowRight").unwrap(),
+            })
+            .unwrap();
+    }
+    let unicode_delete = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Backspace").unwrap(),
+        })
+        .unwrap();
+    let unicode_delete = text_press(&unicode_delete);
+    assert_eq!(unicode_delete.value, "ab");
+    assert_eq!(
+        (
+            unicode_delete.selection.start(),
+            unicode_delete.selection.end()
+        ),
+        (1, 1)
+    );
+
+    session.execute(FocusElement { reference: note }).unwrap();
+    for _ in 0..4 {
+        session
+            .execute(PressKey {
+                key: KeyboardKey::new("ArrowRight").unwrap(),
+            })
+            .unwrap();
+    }
+    let home = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Home").unwrap(),
+        })
+        .unwrap();
+    let home = text_press(&home);
+    assert_eq!((home.selection.start(), home.selection.end()), (3, 3));
+    let end = session
+        .execute(PressKey {
+            key: KeyboardKey::new("End").unwrap(),
+        })
+        .unwrap();
+    let end = text_press(&end);
+    assert_eq!((end.selection.start(), end.selection.end()), (5, 5));
+    drop(network_guard);
+}
+
+#[test]
+fn focused_keyboard_text_uses_selection_and_preserves_noneditable_state() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<input id="plain" value="abc"><input id="locked" value="fixed" readonly><button id="save">Save</button>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let plain = snapshot.elements[0].reference;
+    let locked = snapshot.elements[1].reference;
+    let button = snapshot.elements[2].reference;
+
+    let body = session
+        .execute(KeyboardType {
+            text: "ignored".into(),
+        })
+        .unwrap();
+    assert_eq!(body.effect, KeyboardTextEffect::Ignored { element: None });
+
+    session.execute(FocusElement { reference: plain }).unwrap();
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("ArrowRight").unwrap(),
+        })
+        .unwrap();
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Shift+ArrowRight").unwrap(),
+        })
+        .unwrap();
+    let inserted = session
+        .execute(KeyboardInsertText { text: "X".into() })
+        .unwrap();
+    let inserted = inserted.text().unwrap();
+    assert_eq!(inserted.value, "aXc");
+    assert_eq!(
+        (inserted.selection.start(), inserted.selection.end()),
+        (2, 2)
+    );
+    assert!(inserted.changed);
+
+    let typed = session
+        .execute(KeyboardType {
+            text: "😀".into()
+        })
+        .unwrap();
+    let typed = typed.text().unwrap();
+    assert_eq!(typed.value, "aX😀c");
+    assert_eq!((typed.selection.start(), typed.selection.end()), (4, 4));
+    assert!(typed.changed);
+
+    let empty = session
+        .execute(KeyboardInsertText {
+            text: String::new(),
+        })
+        .unwrap();
+    let empty = empty.text().unwrap();
+    assert_eq!(empty.value, "aX😀c");
+    assert_eq!((empty.selection.start(), empty.selection.end()), (4, 4));
+    assert!(!empty.changed);
+
+    session.execute(FocusElement { reference: locked }).unwrap();
+    let readonly = session.execute(KeyboardType { text: "Q".into() }).unwrap();
+    let readonly = readonly.text().unwrap();
+    assert_eq!(readonly.value, "fixed");
+    assert_eq!(
+        (readonly.selection.start(), readonly.selection.end()),
+        (0, 0)
+    );
+    assert!(!readonly.changed);
+
+    session.execute(FocusElement { reference: button }).unwrap();
+    let ignored = session
+        .execute(KeyboardInsertText { text: "!".into() })
+        .unwrap();
+    assert!(matches!(
+        ignored.effect,
+        KeyboardTextEffect::Ignored { element: Some(element) } if element.element == "save"
+    ));
+    drop(network_guard);
+
+    assert_eq!(
+        Session::new().execute(KeyboardType { text: "x".into() }),
+        Err(SessionError::NoPage)
+    );
+}
+
+#[test]
+fn keyboard_insert_text_records_editable_and_readonly_native_events() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<main id="root"><input id="plain"><input id="locked" readonly><button id="save">Save</button></main>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let plain = snapshot.elements[0].reference;
+    let locked = snapshot.elements[1].reference;
+    let save = snapshot.elements[2].reference;
+
+    session.execute(FocusElement { reference: plain }).unwrap();
+    session
+        .execute(KeyboardInsertText {
+            text: "private".into(),
+        })
+        .unwrap();
+    session
+        .execute(KeyboardInsertText {
+            text: String::new(),
+        })
+        .unwrap();
+    let editable_events = session.execute(TakeDomEvents).unwrap();
+    assert_eq!(
+        editable_events
+            .iter()
+            .map(|event| (event.event_type, event.target.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (DomEventType::BeforeInput, "plain"),
+            (DomEventType::Input, "plain")
+        ]
+    );
+
+    session.execute(FocusElement { reference: locked }).unwrap();
+    session
+        .execute(KeyboardInsertText {
+            text: "blocked".into(),
+        })
+        .unwrap();
+    session.execute(FocusElement { reference: save }).unwrap();
+    session
+        .execute(KeyboardInsertText {
+            text: "ignored".into(),
+        })
+        .unwrap();
+    let readonly_events = session.execute(TakeDomEvents).unwrap();
+    drop(network_guard);
+
+    assert_eq!(readonly_events.len(), 1);
+    assert_eq!(readonly_events[0].event_type, DomEventType::BeforeInput);
+    assert_eq!(readonly_events[0].target, "locked");
+    assert_eq!(
+        readonly_events[0].path.first().map(String::as_str),
+        Some("locked")
+    );
+    assert!(
+        readonly_events[0]
+            .path
+            .iter()
+            .any(|target| target == "root")
+    );
+}
+
+#[test]
+fn keyboard_type_records_portable_per_scalar_native_events() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<main id="root"><input id="plain"><input id="locked" readonly><button id="save">Save</button></main>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let plain = snapshot.elements[0].reference;
+    let locked = snapshot.elements[1].reference;
+    let save = snapshot.elements[2].reference;
+
+    session.execute(FocusElement { reference: plain }).unwrap();
+    let typed = session
+        .execute(KeyboardType {
+            text: "aé😀".into(),
+        })
+        .unwrap();
+    assert_eq!(typed.text().unwrap().value, "aé😀");
+    assert_eq!(
+        session
+            .execute(TakeDomEvents)
+            .unwrap()
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::BeforeInput,
+            DomEventType::Input,
+            DomEventType::KeyUp,
+            DomEventType::BeforeInput,
+            DomEventType::Input,
+            DomEventType::BeforeInput,
+            DomEventType::Input,
+        ]
+    );
+
+    session.execute(FocusElement { reference: locked }).unwrap();
+    let readonly = session.execute(KeyboardType { text: "aé".into() }).unwrap();
+    assert!(!readonly.text().unwrap().changed);
+    let readonly_events = session.execute(TakeDomEvents).unwrap();
+    assert_eq!(
+        readonly_events
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::KeyUp,
+        ]
+    );
+    assert!(
+        readonly_events
+            .iter()
+            .all(|event| { event.target == "locked" && event.bubbles && event.composed })
+    );
+
+    session.execute(FocusElement { reference: save }).unwrap();
+    session
+        .execute(KeyboardType {
+            text: "ignored".into(),
+        })
+        .unwrap();
+    session
+        .execute(KeyboardType {
+            text: String::new(),
+        })
+        .unwrap();
+    drop(network_guard);
+    assert!(session.execute(TakeDomEvents).unwrap().is_empty());
+}
+
+#[test]
+fn keyboard_type_normalizes_line_breaks_for_text_controls() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(r#"<input id="plain"><textarea id="note"></textarea>"#);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let plain = snapshot.elements[0].reference;
+    let note = snapshot.elements[1].reference;
+
+    session.execute(FocusElement { reference: plain }).unwrap();
+    let single_line = session
+        .execute(KeyboardType {
+            text: "a\r\nb".into(),
+        })
+        .unwrap();
+    assert_eq!(single_line.text().unwrap().value, "ab");
+    assert_eq!(
+        session
+            .execute(TakeDomEvents)
+            .unwrap()
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::BeforeInput,
+            DomEventType::Input,
+            DomEventType::KeyUp,
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::KeyUp,
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::KeyUp,
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::BeforeInput,
+            DomEventType::Input,
+            DomEventType::KeyUp,
+        ]
+    );
+
+    session.execute(FocusElement { reference: note }).unwrap();
+    let multiline = session
+        .execute(KeyboardType {
+            text: "a\r\nb".into(),
+        })
+        .unwrap();
+    assert_eq!(multiline.text().unwrap().value, "a\n\nb");
+    let multiline_events = session.execute(TakeDomEvents).unwrap();
+    drop(network_guard);
+    assert_eq!(multiline_events.len(), 20);
+    assert_eq!(
+        multiline_events
+            .iter()
+            .filter(|event| event.event_type == DomEventType::Input)
+            .count(),
+        4
+    );
+}
+
+#[test]
+fn complete_press_records_portable_text_and_native_control_events() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <main id="root">
+                <input id="plain">
+                <input id="locked" readonly>
+                <button id="save" type="button">Save</button>
+                <input id="terms" type="checkbox">
+                <input id="selected" type="radio" checked>
+            </main>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let plain = snapshot.elements[0].reference;
+    let locked = snapshot.elements[1].reference;
+    let save = snapshot.elements[2].reference;
+    let terms = snapshot.elements[3].reference;
+    let selected = snapshot.elements[4].reference;
+
+    session.execute(FocusElement { reference: plain }).unwrap();
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("x").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::BeforeInput,
+            DomEventType::Input,
+            DomEventType::KeyUp,
+        ]
+    );
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Backspace").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::BeforeInput,
+            DomEventType::Input,
+            DomEventType::KeyUp,
+        ]
+    );
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Backspace").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![DomEventType::KeyDown, DomEventType::KeyUp]
+    );
+
+    session.execute(FocusElement { reference: locked }).unwrap();
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Q").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::KeyUp,
+        ]
+    );
+
+    session.execute(FocusElement { reference: save }).unwrap();
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Enter").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::Click,
+            DomEventType::KeyUp,
+        ]
+    );
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::KeyUp,
+            DomEventType::Click,
+        ]
+    );
+
+    session.execute(FocusElement { reference: terms }).unwrap();
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::KeyUp,
+            DomEventType::Click,
+            DomEventType::Input,
+            DomEventType::Change,
+        ]
+    );
+
+    session
+        .execute(PressByLocator {
+            locator: Locator::from(CssLocator::new("#plain").unwrap()),
+            key: KeyboardKey::new("y").unwrap(),
+        })
+        .unwrap();
+    let locator_events = session.execute(TakeDomEvents).unwrap();
+    assert_eq!(locator_events.len(), 5);
+    assert!(locator_events.iter().all(|event| event.target == "plain"));
+
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("é").unwrap(),
+        })
+        .unwrap();
+    assert!(session.execute(TakeDomEvents).unwrap().is_empty());
+
+    session
+        .execute(FocusElement {
+            reference: selected,
+        })
+        .unwrap();
+    session
+        .execute(PressKey {
+            key: KeyboardKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::KeyUp,
+        ]
+    );
+
+    session.execute(FocusElement { reference: plain }).unwrap();
+    session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("z").unwrap(),
+        })
+        .unwrap();
+    session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("z").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::BeforeInput,
+            DomEventType::Input,
+            DomEventType::KeyUp,
+        ]
+    );
+
+    session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Shift").unwrap(),
+        })
+        .unwrap();
+    session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("Shift").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![DomEventType::KeyDown, DomEventType::KeyUp]
+    );
+
+    session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Tab").unwrap(),
+        })
+        .unwrap();
+    session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("Tab").unwrap(),
+        })
+        .unwrap();
+    let traversal_events = session.execute(TakeDomEvents).unwrap();
+    assert_eq!(
+        traversal_events
+            .iter()
+            .map(|event| (event.event_type, event.target.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (DomEventType::KeyDown, "plain"),
+            (DomEventType::KeyUp, "locked"),
+        ]
+    );
+
+    session.execute(FocusElement { reference: save }).unwrap();
+    let down = session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert!(down.deferred);
+    assert!(down.press.is_none());
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![DomEventType::KeyDown, DomEventType::KeyPress]
+    );
+    let up = session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    drop(network_guard);
+    assert!(up.was_pressed);
+    assert_eq!(up.press.unwrap().activated().unwrap().element, "save");
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![DomEventType::KeyUp, DomEventType::Click]
+    );
+}
+
+#[test]
+fn held_space_defers_native_state_and_cancels_after_focus_change() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button id="save" type="button">Save</button>
+            <button id="other" type="button">Other</button>
+            <input id="terms" type="checkbox">
+            <input id="selected" type="radio" name="plan" checked>
+            <input id="alternate" type="radio" name="plan">
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let save = snapshot.elements[0].reference;
+    let other = snapshot.elements[1].reference;
+    let terms = snapshot.elements[2].reference;
+    let selected = snapshot.elements[3].reference;
+    let alternate = snapshot.elements[4].reference;
+
+    session.execute(FocusElement { reference: save }).unwrap();
+    let first_down = session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    let repeated_down = session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert!(!first_down.repeat);
+    assert!(first_down.deferred);
+    assert!(repeated_down.repeat);
+    assert!(repeated_down.deferred);
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+        ]
+    );
+    let button_up = session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        button_up.press.unwrap().activated().unwrap().element,
+        "save"
+    );
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![DomEventType::KeyUp, DomEventType::Click]
+    );
+
+    session.execute(FocusElement { reference: terms }).unwrap();
+    session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert!(
+        !session
+            .execute(GetElementChecked { reference: terms })
+            .unwrap()
+            .checked
+    );
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![DomEventType::KeyDown, DomEventType::KeyPress]
+    );
+    let checkbox_up = session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert!(checkbox_up.press.unwrap().checked().unwrap().1);
+    assert!(
+        session
+            .execute(GetElementChecked { reference: terms })
+            .unwrap()
+            .checked
+    );
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyUp,
+            DomEventType::Click,
+            DomEventType::Input,
+            DomEventType::Change,
+        ]
+    );
+
+    session
+        .execute(FocusElement {
+            reference: alternate,
+        })
+        .unwrap();
+    session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert!(
+        !session
+            .execute(GetElementChecked {
+                reference: alternate,
+            })
+            .unwrap()
+            .checked
+    );
+    session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert!(
+        session
+            .execute(GetElementChecked {
+                reference: alternate,
+            })
+            .unwrap()
+            .checked
+    );
+    assert!(
+        !session
+            .execute(GetElementChecked {
+                reference: selected,
+            })
+            .unwrap()
+            .checked
+    );
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::KeyUp,
+            DomEventType::Click,
+            DomEventType::Input,
+            DomEventType::Change,
+        ]
+    );
+
+    session
+        .execute(FocusElement {
+            reference: alternate,
+        })
+        .unwrap();
+    session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    let selected_up = session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert!(selected_up.press.unwrap().checked().unwrap().1);
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![
+            DomEventType::KeyDown,
+            DomEventType::KeyPress,
+            DomEventType::KeyUp,
+        ]
+    );
+
+    session.execute(FocusElement { reference: save }).unwrap();
+    session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![DomEventType::KeyDown, DomEventType::KeyPress]
+    );
+    session.execute(FocusElement { reference: other }).unwrap();
+    let canceled = session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    drop(network_guard);
+    assert!(canceled.press.is_none());
+    assert_eq!(
+        session
+            .execute(TakeDomEvents)
+            .unwrap()
+            .iter()
+            .map(|event| (event.event_type, event.target.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(DomEventType::KeyUp, "other")]
+    );
+}
+
+#[test]
+fn held_space_defers_submit_navigation_until_key_up() {
+    let network_guard = network_test_guard();
+    let form = r#"
+        <form action="/sent" method="get">
+            <button id="submit" name="commit" value="yes">Send</button>
+        </form>
+    "#;
+    let (url, server) = serve_pages_recording_requests(vec![form, "<h1>Sent</h1>"]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let submit = snapshot.elements[0].reference;
+    session.execute(FocusElement { reference: submit }).unwrap();
+
+    let down = session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    assert!(down.deferred);
+    assert!(down.press.is_none());
+    assert_eq!(session.execute(GetPageUrl).unwrap().url, url);
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![DomEventType::KeyDown, DomEventType::KeyPress]
+    );
+
+    let up = session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    let requests = server.join().unwrap();
+    drop(network_guard);
+    assert_eq!(
+        up.press.unwrap().navigated().unwrap().url,
+        format!("{url}sent?commit=yes")
+    );
+    assert_eq!(requests[1], "GET /sent?commit=yes HTTP/1.1");
+    assert_eq!(
+        take_event_types(&mut session),
+        vec![DomEventType::KeyUp, DomEventType::Click]
+    );
+}
+
+fn take_event_types(session: &mut Session) -> Vec<DomEventType> {
+    session
+        .execute(TakeDomEvents)
+        .unwrap()
+        .into_iter()
+        .map(|event| event.event_type)
+        .collect()
+}
+
+#[test]
+fn held_keyboard_keys_apply_modifiers_and_report_repeat_state() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<input id="plain" value="abc"><label for="other">Other</label><input id="other">"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let plain = snapshot.elements[0].reference;
+
+    let unfocused = session.execute(KeyDown {
+        key: KeyboardEventKey::new("x").unwrap(),
+    });
+    assert_eq!(unfocused, Err(SessionError::NoFocusedElement));
+    let unfocused_up = session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("x").unwrap(),
+        })
+        .unwrap();
+    assert!(!unfocused_up.was_pressed);
+
+    session.execute(FocusElement { reference: plain }).unwrap();
+    let shift = session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("ShiftLeft").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(shift.key.to_string(), "Shift");
+    assert_eq!(shift.key.modifier(), Some(KeyboardModifier::Shift));
+    assert!(!shift.repeat);
+    assert!(shift.press.is_none());
+
+    let selected = session
+        .execute(PressKey {
+            key: KeyboardKey::new("ArrowRight").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(selected.key.to_string(), "Shift+ArrowRight");
+    let selected = text_press(&selected);
+    assert_eq!(
+        (selected.selection.start(), selected.selection.end()),
+        (0, 1)
+    );
+
+    let first = session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("x").unwrap(),
+        })
+        .unwrap();
+    assert!(!first.repeat);
+    assert_eq!(first.press.as_ref().unwrap().key.to_string(), "X");
+    assert_eq!(text_press(first.press.as_ref().unwrap()).value, "Xbc");
+
+    let repeated = session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("x").unwrap(),
+        })
+        .unwrap();
+    assert!(repeated.repeat);
+    assert_eq!(text_press(repeated.press.as_ref().unwrap()).value, "XXbc");
+
+    let released = session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("x").unwrap(),
+        })
+        .unwrap();
+    assert!(released.was_pressed);
+    assert!(
+        !session
+            .execute(KeyUp {
+                key: KeyboardEventKey::new("x").unwrap(),
+            })
+            .unwrap()
+            .was_pressed
+    );
+    assert!(
+        session
+            .execute(KeyUp {
+                key: KeyboardEventKey::new("Shift").unwrap(),
+            })
+            .unwrap()
+            .was_pressed
+    );
+
+    session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("ControlOrMeta").unwrap(),
+        })
+        .unwrap();
+    let select_all = session
+        .execute(PressKey {
+            key: KeyboardKey::new("a").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(select_all.key.to_string(), "ControlOrMeta+A");
+    let select_all = text_press(&select_all);
+    assert_eq!(
+        (select_all.selection.start(), select_all.selection.end()),
+        (0, 4)
+    );
+    let unsupported_modified = session.execute(KeyDown {
+        key: KeyboardEventKey::new("b").unwrap(),
+    });
+    assert!(matches!(
+        unsupported_modified,
+        Err(SessionError::UnsupportedPress { key, element, reason })
+            if key == KeyboardKey::new("b").unwrap()
+                && element == "plain"
+                && reason.contains("held modifier combination")
+    ));
+    assert!(
+        !session
+            .execute(KeyUp {
+                key: KeyboardEventKey::new("b").unwrap(),
+            })
+            .unwrap()
+            .was_pressed
+    );
+    session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("ControlOrMeta").unwrap(),
+        })
+        .unwrap();
+
+    session
+        .execute(KeyDown {
+            key: KeyboardEventKey::new("Shift").unwrap(),
+        })
+        .unwrap();
+    let locator_press = session
+        .execute(PressByLocator {
+            locator: Locator::from(LabelLocator::new("Other").unwrap()),
+            key: KeyboardKey::new("a").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(locator_press.press.key.to_string(), "A");
+    assert_eq!(text_press(&locator_press.press).value, "A");
+    session
+        .execute(KeyUp {
+            key: KeyboardEventKey::new("Shift").unwrap(),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert!(KeyboardEventKey::new("Shift+ArrowLeft").is_err());
+    assert_eq!(
+        Session::new().execute(KeyDown {
+            key: KeyboardEventKey::new("Shift").unwrap(),
+        }),
+        Err(SessionError::NoPage)
+    );
+}
+
+#[test]
+fn press_by_locator_focuses_one_strict_target_before_editing() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <label for="first">First</label><input id="first" value="one">
+            <label for="second">Second</label><input id="second" value="two">
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let first = snapshot.elements[0].reference;
+    session.execute(FocusElement { reference: first }).unwrap();
+    let second = Locator::from(LabelLocator::new("Second").unwrap().exact());
+
+    let end = session
+        .execute(PressByLocator {
+            locator: second.clone(),
+            key: KeyboardKey::new("End").unwrap(),
+        })
+        .unwrap();
+    let backspace = session
+        .execute(PressByLocator {
+            locator: second.clone(),
+            key: KeyboardKey::new("Backspace").unwrap(),
+        })
+        .unwrap();
+    let missing_locator = Locator::from(LabelLocator::new("Missing").unwrap().exact());
+    let missing = session.execute(PressByLocator {
+        locator: missing_locator.clone(),
+        key: KeyboardKey::new("X").unwrap(),
+    });
+    let after_missing = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Y").unwrap(),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    let end_effect = text_press(&end.press);
+    let backspace_effect = text_press(&backspace.press);
+    let after_missing = text_press(&after_missing);
+
+    assert_eq!(end.matched.element, "second");
+    assert_eq!(
+        (end_effect.selection.start(), end_effect.selection.end()),
+        (3, 3)
+    );
+    assert_eq!(backspace_effect.value, "tw");
+    assert_eq!(
+        missing,
+        Err(SessionError::LocatorNotFound {
+            locator: missing_locator,
+        })
+    );
+    assert_eq!(after_missing.element.element, "second");
+    assert_eq!(after_missing.value, "twY");
+}
+
+#[test]
+fn tab_and_shift_tab_match_chromium_sequential_focus_order() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r##"
+            <button id="natural1">one</button>
+            <input id="negative" tabindex="-1">
+            <input id="positive2" tabindex="2">
+            <a id="link" href="#x">link</a>
+            <input id="disabled" disabled>
+            <input id="positive1" tabindex="1">
+            <textarea id="natural2"></textarea>
+            <div id="zero" role="button" tabindex="0">zero</div>
+            <input id="hidden" hidden>
+        "##,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let mut forward = Vec::new();
+    for _ in 0..8 {
+        let result = session
+            .execute(PressKey {
+                key: KeyboardKey::new("Tab").unwrap(),
+            })
+            .unwrap();
+        forward.push(
+            result
+                .focus_traversal()
+                .unwrap()
+                .current
+                .as_ref()
+                .map(|element| element.element.as_str())
+                .unwrap_or("body")
+                .to_owned(),
+        );
+    }
+    assert_eq!(
+        forward,
+        [
+            "positive1",
+            "positive2",
+            "natural1",
+            "link",
+            "natural2",
+            "zero",
+            "body",
+            "positive1",
+        ]
+    );
+
+    let reverse_boundary = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Shift+Tab").unwrap(),
+        })
+        .unwrap();
+    assert!(
+        reverse_boundary
+            .focus_traversal()
+            .unwrap()
+            .current
+            .is_none()
+    );
+    let reverse_from_body = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Shift+Tab").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        reverse_from_body
+            .focus_traversal()
+            .unwrap()
+            .current
+            .as_ref()
+            .unwrap()
+            .element,
+        "zero"
+    );
+
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let locator_tab = session
+        .execute(PressByLocator {
+            locator: Locator::from(RoleLocator::new("button").unwrap().with_exact_name("one")),
+            key: KeyboardKey::new("Tab").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(locator_tab.matched.element, "natural1");
+    let locator_traversal = locator_tab.press.focus_traversal().unwrap();
+    assert_eq!(
+        locator_traversal.previous.as_ref().unwrap().element,
+        "natural1"
+    );
+    assert_eq!(locator_traversal.current.as_ref().unwrap().element, "link");
+    session
+        .execute(FocusElement {
+            reference: snapshot.elements[0].reference,
+        })
+        .unwrap();
+
+    let negative = snapshot.elements[1].reference;
+    session
+        .execute(FocusElement {
+            reference: negative,
+        })
+        .unwrap();
+    let from_negative = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Tab").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        from_negative
+            .focus_traversal()
+            .unwrap()
+            .current
+            .as_ref()
+            .unwrap()
+            .element,
+        "positive2"
+    );
+    session
+        .execute(FocusElement {
+            reference: negative,
+        })
+        .unwrap();
+    let reverse_from_negative = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Shift+Tab").unwrap(),
+        })
+        .unwrap();
+    assert_eq!(
+        reverse_from_negative
+            .focus_traversal()
+            .unwrap()
+            .current
+            .as_ref()
+            .unwrap()
+            .element,
+        "natural1"
+    );
+    drop(network_guard);
+
+    assert!(KeyboardKey::new("Tab").is_ok());
+    assert!(KeyboardKey::new("Shift+Tab").is_ok());
+}
+
+#[test]
+fn tab_blocks_when_the_document_has_an_unrepresented_focus_target() {
+    let network_guard = network_test_guard();
+    let (url, server) =
+        serve_page(r#"<button>Save</button><div contenteditable="true">Draft</div>"#);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let result = session.execute(PressKey {
+        key: KeyboardKey::new("Tab").unwrap(),
+    });
+    drop(network_guard);
+
+    assert!(matches!(
+        result,
+        Err(SessionError::UnsupportedPress { key, reason, .. })
+            if key == KeyboardKey::new("Tab").unwrap()
+                && reason.contains("without a supported interactive role")
+    ));
+}
+
+#[test]
+fn document_replacement_clears_focus_before_the_next_press() {
+    let network_guard = network_test_guard();
+    let body = r#"<input id="email" value="old">"#;
+    let (url, server) = serve_pages(vec![body, body]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    session
+        .execute(FocusElement {
+            reference: snapshot.elements[0].reference,
+        })
+        .unwrap();
+    session.execute(ReloadPage).unwrap();
+    server.join().unwrap();
+    let press = session.execute(PressKey {
+        key: KeyboardKey::new("X").unwrap(),
+    });
+    drop(network_guard);
+
+    assert_eq!(press, Err(SessionError::NoFocusedElement));
 }
 
 #[test]
@@ -1896,6 +5474,96 @@ fn select_options_match_labels_and_indexes_transactionally() {
 }
 
 #[test]
+fn editable_reads_match_native_and_contenteditable_boundaries() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <input id="text">
+            <input id="readonly" readonly>
+            <input id="disabled" disabled>
+            <textarea id="textarea"></textarea>
+            <select id="select"><option>One</option></select>
+            <input id="checkbox" type="checkbox">
+            <input id="input-button" type="button" value="Button">
+            <button id="button">Button</button>
+            <div contenteditable><span id="editable-child">Inherited</span></div>
+            <div id="editable-false" contenteditable="false">Not editable</div>
+            <fieldset disabled><input id="fieldset-input"></fieldset>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let text = snapshot.elements[0].reference;
+    let readonly = snapshot.elements[1].reference;
+    let button = snapshot.elements[7].reference;
+
+    let text_reference = session
+        .execute(GetElementEditable { reference: text })
+        .unwrap();
+    let readonly_reference = session
+        .execute(GetElementEditable {
+            reference: readonly,
+        })
+        .unwrap();
+    let button_reference = session.execute(GetElementEditable { reference: button });
+    let mut selector_results = Vec::new();
+    for selector in [
+        "#text",
+        "#readonly",
+        "#disabled",
+        "#textarea",
+        "#select",
+        "#checkbox",
+        "#input-button",
+        "#editable-child",
+    ] {
+        selector_results.push(
+            session
+                .execute(GetEditableByLocator {
+                    locator: Locator::from(CssLocator::new(selector).unwrap()),
+                })
+                .unwrap()
+                .editable,
+        );
+    }
+    let false_contenteditable = session.execute(GetEditableByLocator {
+        locator: Locator::from(CssLocator::new("#editable-false").unwrap()),
+    });
+    let fieldset = session.execute(GetEditableByLocator {
+        locator: Locator::from(CssLocator::new("#fieldset-input").unwrap()),
+    });
+    drop(network_guard);
+
+    assert!(text_reference.editable);
+    assert!(!readonly_reference.editable);
+    assert!(matches!(
+        button_reference,
+        Err(SessionError::UnsupportedEditableState { reference, .. }) if reference == button
+    ));
+    assert_eq!(
+        selector_results,
+        vec![true, false, false, true, true, true, true, true]
+    );
+    assert!(matches!(
+        false_contenteditable,
+        Err(SessionError::UnsupportedLocatorInspection {
+            inspection: LocatorInspection::Editable,
+            ..
+        })
+    ));
+    assert!(matches!(
+        fieldset,
+        Err(SessionError::UnsupportedLocatorInspection {
+            inspection: LocatorInspection::Editable,
+            reason,
+            ..
+        }) if reason == "disabled fieldset editable state is not implemented"
+    ));
+}
+
+#[test]
 fn visibility_reads_require_supported_static_box_evidence() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(
@@ -1969,6 +5637,775 @@ fn visibility_reads_require_supported_static_box_evidence() {
 }
 
 #[test]
+fn bounding_box_reads_share_complete_geometry_and_preserve_state() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <button id="fixed" style="position:fixed;left:20px;top:30px;width:120px;height:40px;padding-left:5px;padding-right:7px;padding-top:3px;padding-bottom:4px;border-left-width:2px;border-left-style:solid;border-right-width:3px;border-right-style:solid;border-top-width:1px;border-top-style:solid;border-bottom-width:2px;border-bottom-style:solid">Save</button>
+            <button id="hidden" hidden style="position:fixed;left:1px;top:2px;width:3px;height:4px">Hidden</button>
+            <button id="border-box" style="position:fixed;left:-8px;top:-9px;width:50px;height:30px;box-sizing:border-box;padding-left:5px;padding-right:5px;padding-top:3px;padding-bottom:3px;border-left-width:2px;border-left-style:solid;border-right-width:2px;border-right-style:solid;border-top-width:1px;border-top-style:solid;border-bottom-width:1px;border-bottom-style:solid">Sized</button>
+            <button id="zero" style="position:fixed;left:4px;top:5px;width:0;height:8px">Zero</button>
+            <button id="normal">Normal</button>
+            <button id="fixed-margin" style="position:fixed;left:10px;top:10px;width:20px;height:20px;margin-left:2px">Margin</button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let fixed = snapshot.elements[0].reference;
+    let hidden = snapshot.elements[1].reference;
+
+    let reference_box = session
+        .execute(GetElementBoundingBox { reference: fixed })
+        .unwrap();
+    let role_box = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(RoleLocator::new("button").unwrap().with_exact_name("Save")),
+        })
+        .unwrap();
+    let xpath_box = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(XPathLocator::new("//button[@id='fixed']").unwrap()),
+        })
+        .unwrap();
+    let hidden_reference = session
+        .execute(GetElementBoundingBox { reference: hidden })
+        .unwrap();
+    let hidden_locator = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("#hidden").unwrap()),
+        })
+        .unwrap();
+    let border_box = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("#border-box").unwrap()),
+        })
+        .unwrap();
+    let zero_box = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("#zero").unwrap()),
+        })
+        .unwrap();
+    let unsupported = session.execute(GetBoundingBoxByLocator {
+        locator: Locator::from(CssLocator::new("#normal").unwrap()),
+    });
+    let unsupported_fixed_margin = session.execute(GetBoundingBoxByLocator {
+        locator: Locator::from(CssLocator::new("#fixed-margin").unwrap()),
+    });
+    let preserved = session
+        .execute(GetElementText { reference: fixed })
+        .unwrap();
+    drop(network_guard);
+
+    let expected = BoundingBox {
+        x: 20,
+        y: 30,
+        width: 137,
+        height: 50,
+    };
+    assert_eq!(
+        reference_box,
+        ElementBoundingBox {
+            reference: fixed,
+            value: Some(expected),
+        }
+    );
+    assert_eq!(role_box.value, Some(expected));
+    assert_eq!(role_box.matched.element, "fixed");
+    assert_eq!(xpath_box.value, Some(expected));
+    assert_eq!(hidden_reference.value, None);
+    assert_eq!(hidden_locator.value, None);
+    assert_eq!(
+        border_box.value,
+        Some(BoundingBox {
+            x: -8,
+            y: -9,
+            width: 50,
+            height: 30,
+        })
+    );
+    assert_eq!(zero_box.value, None);
+    assert!(matches!(
+        unsupported,
+        Err(SessionError::UnsupportedLocatorInspection {
+            inspection: LocatorInspection::BoundingBox,
+            reason,
+            ..
+        }) if reason == "normal-flow button layout is not implemented"
+    ));
+    assert!(matches!(
+        unsupported_fixed_margin,
+        Err(SessionError::UnsupportedLocatorInspection {
+            inspection: LocatorInspection::BoundingBox,
+            reason,
+            ..
+        }) if reason == "fixed-position margin-left geometry is not implemented"
+    ));
+    assert_eq!(preserved.text, "Save");
+}
+
+#[test]
+fn normal_flow_bounding_boxes_stack_blocks_and_size_auto_parents() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body>
+                <main id="shell" style="width:300px;padding-left:10px;padding-top:5px;border-left-width:2px;border-left-style:solid;border-top-width:3px;border-top-style:solid">
+                    <section id="first" style="height:20px"></section>
+                    <button id="action" style="display:block;box-sizing:border-box;width:100px;height:24px">Act</button>
+                    <div id="empty"></div>
+                    <section id="hidden" hidden style="height:100px"></section>
+                    <aside id="overlay" style="position:fixed;left:400px;top:40px;width:50px;height:60px"></aside>
+                    <section id="invisible" style="visibility:hidden;height:10px"></section>
+                    <section id="second" style="height:30px"></section>
+                </main>
+            </body>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let action = snapshot.elements[0].reference;
+
+    let read = |session: &mut Session, selector: &str| {
+        session
+            .execute(GetBoundingBoxByLocator {
+                locator: Locator::from(CssLocator::new(selector).unwrap()),
+            })
+            .unwrap()
+            .value
+    };
+    let body = read(&mut session, "body");
+    let shell = read(&mut session, "#shell");
+    let first = read(&mut session, "#first");
+    let action_box = session
+        .execute(GetElementBoundingBox { reference: action })
+        .unwrap();
+    let empty = read(&mut session, "#empty");
+    let hidden = read(&mut session, "#hidden");
+    let overlay = read(&mut session, "#overlay");
+    let invisible = read(&mut session, "#invisible");
+    let second = read(&mut session, "#second");
+    let second_visible = session
+        .execute(GetVisibleByLocator {
+            locator: Locator::from(CssLocator::new("#second").unwrap()),
+        })
+        .unwrap();
+    let empty_visible = session
+        .execute(GetVisibleByLocator {
+            locator: Locator::from(CssLocator::new("#empty").unwrap()),
+        })
+        .unwrap();
+    let invisible_visible = session
+        .execute(GetVisibleByLocator {
+            locator: Locator::from(CssLocator::new("#invisible").unwrap()),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        body,
+        Some(BoundingBox {
+            x: 8,
+            y: 8,
+            width: 1264,
+            height: 92,
+        })
+    );
+    assert_eq!(
+        shell,
+        Some(BoundingBox {
+            x: 8,
+            y: 8,
+            width: 312,
+            height: 92,
+        })
+    );
+    assert_eq!(
+        first,
+        Some(BoundingBox {
+            x: 20,
+            y: 16,
+            width: 300,
+            height: 20,
+        })
+    );
+    assert_eq!(
+        action_box,
+        ElementBoundingBox {
+            reference: action,
+            value: Some(BoundingBox {
+                x: 20,
+                y: 36,
+                width: 100,
+                height: 24,
+            }),
+        }
+    );
+    assert_eq!(empty, None);
+    assert_eq!(hidden, None);
+    assert_eq!(
+        overlay,
+        Some(BoundingBox {
+            x: 400,
+            y: 40,
+            width: 50,
+            height: 60,
+        })
+    );
+    assert_eq!(invisible, None);
+    assert_eq!(
+        second,
+        Some(BoundingBox {
+            x: 20,
+            y: 70,
+            width: 300,
+            height: 30,
+        })
+    );
+    assert!(second_visible.visible);
+    assert!(!empty_visible.visible);
+    assert!(!invisible_visible.visible);
+}
+
+#[test]
+fn normal_flow_bounding_boxes_reject_intrinsic_text_and_collapsing_margins() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <main id="sized" style="height:40px">
+                <div id="text">Needs line layout</div>
+            </main>
+            <section id="margined" style="height:10px;margin-top:5px"></section>
+            <aside id="after" style="height:10px"></aside>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let sized = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("#sized").unwrap()),
+        })
+        .unwrap();
+    let text = session.execute(GetBoundingBoxByLocator {
+        locator: Locator::from(CssLocator::new("#text").unwrap()),
+    });
+    let margined = session.execute(GetBoundingBoxByLocator {
+        locator: Locator::from(CssLocator::new("#margined").unwrap()),
+    });
+    let after = session.execute(GetBoundingBoxByLocator {
+        locator: Locator::from(CssLocator::new("#after").unwrap()),
+    });
+    drop(network_guard);
+
+    assert_eq!(
+        sized.value,
+        Some(BoundingBox {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 40,
+        })
+    );
+    assert!(matches!(
+        text,
+        Err(SessionError::UnsupportedLocatorInspection {
+            inspection: LocatorInspection::BoundingBox,
+            reason,
+            ..
+        }) if reason == "intrinsic text height is not implemented for text"
+    ));
+    assert!(matches!(
+        margined,
+        Err(SessionError::UnsupportedLocatorInspection {
+            inspection: LocatorInspection::BoundingBox,
+            reason,
+            ..
+        }) if reason == "vertical margin collapsing is not implemented"
+    ));
+    assert!(matches!(
+        after,
+        Err(SessionError::UnsupportedLocatorInspection {
+            inspection: LocatorInspection::BoundingBox,
+            reason,
+            ..
+        }) if reason.starts_with("previous normal-flow sibling geometry is unsupported")
+    ));
+}
+
+#[test]
+fn page_scroll_moves_document_boxes_keeps_fixed_boxes_and_resets_on_reload() {
+    let network_guard = network_test_guard();
+    let body = r#"
+        <body>
+            <div id="wide" style="width:1800px;height:10px"></div>
+            <div id="spacer" style="height:1300px"></div>
+            <button id="target" style="display:block;box-sizing:border-box;width:100px;height:40px">Target</button>
+            <button id="fixed" style="position:fixed;left:20px;top:30px;width:100px;height:40px">Fixed</button>
+            <button id="hidden" hidden style="position:fixed;left:0;top:0;width:100px;height:40px">Hidden</button>
+        </body>
+    "#;
+    let (url, server) = serve_pages(vec![body, body]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let target = snapshot.elements[0].reference;
+    let fixed = snapshot.elements[1].reference;
+
+    let down = session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Down,
+            distance: 300,
+        })
+        .unwrap();
+    let target_after_down = session
+        .execute(GetElementBoundingBox { reference: target })
+        .unwrap();
+    let fixed_after_down = session
+        .execute(GetElementBoundingBox { reference: fixed })
+        .unwrap();
+    let right = session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Right,
+            distance: 1_000,
+        })
+        .unwrap();
+    let target_after_right = session
+        .execute(GetElementBoundingBox { reference: target })
+        .unwrap();
+    let capped = session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Right,
+            distance: 1,
+        })
+        .unwrap();
+    let down_capped = session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Down,
+            distance: 1_000,
+        })
+        .unwrap();
+    let up = session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Up,
+            distance: 200,
+        })
+        .unwrap();
+    let left = session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Left,
+            distance: 28,
+        })
+        .unwrap();
+    session.execute(ReloadPage).unwrap();
+    server.join().unwrap();
+    let reset = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("#target").unwrap()),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        down,
+        PageScroll {
+            x: 0,
+            y: 300,
+            moved: true,
+        }
+    );
+    assert_eq!(target_after_down.value.unwrap().y, 1_018);
+    assert_eq!(fixed_after_down.value.unwrap().y, 30);
+    assert_eq!(
+        right,
+        PageScroll {
+            x: 528,
+            y: 300,
+            moved: true,
+        }
+    );
+    assert_eq!(target_after_right.value.unwrap().x, -520);
+    assert_eq!(
+        capped,
+        PageScroll {
+            x: 528,
+            y: 300,
+            moved: false,
+        }
+    );
+    assert_eq!(
+        down_capped,
+        PageScroll {
+            x: 528,
+            y: 638,
+            moved: true,
+        }
+    );
+    assert_eq!(
+        up,
+        PageScroll {
+            x: 528,
+            y: 438,
+            moved: true,
+        }
+    );
+    assert_eq!(
+        left,
+        PageScroll {
+            x: 500,
+            y: 438,
+            moved: true,
+        }
+    );
+    assert_eq!(reset.value.unwrap().x, 8);
+    assert_eq!(reset.value.unwrap().y, 1_318);
+}
+
+#[test]
+fn scroll_into_view_resolves_references_and_locators_without_replacing_state() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body>
+                <div style="width:1800px;height:1310px"></div>
+                <button id="target" style="display:block;box-sizing:border-box;width:100px;height:40px">Target</button>
+                <button id="fixed" style="position:fixed;left:20px;top:30px;width:100px;height:40px">Fixed</button>
+                <button id="hidden" hidden style="position:fixed;left:0;top:0;width:100px;height:40px">Hidden</button>
+            </body>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let target = snapshot.elements[0].reference;
+    let fixed = snapshot.elements[1].reference;
+    let hidden = snapshot.elements[2].reference;
+    session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Right,
+            distance: 600,
+        })
+        .unwrap();
+
+    let reference_scroll = session
+        .execute(ScrollElementIntoView { reference: target })
+        .unwrap();
+    let target_box = session
+        .execute(GetElementBoundingBox { reference: target })
+        .unwrap();
+    let fixed_scroll = session
+        .execute(ScrollIntoViewByLocator {
+            locator: Locator::from(CssLocator::new("#fixed").unwrap()),
+        })
+        .unwrap();
+    let hidden_error = session.execute(ScrollElementIntoView { reference: hidden });
+    let hidden_locator_error = session.execute(ScrollIntoViewByLocator {
+        locator: Locator::from(CssLocator::new("#hidden").unwrap()),
+    });
+    let preserved = session
+        .execute(GetElementText { reference: fixed })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(reference_scroll.reference, target);
+    assert_eq!(reference_scroll.scroll.x, 8);
+    assert_eq!(reference_scroll.scroll.y, 638);
+    assert!(reference_scroll.scroll.moved);
+    assert_eq!(
+        target_box.value,
+        Some(BoundingBox {
+            x: 0,
+            y: 680,
+            width: 100,
+            height: 40,
+        })
+    );
+    assert_eq!(fixed_scroll.matched.element, "fixed");
+    assert_eq!(fixed_scroll.scroll.x, 8);
+    assert_eq!(fixed_scroll.scroll.y, 638);
+    assert!(!fixed_scroll.scroll.moved);
+    assert!(
+        matches!(
+            &hidden_error,
+            Err(SessionError::UnsupportedScrollIntoView { reference, reason })
+                if *reference == hidden && reason == "element is hidden or has an empty box"
+        ),
+        "unexpected hidden scroll result: {hidden_error:?}"
+    );
+    assert!(matches!(
+        hidden_locator_error,
+        Err(SessionError::UnsupportedLocatorAction {
+            action: LocatorAction::ScrollIntoView,
+            reason,
+            ..
+        }) if reason == "element is hidden or has an empty box"
+    ));
+    assert_eq!(preserved.text, "Fixed");
+}
+
+#[test]
+fn pointer_actions_auto_scroll_after_checks_and_keep_failed_actions_transactional() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body>
+                <div style="height:800px"></div>
+                <button id="click" style="display:block;box-sizing:border-box;width:100px;height:40px">Click</button>
+                <input id="check" type="checkbox" style="display:block;box-sizing:border-box;width:20px;height:20px">
+                <div id="hover" style="display:block;box-sizing:border-box;width:100px;height:40px">Hover</div>
+                <input id="locked" type="checkbox" disabled style="display:block;box-sizing:border-box;width:20px;height:20px">
+            </body>
+        "#,
+    );
+    let mut session = Session::new();
+    session
+        .execute(SetViewportSize {
+            width: 640,
+            height: 300,
+        })
+        .unwrap();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let click = snapshot.elements[0].reference;
+    let initial_click_box = session
+        .execute(GetElementBoundingBox { reference: click })
+        .unwrap()
+        .value
+        .unwrap();
+
+    session.execute(ClickElement { reference: click }).unwrap();
+    let clicked_box = session
+        .execute(GetElementBoundingBox { reference: click })
+        .unwrap()
+        .value
+        .unwrap();
+    session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Up,
+            distance: u64::MAX,
+        })
+        .unwrap();
+
+    let checked = session
+        .execute(SetCheckedByLocator {
+            locator: Locator::from(CssLocator::new("#check").unwrap()),
+            checked: true,
+        })
+        .unwrap();
+    let checked_box = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("#check").unwrap()),
+        })
+        .unwrap()
+        .value
+        .unwrap();
+    session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Up,
+            distance: u64::MAX,
+        })
+        .unwrap();
+    let repeated = session
+        .execute(SetCheckedByLocator {
+            locator: Locator::from(CssLocator::new("#check").unwrap()),
+            checked: true,
+        })
+        .unwrap();
+    let click_after_no_op = session
+        .execute(GetElementBoundingBox { reference: click })
+        .unwrap()
+        .value
+        .unwrap();
+
+    session
+        .execute(HoverByLocator {
+            locator: Locator::from(CssLocator::new("#hover").unwrap()),
+        })
+        .unwrap();
+    let hovered_box = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("#hover").unwrap()),
+        })
+        .unwrap()
+        .value
+        .unwrap();
+    let before_failure = session
+        .execute(GetElementBoundingBox { reference: click })
+        .unwrap();
+    let failed = session.execute(SetCheckedByLocator {
+        locator: Locator::from(CssLocator::new("#locked").unwrap()),
+        checked: true,
+    });
+    let after_failure = session
+        .execute(GetElementBoundingBox { reference: click })
+        .unwrap();
+    drop(network_guard);
+
+    let is_in_view = |bounding_box: &BoundingBox| {
+        let height = i64::try_from(bounding_box.height).unwrap();
+        bounding_box.y >= 0 && bounding_box.y + height <= 300
+    };
+
+    assert!(initial_click_box.y >= 300);
+    assert!(is_in_view(&clicked_box));
+    assert!(checked.checked);
+    assert!(is_in_view(&checked_box));
+    assert!(repeated.checked);
+    assert_eq!(click_after_no_op, initial_click_box);
+    assert!(is_in_view(&hovered_box));
+    assert!(matches!(
+        failed,
+        Err(SessionError::LocatorActionBlocked {
+            action: LocatorAction::Check,
+            check: ActionabilityCheck::Enabled,
+            ..
+        })
+    ));
+    assert_eq!(after_failure, before_failure);
+}
+
+#[test]
+fn scrolling_requires_an_open_page() {
+    assert_eq!(
+        Session::new().execute(ScrollPage {
+            direction: ScrollDirection::Down,
+            distance: 300,
+        }),
+        Err(SessionError::NoPage)
+    );
+}
+
+#[test]
+fn viewport_resize_reflows_geometry_and_preserves_live_page_state() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body style="height:900px">
+                <input id="email" aria-label="Email" value="before">
+            </body>
+        "#,
+    );
+    let mut session = Session::new();
+
+    assert_eq!(
+        session.execute(GetViewportSize),
+        Ok(ViewportSize {
+            width: 1_280,
+            height: 720,
+        })
+    );
+    let configured = session
+        .execute(SetViewportSize {
+            width: 640,
+            height: 480,
+        })
+        .unwrap();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let email = snapshot.elements[0].reference;
+    session
+        .execute(FillElement {
+            reference: email,
+            value: "changed".into(),
+        })
+        .unwrap();
+    let before = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("body").unwrap()),
+        })
+        .unwrap();
+    let scrolled = session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Down,
+            distance: 1_000,
+        })
+        .unwrap();
+    let resized = session
+        .execute(SetViewportSize {
+            width: 800,
+            height: 600,
+        })
+        .unwrap();
+    let after = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("body").unwrap()),
+        })
+        .unwrap();
+    let value = session
+        .execute(GetElementValue { reference: email })
+        .unwrap();
+    let focused = session
+        .execute(GetElementFocused { reference: email })
+        .unwrap();
+    let repeated = session
+        .execute(SetViewportSize {
+            width: 800,
+            height: 600,
+        })
+        .unwrap();
+    let invalid = session.execute(SetViewportSize {
+        width: 0,
+        height: 600,
+    });
+    let preserved_viewport = session.execute(GetViewportSize).unwrap();
+    drop(network_guard);
+
+    assert!(configured.resized);
+    assert_eq!(configured.viewport.width, 640);
+    assert_eq!(configured.viewport.height, 480);
+    assert_eq!(before.value.unwrap().width, 624);
+    assert_eq!(scrolled.y, 428);
+    assert!(resized.resized);
+    assert_eq!(resized.scroll.y, 308);
+    assert!(resized.scroll.moved);
+    assert_eq!(
+        after.value,
+        Some(BoundingBox {
+            x: 8,
+            y: -300,
+            width: 784,
+            height: 900,
+        })
+    );
+    assert_eq!(value.value, "changed");
+    assert!(focused.focused);
+    assert!(!repeated.resized);
+    assert_eq!(repeated.scroll.y, 308);
+    assert!(!repeated.scroll.moved);
+    assert_eq!(
+        invalid,
+        Err(SessionError::InvalidViewportSize {
+            width: 0,
+            height: 600,
+        })
+    );
+    assert_eq!(
+        preserved_viewport,
+        ViewportSize {
+            width: 800,
+            height: 600,
+        }
+    );
+}
+
+#[test]
+fn bounding_box_locator_requires_an_open_page() {
+    let locator = Locator::from(CssLocator::new("#fixed").unwrap());
+
+    assert_eq!(
+        Session::new().execute(GetBoundingBoxByLocator { locator }),
+        Err(SessionError::NoPage)
+    );
+}
+
+#[test]
 fn checkbox_actions_update_and_read_current_state() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(
@@ -2003,6 +6440,12 @@ fn checkbox_actions_update_and_read_current_state() {
         .unwrap();
     let locked_state = session
         .execute(GetElementChecked { reference: locked })
+        .unwrap();
+    let locked_no_op = session
+        .execute(SetElementChecked {
+            reference: locked,
+            checked: true,
+        })
         .unwrap();
     let locked_change = session.execute(SetElementChecked {
         reference: locked,
@@ -2040,6 +6483,7 @@ fn checkbox_actions_update_and_read_current_state() {
     assert_eq!(first, repeated);
     assert!(current.checked);
     assert!(locked_state.checked);
+    assert!(locked_no_op.checked);
     assert!(matches!(
         locked_change,
         Err(SessionError::UnsupportedCheck { reference, .. }) if reference == locked
@@ -2063,6 +6507,220 @@ fn checkbox_actions_update_and_read_current_state() {
         stale,
         Err(SessionError::StaleElementReference { reference: updates })
     );
+}
+
+#[test]
+fn radio_groups_share_exclusive_state_across_check_click_press_and_tab() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <form id="plans">
+                <label><input id="basic" type="radio" name="plan" checked>Basic</label>
+                <label><input id="pro" type="radio" name="plan">Pro</label>
+                <label><input id="locked" type="radio" name="plan" disabled>Locked</label>
+            </form>
+            <label><input id="external" type="radio" name="plan" form="plans">External</label>
+            <form><label><input id="second" type="radio" name="plan">Second form</label></form>
+            <label><input id="solo" type="radio">Solo</label>
+            <button id="after" type="button">After</button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let basic = snapshot.elements[0].reference;
+    let pro = snapshot.elements[1].reference;
+    let locked = snapshot.elements[2].reference;
+    let external = snapshot.elements[3].reference;
+    let after = snapshot.elements[6].reference;
+
+    let first_tab = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Tab").unwrap(),
+        })
+        .unwrap();
+    let clicked = session.execute(ClickElement { reference: pro }).unwrap();
+    let clicked_again = session.execute(ClickElement { reference: pro }).unwrap();
+    let checked_basic = session
+        .execute(SetCheckedByRole {
+            locator: RoleLocator::new("radio").unwrap().with_exact_name("Basic"),
+            checked: true,
+        })
+        .unwrap();
+    let checked_external = session
+        .execute(ClickByLocator {
+            locator: Locator::from(CssLocator::new("#external").unwrap()),
+        })
+        .unwrap();
+    let unchanged_false = session
+        .execute(SetElementChecked {
+            reference: basic,
+            checked: false,
+        })
+        .unwrap();
+    let rejected_uncheck = session.execute(SetElementChecked {
+        reference: external,
+        checked: false,
+    });
+    let locked_locator = RoleLocator::new("radio").unwrap().with_exact_name("Locked");
+    let rejected_locked = session.execute(SetCheckedByRole {
+        locator: locked_locator.clone(),
+        checked: true,
+    });
+    let selected_by_space = session
+        .execute(PressByLocator {
+            locator: Locator::from(CssLocator::new("#basic").unwrap()),
+            key: KeyboardKey::new("Space").unwrap(),
+        })
+        .unwrap();
+    let next_group = session
+        .execute(PressKey {
+            key: KeyboardKey::new("Tab").unwrap(),
+        })
+        .unwrap();
+    let basic_state = session
+        .execute(GetElementChecked { reference: basic })
+        .unwrap();
+    let pro_state = session
+        .execute(GetElementChecked { reference: pro })
+        .unwrap();
+    let external_state = session
+        .execute(GetElementChecked {
+            reference: external,
+        })
+        .unwrap();
+    let locked_state = session
+        .execute(GetElementChecked { reference: locked })
+        .unwrap();
+    let preserved = session
+        .execute(GetElementText { reference: after })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        first_tab
+            .focus_traversal()
+            .unwrap()
+            .current
+            .as_ref()
+            .unwrap()
+            .element,
+        "basic"
+    );
+    assert_eq!(
+        clicked,
+        ClickResult::Checked {
+            reference: pro,
+            checked: true,
+        }
+    );
+    assert_eq!(clicked, clicked_again);
+    assert!(checked_basic.checked);
+    assert!(matches!(
+        checked_external,
+        ClickByLocatorResult::Checked { matched, checked: true }
+            if matched.element == "external"
+    ));
+    assert!(!unchanged_false.checked);
+    assert!(matches!(
+        rejected_uncheck,
+        Err(SessionError::UnsupportedCheck { reference, reason })
+            if reference == external && reason == "checked radios cannot be unchecked by activation"
+    ));
+    assert!(matches!(
+        rejected_locked,
+        Err(SessionError::RoleActionBlocked {
+            locator,
+            action: RoleAction::Check,
+            check: ActionabilityCheck::Enabled,
+            ..
+        }) if locator == locked_locator
+    ));
+    assert!(selected_by_space.press.checked().unwrap().1);
+    assert_eq!(
+        next_group
+            .focus_traversal()
+            .unwrap()
+            .current
+            .as_ref()
+            .unwrap()
+            .element,
+        "second"
+    );
+    assert!(basic_state.checked);
+    assert!(!pro_state.checked);
+    assert!(!external_state.checked);
+    assert!(!locked_state.checked);
+    assert_eq!(preserved.text, "After");
+}
+
+#[test]
+fn radio_arrow_keys_wrap_and_skip_disabled_or_hidden_group_members() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <form>
+                <label><input id="a" type="radio" name="plan" checked>A</label>
+                <label><input id="b" type="radio" name="plan" disabled>B</label>
+                <label hidden><input id="hidden" type="radio" name="plan">Hidden</label>
+                <label><input id="c" type="radio" name="plan">C</label>
+            </form>
+            <form><label><input id="other" type="radio" name="plan">Other</label></form>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let a = snapshot.elements[0].reference;
+    let b = snapshot.elements[1].reference;
+    let hidden = snapshot.elements[2].reference;
+    let c = snapshot.elements[3].reference;
+    let other = snapshot.elements[4].reference;
+
+    let right = session
+        .execute(PressByLocator {
+            locator: Locator::from(CssLocator::new("#a").unwrap()),
+            key: KeyboardKey::new("ArrowRight").unwrap(),
+        })
+        .unwrap();
+    let wrapped_right = session
+        .execute(PressKey {
+            key: KeyboardKey::new("ArrowRight").unwrap(),
+        })
+        .unwrap();
+    let wrapped_left = session
+        .execute(PressKey {
+            key: KeyboardKey::new("ArrowLeft").unwrap(),
+        })
+        .unwrap();
+    let down = session
+        .execute(PressKey {
+            key: KeyboardKey::new("ArrowDown").unwrap(),
+        })
+        .unwrap();
+    let up = session
+        .execute(PressKey {
+            key: KeyboardKey::new("ArrowUp").unwrap(),
+        })
+        .unwrap();
+    let states = [a, b, hidden, c, other].map(|reference| {
+        session
+            .execute(GetElementChecked { reference })
+            .unwrap()
+            .checked
+    });
+    let focus = session.execute(GetElementFocused { reference: c }).unwrap();
+    drop(network_guard);
+
+    assert_eq!(right.press.checked().unwrap().0.element, "c");
+    assert_eq!(wrapped_right.checked().unwrap().0.element, "a");
+    assert_eq!(wrapped_left.checked().unwrap().0.element, "c");
+    assert_eq!(down.checked().unwrap().0.element, "a");
+    assert_eq!(up.checked().unwrap().0.element, "c");
+    assert_eq!(states, [false, false, false, true, false]);
+    assert!(focus.focused);
 }
 
 #[test]
@@ -2215,11 +6873,54 @@ fn page_title_requires_an_open_page() {
 }
 
 #[test]
+fn page_text_reads_normalized_static_content_across_navigation() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"<title>One</title><main>Hello <span>world</span><script>ignore()</script> <a href="/two">Next</a></main>"#,
+        r#"<title>Two</title><main>Second <strong>page</strong><input value="secret"></main>"#,
+    ]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let link = snapshot.elements[0].reference;
+
+    let first = session.execute(GetPageText).unwrap();
+    let current_link = session.execute(GetElementText { reference: link }).unwrap();
+    session.execute(ClickElement { reference: link }).unwrap();
+    let second = session.execute(GetPageText).unwrap();
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        first,
+        PageText {
+            text: "Hello world Next".into(),
+        }
+    );
+    assert_eq!(current_link.text, "Next");
+    assert_eq!(second.text, "Second page");
+}
+
+#[test]
+fn page_text_requires_an_open_page() {
+    assert_eq!(
+        Session::new().execute(GetPageText),
+        Err(SessionError::NoPage)
+    );
+}
+
+#[test]
 fn reload_requires_an_open_page() {
     assert_eq!(
         Session::new().execute(ReloadPage),
         Err(SessionError::NoPage)
     );
+}
+
+#[test]
+fn history_navigation_requires_an_open_page() {
+    assert_eq!(Session::new().execute(GoBack), Err(SessionError::NoPage));
+    assert_eq!(Session::new().execute(GoForward), Err(SessionError::NoPage));
 }
 
 #[test]
@@ -2439,7 +7140,9 @@ fn native_actions_record_ordered_dom_events_with_ancestry() {
             .map(|event| (event.event_type, event.target.as_str()))
             .collect::<Vec<_>>(),
         vec![
+            (DomEventType::BeforeInput, "name"),
             (DomEventType::Input, "name"),
+            (DomEventType::Click, "terms"),
             (DomEventType::Input, "terms"),
             (DomEventType::Change, "terms"),
             (DomEventType::Input, "size"),
@@ -2497,10 +7200,13 @@ fn optional_tags_preserve_native_event_ancestry() {
     let events = session.execute(TakeDomEvents).unwrap();
     drop(network_guard);
 
-    assert_eq!(events.len(), 2);
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].event_type, DomEventType::Click);
+    assert_eq!(events[1].event_type, DomEventType::Input);
+    assert_eq!(events[2].event_type, DomEventType::Change);
     assert_eq!(events[0].target_ordinal, 5);
     assert_eq!(events[0].path, vec!["two", "second", "list"]);
-    assert_eq!(events[1].path, events[0].path);
+    assert!(events.iter().all(|event| event.path == events[0].path));
 }
 
 #[test]

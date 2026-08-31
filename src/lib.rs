@@ -1,6 +1,8 @@
 mod cli;
 mod cli_output;
 mod cli_session;
+mod cli_session_json;
+mod keyboard;
 mod layout;
 mod loading;
 mod locator;
@@ -12,8 +14,18 @@ mod selection;
 mod session;
 mod snapshot;
 
+pub const DEFAULT_VIEWPORT_HEIGHT: u64 = 720;
+pub const DEFAULT_VIEWPORT_WIDTH: u64 = 1280;
+
 pub use cli::{ExitStatus, run_cli, run_cli_with_input};
-pub use layout::{ElementInput, LayoutError, LayoutInput, LayoutMutation, SemanticElementId};
+pub use keyboard::{
+    FocusTraversalEffect, FocusedElement, KeyboardEventKey, KeyboardKey, KeyboardKeyError,
+    KeyboardModifier, KeyboardTextEffect, NavigationPressEffect, PressEffect, TextPressEffect,
+    TextSelection,
+};
+pub use layout::{
+    BoundingBox, ElementInput, LayoutError, LayoutInput, LayoutMutation, SemanticElementId,
+};
 pub use loading::LoadError;
 pub use locator::{
     AltLocator, CssLocator, CssLocatorError, LabelLocator, Locator, LocatorMatch, LocatorPosition,
@@ -23,32 +35,46 @@ pub use locator::{
 pub use non_empty::NonEmpty;
 pub use rules::{Comparison, Finding, RuleConstraint, RuleResult, WidthFinding};
 pub use screenshot::{
-    CaptureRect, CaptureRectError, CaptureTarget, OnDemandRasterProcess, PaintCommand, PaintScene,
+    CaptureRect, CaptureRectError, CaptureTarget, MAX_SCREENSHOT_PAINT_PIXELS,
+    MAX_SCREENSHOT_PIXELS, OnDemandRasterProcess, PaintCommand, PaintScene, PngEncodingError,
     PreparedScreenshot, RasterImage, RasterImageError, RasterProcess, RasterProcessError,
-    RasterProcessFactory, Rgba8,
+    RasterProcessFactory, Rgba8, SoftwareRasterProcess, SoftwareRasterProcessFactory, encode_png,
 };
 pub use selection::SelectOptionTarget;
 pub use session::{
-    ActionabilityCheck, ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot,
+    ActionabilityCheck, ApplyMutation, ApplyMutations, CaptureAccessibilitySnapshot,
+    CaptureAccessibilitySnapshotWithin, CaptureInteractiveSnapshot,
     CaptureInteractiveSnapshotWithin, CheckElementWidth, ClickByLocator, ClickByLocatorResult,
     ClickByRole, ClickByRoleResult, ClickElement, ClickResult, CountByLocator, DomEvent,
-    DomEventType, ElementAttribute, ElementChecked, ElementEnabled, ElementHtml, ElementText,
+    DomEventType, ElementAttribute, ElementBoundingBox, ElementChecked, ElementEditable,
+    ElementEnabled, ElementFocused, ElementHovered, ElementHtml, ElementScroll, ElementText,
     ElementValue, ElementVisible, FillByLocator, FillByLocatorResult, FillByRole, FillByRoleResult,
-    FillElement, FillResult, FindAllByLocator, FindByLocator, FindByRole, GetAttributeByLocator,
-    GetCheckedByLocator, GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementHtml,
-    GetElementText, GetElementValue, GetElementVisible, GetEnabledByLocator, GetHtmlByLocator,
-    GetPageTitle, GetPageUrl, GetValueByLocator, GetVisibleByLocator, HoverByLocator,
-    HoverByLocatorResult, HoverByRole, HoverByRoleResult, LintLayout, LocatorAction,
-    LocatorAttribute, LocatorChecked, LocatorCount, LocatorEnabled, LocatorHtml, LocatorInspection,
-    LocatorMatches, LocatorValue, LocatorVisible, OpenPage, OpenedPage, PageTitle, PageUrl,
-    ReloadPage, RoleAction, SelectByLocator, SelectByLocatorResult, SelectElement, SelectOptions,
-    SelectOptionsByLocator, SelectOptionsByLocatorResult, SelectOptionsResult, SelectResult,
-    Session, SessionError, SessionRequest, SetCheckedByLocator, SetCheckedByLocatorResult,
-    SetCheckedByRole, SetCheckedByRoleResult, SetCheckedResult, SetElementChecked, TakeDomEvents,
+    FillElement, FillResult, FindAllByLocator, FindByLocator, FindByRole, FocusByLocator,
+    FocusByLocatorResult, FocusElement, FocusResult, GetAttributeByLocator,
+    GetBoundingBoxByLocator, GetCheckedByLocator, GetEditableByLocator, GetElementAttribute,
+    GetElementBoundingBox, GetElementChecked, GetElementEditable, GetElementEnabled,
+    GetElementFocused, GetElementHovered, GetElementHtml, GetElementText, GetElementValue,
+    GetElementVisible, GetEnabledByLocator, GetFocusedByLocator, GetHoveredByLocator,
+    GetHtmlByLocator, GetPageText, GetPageTitle, GetPageUrl, GetValueByLocator, GetViewportSize,
+    GetVisibleByLocator, GoBack, GoForward, HistoryNavigationResult, HoverByLocator,
+    HoverByLocatorResult, HoverByRole, HoverByRoleResult, HoverElement, HoverResult, KeyDown,
+    KeyDownResult, KeyUp, KeyUpResult, KeyboardInsertText, KeyboardTextResult, KeyboardType,
+    LintLayout, LocatorAction, LocatorAttribute, LocatorBoundingBox, LocatorChecked, LocatorCount,
+    LocatorEditable, LocatorEnabled, LocatorFocused, LocatorHovered, LocatorHtml,
+    LocatorInspection, LocatorMatches, LocatorScroll, LocatorValue, LocatorVisible, OpenPage,
+    OpenedPage, PageScroll, PageText, PageTitle, PageUrl, PrepareScreenshot, PressByLocator,
+    PressByLocatorResult, PressKey, PressResult, ReloadPage, RoleAction, ScrollDirection,
+    ScrollElementIntoView, ScrollIntoViewByLocator, ScrollPage, SelectByLocator,
+    SelectByLocatorResult, SelectElement, SelectOptions, SelectOptionsByLocator,
+    SelectOptionsByLocatorResult, SelectOptionsResult, SelectResult, Session, SessionError,
+    SessionRequest, SetCheckedByLocator, SetCheckedByLocatorResult, SetCheckedByRole,
+    SetCheckedByRoleResult, SetCheckedResult, SetElementChecked, SetViewportSize, TakeDomEvents,
+    TypeByLocator, TypeByLocatorResult, TypeElement, TypeResult, ViewportResize, ViewportSize,
 };
 pub use snapshot::{
-    EvidenceRef, InteractiveElement, InteractiveElementRef, InteractiveElementState,
-    InteractiveSnapshot, SnapshotId,
+    AccessibilitySnapshot, AccessibilitySnapshotNode, AccessibilitySnapshotOptions,
+    AccessibilitySnapshotSourceInfo, EvidenceRef, InteractiveElement, InteractiveElementRef,
+    InteractiveElementSourceInfo, InteractiveElementState, InteractiveSnapshot, SnapshotId,
 };
 
 #[cfg(test)]

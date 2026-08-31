@@ -112,73 +112,110 @@ fn split_selector_list(source: &str) -> Result<Vec<&str>, String> {
     let mut bracket_depth = 0;
     let mut quote = None;
     for (index, value) in source.bytes().enumerate() {
-        if let Some(expected) = quote {
-            if value == expected {
-                quote = None;
-            }
-            continue;
-        }
-        match value {
-            b'\'' | b'"' if bracket_depth > 0 => quote = Some(value),
-            b'[' => bracket_depth += 1,
-            b']' if bracket_depth > 0 => bracket_depth -= 1,
-            b',' if bracket_depth == 0 => {
-                selectors.push(source[start..index].trim());
-                start = index + 1;
-            }
-            _ => {}
+        if selector_boundary(value, &mut quote, &mut bracket_depth) {
+            selectors.push(source[start..index].trim());
+            start = index + 1;
         }
     }
-    if quote.is_some() || bracket_depth != 0 {
-        return Err("CSS selector list is not closed".into());
-    }
+    require_closed_selector_list(quote, bracket_depth)?;
     selectors.push(source[start..].trim());
-    if selectors.iter().any(|selector| selector.is_empty()) {
-        return Err("CSS selector list contains an empty selector".into());
-    }
+    require_non_empty_selectors(&selectors)?;
     Ok(selectors)
+}
+
+fn selector_boundary(value: u8, quote: &mut Option<u8>, bracket_depth: &mut usize) -> bool {
+    if let Some(expected) = *quote {
+        if value == expected {
+            *quote = None;
+        }
+        return false;
+    }
+    match value {
+        b'\'' | b'"' if *bracket_depth > 0 => *quote = Some(value),
+        b'[' => *bracket_depth += 1,
+        b']' if *bracket_depth > 0 => *bracket_depth -= 1,
+        b',' if *bracket_depth == 0 => return true,
+        _ => {}
+    }
+    false
+}
+
+fn require_closed_selector_list(quote: Option<u8>, bracket_depth: usize) -> Result<(), String> {
+    if quote.is_some() || bracket_depth != 0 {
+        Err("CSS selector list is not closed".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn require_non_empty_selectors(selectors: &[&str]) -> Result<(), String> {
+    if selectors.iter().any(|selector| selector.is_empty()) {
+        Err("CSS selector list contains an empty selector".into())
+    } else {
+        Ok(())
+    }
 }
 
 fn strip_comments(source: &str) -> Result<String, String> {
     let bytes = source.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
-    let mut quote = None;
-    let mut escaped = false;
+    let mut quote = CssQuote::default();
     let mut index = 0;
     while index < bytes.len() {
         let value = bytes[index];
-        if let Some(expected) = quote {
+        if quote.consumes(value) {
             output.push(value);
-            if escaped {
-                escaped = false;
-            } else if value == b'\\' {
-                escaped = true;
-            } else if value == expected {
-                quote = None;
+            index += 1;
+            continue;
+        }
+        match comment_end(bytes, index)? {
+            Some(end) => index = end,
+            None => {
+                output.push(value);
+                index += 1;
             }
-            index += 1;
-            continue;
         }
-        if matches!(value, b'\'' | b'"') {
-            quote = Some(value);
-            output.push(value);
-            index += 1;
-            continue;
-        }
-        if value == b'/' && bytes.get(index + 1) == Some(&b'*') {
-            let Some(end) = bytes[index + 2..]
-                .windows(2)
-                .position(|window| window == b"*/")
-            else {
-                return Err("CSS comment is not closed".into());
-            };
-            index += end + 4;
-            continue;
-        }
-        output.push(value);
-        index += 1;
     }
     Ok(String::from_utf8(output).expect("comment removal preserves UTF-8"))
+}
+
+#[derive(Default)]
+struct CssQuote {
+    delimiter: Option<u8>,
+    escaped: bool,
+}
+
+impl CssQuote {
+    fn consumes(&mut self, value: u8) -> bool {
+        let Some(delimiter) = self.delimiter else {
+            if matches!(value, b'\'' | b'"') {
+                self.delimiter = Some(value);
+                return true;
+            }
+            return false;
+        };
+        if self.escaped {
+            self.escaped = false;
+        } else if value == b'\\' {
+            self.escaped = true;
+        } else if value == delimiter {
+            self.delimiter = None;
+        }
+        true
+    }
+}
+
+fn comment_end(source: &[u8], index: usize) -> Result<Option<usize>, String> {
+    if source.get(index..index + 2) != Some(b"/*") {
+        return Ok(None);
+    }
+    let Some(end) = source[index + 2..]
+        .windows(2)
+        .position(|window| window == b"*/")
+    else {
+        return Err("CSS comment is not closed".into());
+    };
+    Ok(Some(index + end + 4))
 }
 
 fn parse_declarations(source: &str) -> Result<BTreeMap<String, String>, String> {
@@ -229,7 +266,7 @@ fn apply_declarations(
 
 #[cfg(test)]
 mod tests {
-    use super::strip_comments;
+    use super::{split_selector_list, strip_comments};
 
     #[test]
     fn css_comments_ignore_markers_inside_quoted_values() {
@@ -239,6 +276,34 @@ mod tests {
         assert_eq!(
             strip_comments(source).unwrap(),
             r#"[data-double="/*"] { display:none } [data-single='*/'] { width:1px } "#
+        );
+    }
+
+    #[test]
+    fn css_comments_preserve_escaped_quotes_and_report_unclosed_comments() {
+        assert_eq!(
+            strip_comments(r#"[data-value="escaped \" /* text"] /* gone */"#).unwrap(),
+            r#"[data-value="escaped \" /* text"] "#
+        );
+        assert_eq!(
+            strip_comments("div { color:red } /*").unwrap_err(),
+            "CSS comment is not closed"
+        );
+    }
+
+    #[test]
+    fn selector_lists_keep_attribute_commas_and_exact_errors() {
+        assert_eq!(
+            split_selector_list(r#"[data-value="one,two"], button"#).unwrap(),
+            vec![r#"[data-value="one,two"]"#, "button"]
+        );
+        assert_eq!(
+            split_selector_list("button,").unwrap_err(),
+            "CSS selector list contains an empty selector"
+        );
+        assert_eq!(
+            split_selector_list("[data-value='open]").unwrap_err(),
+            "CSS selector list is not closed"
         );
     }
 }

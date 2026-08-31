@@ -80,7 +80,9 @@ Text-bearing interactive elements have supported default non-empty boxes.
 
 An empty non-replaced interactive element has a supported empty box and returns false.
 
-Geometry declarations block box proof. Intrinsic replaced-element geometry also remains unsupported.
+Complete fixed or normal-flow geometry can prove a non-empty box.
+
+Unsupported geometry declarations, intrinsic text, and replaced-element geometry remain unsupported.
 
 `opacity:0` does not make a supported element invisible.
 
@@ -125,7 +127,7 @@ The reference remains current after a successful or unsupported read.
 
 **Output and exit status.** Package callers receive `ElementVisible` or `SessionError`. Session failures use status two or three.
 
-**Resource limits.** The read walks only the target's parsed ancestor chain.
+**Resource limits.** Page loading resolves supported boxes once. The read projects one target's evidence.
 
 **Network and storage.** The read uses no network and writes no storage.
 
@@ -144,7 +146,8 @@ The reference remains current after a successful or unsupported read.
 - A later supported visible value can override inherited hidden visibility.
 - An empty ARIA control without box geometry returns false.
 - `display:contents` remains unsupported.
-- Size, border, padding, font, transform, scale, or zoom declarations remain unsupported.
+- Supported size, longhand padding, and painted border declarations can prove a box.
+- Shorthand edges, intrinsic sizes, transforms, scale, and zoom remain unsupported.
 - Linked stylesheets and unsupported embedded CSS make every visibility read unsupported.
 - Intrinsic media and replaced-element geometry remain unsupported.
 - Definite hidden evidence takes priority over uncertain inline geometry.
@@ -155,7 +158,7 @@ The reference remains current after a successful or unsupported read.
 
 ## Open questions and verification
 
-- Implement vertical geometry before accepting inline box dimensions.
+- Extend normal-flow geometry with intrinsic lines and collapsed margins.
 - Define `display:contents` through visible descendant boxes.
 - Define closed details, dialog, popover, and hidden-until-found behavior.
 - Load bounded loopback stylesheets before accepting their visibility evidence.

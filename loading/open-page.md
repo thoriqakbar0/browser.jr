@@ -50,6 +50,14 @@ A 2xx HTML response enters the requested operation. Other responses exit with st
 
 A successful retained open makes its URL and title available. Another successful open or navigation replaces both values.
 
+Successful document replacement clears the page's stored [focus](../interaction/focus-element.md).
+
+It also starts [page scroll](../interaction/scroll-page.md) at zero on both axes.
+
+The new page uses the session's current [viewport size](../interaction/set-viewport.md).
+
+Each successful retained open adds an entry to [navigation history](history-navigation.md).
+
 ## Variants
 
 | Modifier | Set at invocation | Changed while running |
@@ -102,6 +110,8 @@ A successful retained open makes its URL and title available. Another successful
 - A missing title produces an empty title.
 - Later title elements do not replace the first title.
 - A failed replacement preserves the previously installed URL and title.
+- A failed replacement preserves the previous page focus.
+- A failed replacement preserves the previous page scroll offsets.
 
 ## Open questions and verification
 

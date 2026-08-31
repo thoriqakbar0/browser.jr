@@ -13,11 +13,12 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | VISIBLE-05 | P1 | pipe | Missing box evidence reports unsupported ([Finish](../inspection/read-visible.md#finish)). | Serve a button with inline width and a linked stylesheet page. | Read visibility, then reuse the current reference. | Visibility reports unsupported. Another read still accepts the reference. | partial: unit and package tests passed, 2026-08-31 |
 | VISIBLE-06 | P2 | pipe | Session mode reports stable Boolean output ([Finish](../inspection/read-visible.md#finish)). | Serve visible and hidden buttons. | Send `is visible` for each reference. | Output reports each reference and an unquoted Boolean. | partial: compiled-process test passed, 2026-08-31 |
 | VISIBLE-07 | P1 | pipe | Direct selectors inspect non-interactive visibility without a snapshot ([Finish](../inspection/read-visible.md#finish)). | Serve a hidden non-interactive element. | Read visible state through CSS. | The result is false. | partial: package, compiled-process, and controlled agent-browser comparison passed, 2026-08-31 |
-| VISIBLE-08 | P1 | pipe | Embedded selectors control supported visibility ([Begin running](../inspection/read-visible.md#begin-running)). | Serve a nested button and an embedded child-selector rule with `display:none`. | Read visibility through its current reference. | The read returns false. | partial: unit test passed, 2026-08-31 |
-| VISIBLE-09 | P1 | pipe | Quoted comment markers remain selector values ([Begin running](../inspection/read-visible.md#begin-running)). | Serve an embedded attribute selector containing `/*`. | Read the matching button's visibility. | The selector applies and the read returns false. | partial: unit test passed, 2026-08-31 |
+| VISIBLE-08 | P1 | pipe | Complete normal-flow boxes prove visibility ([While running](../inspection/read-visible.md#while-running)). | Serve explicit-height static blocks and a border-box button. | Read through a reference and CSS selectors. | Non-empty boxes return true. Empty and invisible boxes return false. | partial: package and compiled-process tests passed, 2026-08-31 |
+| VISIBLE-09 | P1 | pipe | Embedded selectors control supported visibility ([Begin running](../inspection/read-visible.md#begin-running)). | Serve a nested button and an embedded child-selector rule with `display:none`. | Read visibility through its current reference. | The read returns false. | partial: unit test passed, 2026-08-31 |
+| VISIBLE-10 | P1 | pipe | Quoted comment markers remain selector values ([Begin running](../inspection/read-visible.md#begin-running)). | Serve an embedded attribute selector containing `/*`. | Read the matching button's visibility. | The selector applies and the read returns false. | partial: unit test passed, 2026-08-31 |
 
 Not checkable yet:
 
-- A complete CSS cascade and vertical geometry do not exist.
+- A complete CSS cascade and complete normal-flow geometry do not exist.
 - Waiting and retrying visibility assertions do not exist.
 - Stability, pointer targeting, and viewport intersection do not exist.

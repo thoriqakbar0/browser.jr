@@ -1,25 +1,31 @@
 use std::ffi::OsString;
 use std::io::{BufRead, Write};
 
-use crate::cli_output::{write_error_json, write_snapshot_json};
-use crate::cli_session::{run_session, write_interactive_snapshot};
+use crate::cli_output::{
+    SnapshotOutputOptions, write_accessibility_snapshot_json, write_error_json, write_snapshot_json,
+};
+use crate::cli_session::{run_session, write_accessibility_snapshot, write_interactive_snapshot};
+use crate::cli_session_json::run_json_session;
 use crate::loading::{LoadError, load_local_html};
 use crate::page::layout_input_from_html;
 use crate::{
+    AccessibilitySnapshotOptions, CaptureAccessibilitySnapshot, CaptureAccessibilitySnapshotWithin,
     CaptureInteractiveSnapshot, CaptureInteractiveSnapshotWithin, CheckElementWidth, Comparison,
-    CssLocator, LintLayout, Locator, OpenPage, RuleConstraint, RuleResult, Session, SessionError,
-    WidthFinding,
+    CssLocator, GetPageText, LintLayout, Locator, OpenPage, RuleConstraint, RuleResult, Session,
+    SessionError, WidthFinding,
 };
 
-const DEFAULT_VIEWPORT_WIDTH: u64 = 1280;
+use crate::DEFAULT_VIEWPORT_WIDTH;
 
 const HELP: &str = "browser.jr
 A browser engine package for programmable interface verification.
 
 Usage:
   browser.jr lint <url> [--viewport <css-px>] [--max-width <element> <css-px>]
-  browser.jr [--json] snapshot <url> --interactive [-s|--selector <css>] [--json]
+  browser.jr read <url>
+  browser.jr [--json] snapshot <url> [--interactive] [snapshot-options] [--json]
   browser.jr session
+  browser.jr --json session
   browser.jr help
 
 Options:
@@ -27,15 +33,21 @@ Options:
   -V, --version  Show the version
   --viewport     Set the viewport width; default: 1280 CSS px
   --max-width    Require one semantic element to stay within a project limit
-  -i, --interactive  Include interactive semantic elements in the snapshot
-  -s, --selector     Limit an interactive snapshot to one strict CSS target
-  --json             Emit one machine-readable snapshot result on stdout
+  -i, --interactive  Project the tree to agent-oriented reference elements
+  -u, --urls          Include resolved URLs for links
+  -c, --compact       Remove empty structural leaves from the full tree
+  -d, --depth         Limit the full tree to a zero-based depth
+  -s, --selector      Limit the snapshot to one strict CSS target
+  --json             Emit machine-readable snapshot or session results on stdout
 
 Current implementation:
   Static HTML design lint is available for loopback HTTP pages.
-  Interactive snapshots include a stated native HTML and ARIA role subset.
+  Full and interactive snapshots expose a stated static accessibility subset.
   Session mode supports semantic, attribute, CSS, and XPath locators through stdin.
+  Session mode drains data-minimized native action events through the events command.
+  JSON session mode writes one envelope for each lifecycle event and input command.
   Parent-aware block flow and fixed pixel geometry form the layout subset.
+  Session mode writes bounded solid-box PNG screenshots.
 ";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,7 +75,15 @@ struct LintOptions {
 struct SnapshotOptions {
     url: OsString,
     selector: Option<Locator>,
+    projection: SnapshotProjection,
+    output: SnapshotOutputOptions,
     output_format: SnapshotOutputFormat,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SnapshotProjection {
+    Full(AccessibilitySnapshotOptions),
+    Interactive,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,14 +137,21 @@ where
             Ok(options) => run_lint(options, output, errors),
             Err(message) => write_line(errors, &message, ExitStatus::InvalidInput),
         },
+        [command, url] if command == "read" => run_read(url, output, errors),
         [flag, command, rest @ ..] if flag == "--json" && command == "snapshot" => {
             run_snapshot_invocation(rest, SnapshotOutputFormat::Json, output, errors)
+        }
+        [flag, command] if flag == "--json" && command == "session" => {
+            run_json_session(input, output, errors)
+        }
+        [command, flag] if command == "session" && flag == "--json" => {
+            run_json_session(input, output, errors)
         }
         [flag, ..] if flag == "--json" => write_snapshot_error(
             output,
             errors,
             SnapshotOutputFormat::Json,
-            "browser.jr: --json currently supports snapshot only",
+            "browser.jr: --json supports snapshot and session only",
             ExitStatus::InvalidInput,
         ),
         [command, rest @ ..] if command == "snapshot" => {
@@ -136,6 +163,24 @@ where
             "browser.jr: invalid arguments; run browser.jr help",
             ExitStatus::InvalidInput,
         ),
+    }
+}
+
+fn run_read(url: &OsString, output: &mut impl Write, errors: &mut impl Write) -> ExitStatus {
+    let Some(url) = url.to_str() else {
+        return write_line(
+            errors,
+            "browser.jr: URL must be valid UTF-8",
+            ExitStatus::InvalidInput,
+        );
+    };
+    let mut session = Session::new();
+    if let Err(error) = session.execute(OpenPage { url: url.into() }) {
+        return write_session_error(errors, error);
+    }
+    match session.execute(GetPageText) {
+        Ok(page) => write_line(output, &page.text, ExitStatus::Success),
+        Err(error) => write_session_error(errors, error),
     }
 }
 
@@ -171,6 +216,11 @@ fn parse_snapshot_options(
     let mut url = None;
     let mut interactive = false;
     let mut selector = None;
+    let mut output = SnapshotOutputOptions::default();
+    let mut compact_was_set = false;
+    let mut depth_was_set = false;
+    let mut compact = false;
+    let mut max_depth = None;
     let mut output_format = initial_output_format;
     let mut json_was_set = initial_output_format == SnapshotOutputFormat::Json;
     let mut index = 0;
@@ -179,6 +229,25 @@ fn parse_snapshot_options(
             Some("-i" | "--interactive") if !interactive => {
                 interactive = true;
                 index += 1;
+            }
+            Some("-u" | "--urls") if !output.include_urls => {
+                output.include_urls = true;
+                index += 1;
+            }
+            Some("-c" | "--compact") if !compact_was_set => {
+                compact_was_set = true;
+                compact = true;
+                index += 1;
+            }
+            Some("-d" | "--depth") if !depth_was_set && index + 1 < args.len() => {
+                let Some(value) = args[index + 1].to_str() else {
+                    return Err("browser.jr: snapshot depth must be valid UTF-8".into());
+                };
+                max_depth = Some(value.parse::<u64>().map_err(|_| {
+                    "browser.jr: snapshot depth must be a non-negative integer".to_string()
+                })?);
+                depth_was_set = true;
+                index += 2;
             }
             Some("-s" | "--selector") if selector.is_none() && index + 1 < args.len() => {
                 let Some(value) = args[index + 1].to_str() else {
@@ -208,14 +277,18 @@ fn parse_snapshot_options(
         }
     }
     let Some(url) = url else {
-        return Err("browser.jr: snapshot requires a URL and --interactive".into());
+        return Err("browser.jr: snapshot requires a URL".into());
     };
-    if !interactive {
-        return Err("browser.jr: snapshot requires --interactive".into());
-    }
+    let projection = if interactive {
+        SnapshotProjection::Interactive
+    } else {
+        SnapshotProjection::Full(AccessibilitySnapshotOptions { compact, max_depth })
+    };
     Ok(SnapshotOptions {
         url,
         selector,
+        projection,
+        output,
         output_format,
     })
 }
@@ -350,25 +423,72 @@ fn run_snapshot(
     if let Err(error) = session.execute(OpenPage { url: url.into() }) {
         return write_snapshot_session_error(output, errors, options.output_format, error);
     }
-    let snapshot = match options.selector {
-        Some(locator) => session.execute(CaptureInteractiveSnapshotWithin { locator }),
-        None => session.execute(CaptureInteractiveSnapshot),
-    };
-    let snapshot = match snapshot {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            return write_snapshot_session_error(output, errors, options.output_format, error);
-        }
-    };
-    match options.output_format {
-        SnapshotOutputFormat::Human => write_interactive_snapshot(output, &snapshot),
-        SnapshotOutputFormat::Json => {
-            if write_snapshot_json(output, &snapshot).is_ok() {
-                ExitStatus::Success
-            } else {
-                ExitStatus::Unavailable
+    match options.projection {
+        SnapshotProjection::Interactive => {
+            let snapshot = match options.selector.clone() {
+                Some(locator) => session.execute(CaptureInteractiveSnapshotWithin { locator }),
+                None => session.execute(CaptureInteractiveSnapshot),
+            };
+            match snapshot {
+                Ok(snapshot) => write_interactive_snapshot_output(output, &snapshot, options),
+                Err(error) => {
+                    write_snapshot_session_error(output, errors, options.output_format, error)
+                }
             }
         }
+        SnapshotProjection::Full(snapshot_options) => {
+            let snapshot = match options.selector.clone() {
+                Some(locator) => session.execute(CaptureAccessibilitySnapshotWithin {
+                    locator,
+                    options: snapshot_options,
+                }),
+                None => session.execute(CaptureAccessibilitySnapshot {
+                    options: snapshot_options,
+                }),
+            };
+            match snapshot {
+                Ok(snapshot) => write_accessibility_snapshot_output(output, &snapshot, options),
+                Err(error) => {
+                    write_snapshot_session_error(output, errors, options.output_format, error)
+                }
+            }
+        }
+    }
+}
+
+fn write_interactive_snapshot_output(
+    output: &mut impl Write,
+    snapshot: &crate::InteractiveSnapshot,
+    options: SnapshotOptions,
+) -> ExitStatus {
+    match options.output_format {
+        SnapshotOutputFormat::Human => write_interactive_snapshot(output, snapshot, options.output),
+        SnapshotOutputFormat::Json => {
+            write_json_snapshot_result(write_snapshot_json(output, snapshot, options.output))
+        }
+    }
+}
+
+fn write_accessibility_snapshot_output(
+    output: &mut impl Write,
+    snapshot: &crate::AccessibilitySnapshot,
+    options: SnapshotOptions,
+) -> ExitStatus {
+    match options.output_format {
+        SnapshotOutputFormat::Human => {
+            write_accessibility_snapshot(output, snapshot, options.output)
+        }
+        SnapshotOutputFormat::Json => write_json_snapshot_result(
+            write_accessibility_snapshot_json(output, snapshot, options.output),
+        ),
+    }
+}
+
+fn write_json_snapshot_result(result: std::io::Result<()>) -> ExitStatus {
+    if result.is_ok() {
+        ExitStatus::Success
+    } else {
+        ExitStatus::Unavailable
     }
 }
 
@@ -418,6 +538,15 @@ pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) 
             &format!("browser.jr: navigation from {reference} failed: {error}"),
             ExitStatus::Unavailable,
         ),
+        SessionError::PressNavigation {
+            key,
+            element,
+            error,
+        } => write_line(
+            errors,
+            &format!("browser.jr: navigation from pressing {key} on {element:?} failed: {error}"),
+            ExitStatus::Unavailable,
+        ),
         SessionError::NoPage => write_line(
             errors,
             "browser.jr: no page is open",
@@ -431,6 +560,18 @@ pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) 
         SessionError::NoSnapshot => write_line(
             errors,
             "browser.jr: no snapshot is available",
+            ExitStatus::Unavailable,
+        ),
+        SessionError::InvalidViewportSize { width, height } => write_line(
+            errors,
+            &format!(
+                "browser.jr: viewport width and height must be positive; got {width}x{height}"
+            ),
+            ExitStatus::InvalidInput,
+        ),
+        SessionError::UnsupportedScreenshot { target, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot capture {target:?}: {reason}"),
             ExitStatus::Unavailable,
         ),
         SessionError::StaleElementReference { reference } => write_line(
@@ -465,6 +606,40 @@ pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) 
             &format!("browser.jr: cannot fill {reference}: {reason}"),
             ExitStatus::Unavailable,
         ),
+        SessionError::UnsupportedType { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot type into {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedFocus { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot focus {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedHover { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot hover {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedScrollIntoView { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot scroll {reference} into view: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::NoFocusedElement => write_line(
+            errors,
+            "browser.jr: no element is focused",
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedPress {
+            key,
+            element,
+            reason,
+        } => write_line(
+            errors,
+            &format!("browser.jr: cannot press {key} on {element:?}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
         SessionError::UnsupportedSelect { reference, reason } => write_line(
             errors,
             &format!("browser.jr: cannot select on {reference}: {reason}"),
@@ -495,6 +670,11 @@ pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) 
             &format!("browser.jr: cannot read value from {reference}: {reason}"),
             ExitStatus::Unavailable,
         ),
+        SessionError::UnsupportedBoundingBox { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot read bounding box from {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
         SessionError::UnsupportedHtml { reference, reason } => write_line(
             errors,
             &format!("browser.jr: cannot read HTML from {reference}: {reason}"),
@@ -523,6 +703,11 @@ pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) 
         SessionError::UnsupportedEnabledState { reference, reason } => write_line(
             errors,
             &format!("browser.jr: cannot read enabled state from {reference}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedEditableState { reference, reason } => write_line(
+            errors,
+            &format!("browser.jr: cannot read editable state from {reference}: {reason}"),
             ExitStatus::Unavailable,
         ),
         SessionError::UnsupportedVisibility { reference, reason } => write_line(
@@ -602,12 +787,12 @@ fn write_locator_error(errors: &mut impl Write, error: SessionError) -> ExitStat
         ),
         SessionError::RoleNavigation { locator, error } => write_line(
             errors,
-            &format!("browser.jr: cannot click {locator}: navigation failed: {error:?}"),
+            &format!("browser.jr: navigation from {locator} failed: {error:?}"),
             ExitStatus::Unavailable,
         ),
         SessionError::LocatorNavigation { locator, error } => write_line(
             errors,
-            &format!("browser.jr: cannot click {locator}: navigation failed: {error:?}"),
+            &format!("browser.jr: navigation from {locator} failed: {error:?}"),
             ExitStatus::Unavailable,
         ),
         SessionError::RoleActionBlocked {
@@ -876,11 +1061,23 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(value["success"], false);
         assert!(value["data"].is_null());
-        assert_eq!(
-            value["error"],
-            "browser.jr: snapshot requires a URL and --interactive"
-        );
+        assert_eq!(value["error"], "browser.jr: snapshot requires a URL");
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn snapshot_compatibility_options_reject_invalid_values() {
+        for args in [
+            ["snapshot", "http://localhost:3000", "-i", "-d", "-1"],
+            ["snapshot", "http://localhost:3000", "-i", "-u", "-u"],
+            ["snapshot", "http://localhost:3000", "-i", "-c", "-c"],
+        ] {
+            let (status, output, errors) = run(&args);
+
+            assert_eq!(status, ExitStatus::InvalidInput);
+            assert!(output.is_empty());
+            assert!(errors.contains("snapshot"));
+        }
     }
 
     #[test]

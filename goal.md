@@ -13,6 +13,8 @@ Treat unimplemented intent as decided behavior, not runtime evidence.
 - `glossary.md` owns shared terms.
 - `architecture.md` owns internal design and must not redefine user-visible behavior.
 - `inspection/query-elements.md` owns locator types, syntax, matching, selection, resolution, actions, and failure behavior.
+- `inspection/capture-screenshot.md` owns screenshot targets, paint support, raster limits, and file behavior.
+- `interaction/scroll-page.md` owns explicit and automatic scroll behavior. Action documents own the surrounding action sequence.
 - `verification/` records runtime proof and must not define desired behavior.
 - `bug-triage.md` records confirmed conflicts between intent and evidence.
 

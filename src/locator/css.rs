@@ -46,31 +46,18 @@ impl CssSelector {
         let mut compounds = Vec::new();
         let mut combinators = Vec::new();
         let mut index = 0;
-        while index < source.len() {
-            let end = compound_end(source, index)?;
-            compounds.push(SimpleCssSelector::parse(&source[index..end])?);
+        loop {
+            let (compound, end) = parse_compound(source, index)?;
+            compounds.push(compound);
             if compounds.len() > MAX_SELECTOR_COMPOUNDS {
                 return Err(CssLocatorError::UnsupportedSelector);
             }
-            if end == source.len() {
-                break;
-            }
 
-            let bytes = source.as_bytes();
-            let had_space = bytes[end].is_ascii_whitespace();
-            index = skip_spaces(bytes, end);
-            let combinator = if bytes.get(index) == Some(&b'>') {
-                index = skip_spaces(bytes, index + 1);
-                Combinator::Child
-            } else if had_space {
-                Combinator::Descendant
-            } else {
-                return Err(CssLocatorError::UnsupportedSelector);
+            let Some((combinator, next_index)) = parse_combinator(source, end)? else {
+                break;
             };
-            if index == source.len() || bytes.get(index) == Some(&b'>') {
-                return Err(CssLocatorError::InvalidSelector);
-            }
             combinators.push(combinator);
+            index = next_index;
         }
 
         Ok(Self {
@@ -125,6 +112,39 @@ impl CssSelector {
             )
         })
     }
+}
+
+fn parse_compound(
+    source: &str,
+    start: usize,
+) -> Result<(SimpleCssSelector, usize), CssLocatorError> {
+    let end = compound_end(source, start)?;
+    Ok((SimpleCssSelector::parse(&source[start..end])?, end))
+}
+
+fn parse_combinator(
+    source: &str,
+    end: usize,
+) -> Result<Option<(Combinator, usize)>, CssLocatorError> {
+    if end == source.len() {
+        return Ok(None);
+    }
+
+    let bytes = source.as_bytes();
+    let had_space = bytes[end].is_ascii_whitespace();
+    let mut index = skip_spaces(bytes, end);
+    let combinator = if bytes.get(index) == Some(&b'>') {
+        index = skip_spaces(bytes, index + 1);
+        Combinator::Child
+    } else if had_space {
+        Combinator::Descendant
+    } else {
+        return Err(CssLocatorError::UnsupportedSelector);
+    };
+    if index == source.len() || bytes.get(index) == Some(&b'>') {
+        return Err(CssLocatorError::InvalidSelector);
+    }
+    Ok(Some((combinator, index)))
 }
 
 impl SimpleCssSelector {
@@ -234,30 +254,49 @@ impl SimpleCssSelector {
 }
 
 fn compound_end(source: &str, start: usize) -> Result<usize, CssLocatorError> {
-    let bytes = source.as_bytes();
-    let mut bracket_depth = 0;
-    let mut quote = None;
-    for (offset, value) in bytes[start..].iter().copied().enumerate() {
-        let index = start + offset;
-        if let Some(expected) = quote {
+    let mut scanner = CompoundScanner::default();
+    if let Some(offset) = source.as_bytes()[start..]
+        .iter()
+        .copied()
+        .position(|value| scanner.reached_end(value))
+    {
+        return Ok(start + offset);
+    }
+    scanner.finish(source.len())
+}
+
+#[derive(Default)]
+struct CompoundScanner {
+    bracket_depth: usize,
+    quote: Option<u8>,
+}
+
+impl CompoundScanner {
+    fn reached_end(&mut self, value: u8) -> bool {
+        if let Some(expected) = self.quote {
             if value == expected {
-                quote = None;
+                self.quote = None;
             }
-            continue;
+            return false;
         }
         match value {
-            b'\'' | b'"' if bracket_depth > 0 => quote = Some(value),
-            b'[' => bracket_depth += 1,
-            b']' if bracket_depth > 0 => bracket_depth -= 1,
-            b'>' if bracket_depth == 0 => return Ok(index),
-            value if value.is_ascii_whitespace() && bracket_depth == 0 => return Ok(index),
+            b'\'' | b'"' if self.bracket_depth > 0 => self.quote = Some(value),
+            b'[' => self.bracket_depth += 1,
+            b']' if self.bracket_depth > 0 => self.bracket_depth -= 1,
+            b'>' if self.bracket_depth == 0 => return true,
+            value if value.is_ascii_whitespace() && self.bracket_depth == 0 => return true,
             _ => {}
         }
+        false
     }
-    if quote.is_some() || bracket_depth != 0 {
-        return Err(CssLocatorError::InvalidSelector);
+
+    fn finish(&self, end: usize) -> Result<usize, CssLocatorError> {
+        if self.quote.is_some() || self.bracket_depth != 0 {
+            Err(CssLocatorError::InvalidSelector)
+        } else {
+            Ok(end)
+        }
     }
-    Ok(source.len())
 }
 
 fn skip_spaces(bytes: &[u8], mut index: usize) -> usize {
@@ -395,6 +434,21 @@ mod tests {
             CssSelector::parse(&rejected),
             Err(CssLocatorError::UnsupportedSelector)
         );
+    }
+
+    #[test]
+    fn selector_parser_preserves_typed_error_boundaries() {
+        for (source, expected) in [
+            ("", CssLocatorError::EmptySelector),
+            ("div >", CssLocatorError::InvalidSelector),
+            ("div > > span", CssLocatorError::InvalidSelector),
+            ("[title='open", CssLocatorError::InvalidSelector),
+            ("[title", CssLocatorError::InvalidSelector),
+            ("div + span", CssLocatorError::UnsupportedSelector),
+            ("div, span", CssLocatorError::UnsupportedSelector),
+        ] {
+            assert_eq!(CssSelector::parse(source), Err(expected), "{source}");
+        }
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# Set checkbox state
+# Set checked state
 
 ## Summary
 
@@ -8,15 +8,21 @@ Session-mode callers use `check <ref|selector>` or `uncheck <ref|selector>`. Dir
 
 [Locator actions](../inspection/query-elements.md) define the snapshot-free checked-state path.
 
-The action supports native checkbox inputs. A changed state records bubbling `input` and `change` events.
+The action supports native checkbox and radio inputs.
+
+A changed state records `click`, `input`, and `change` in the native event transcript.
+
+A changed state reveals an off-screen target when browser.jr has complete box geometry.
 
 ## The simple case
 
-The caller opens a page and captures an interactive snapshot. It selects a checkbox reference.
+The caller opens a page and captures an interactive snapshot. It selects a checkbox or radio reference.
 
 `check` stores true. `uncheck` stores false. The typed result reports the stored state.
 
 Repeating either action returns the same state without an error.
+
+Checking a radio selects it and unchecks its group peers. A checked radio cannot be unchecked through activation.
 
 ## The interaction, event by event
 
@@ -25,11 +31,16 @@ stateDiagram-v2
     [*] --> resolving_target
     resolving_target --> rejected : stale, missing, or non-unique target
     resolving_target --> checking_control : current reference or strict locator
-    checking_control --> unsupported : not a mutable native checkbox
-    checking_control --> storing : mutable checkbox
-    storing --> dispatching_events
-    dispatching_events --> reported
+    checking_control --> unsupported : not a native checked control
+    checking_control --> reported : requested state already stored
+    checking_control --> checking_actionability : state change required
+    checking_actionability --> blocked : disabled, hidden, unstable, or unsupported target
+    checking_actionability --> scrolling : mutable checkbox or radio
+    scrolling --> storing
+    storing --> recording
+    recording --> reported
     rejected --> finished
+    blocked --> finished
     unsupported --> finished
     reported --> finished
 ```
@@ -48,23 +59,49 @@ An unknown session label reports invalid input. Locator failures follow [Find el
 
 ### Begin running
 
-browser.jr confirms that the resolved source element is `input[type=checkbox]`.
+browser.jr confirms that the resolved source element is `input[type=checkbox]` or `input[type=radio]`.
 
-Disabled checkboxes reject changes. Explicit ARIA checkbox roles do not create mutable native state.
+An already stored state returns before visibility, enabled-state, or scrolling checks.
+
+Changed states require supported visible and static stability evidence. Disabled controls reject changes.
+
+Inline animation or transition declarations on the target or its ancestors block changed requests.
+
+Explicit ARIA checked roles do not create mutable native state.
+
+Unsupported box geometry leaves offsets unchanged. It does not block a valid changed state.
 
 ### While running
 
-The engine replaces the stored Boolean state. The current reference remains usable.
+Changed checkbox actions reveal supported target boxes before replacing the stored Boolean state.
 
-When state changes, the action records `input`, then `change`. Both events bubble.
+Rejected changes preserve page offsets and checked state.
 
-An idempotent write records no event. The action does not invoke listeners or dispatch click, focus, or pointer events.
+The current reference remains usable.
+
+Checking a radio stores true and unchecks every radio in its group.
+
+One radio group shares an exact non-empty name and form owner. Missing or empty names create singleton groups.
+
+Unchecking a false radio returns false. Unchecking a true radio rejects without changing its group.
+
+A changed state records `click`, then `input`, then `change`.
+
+All three records bubble. `click` and `input` compose. `change` does not compose.
+
+An idempotent request records nothing. Rejected changes also record nothing.
+
+The action does not change focus or record pointer and focus events.
+
+The transcript does not deliver events to page scripts.
 
 ### Finish
 
 The package returns `SetCheckedResult` for references or `SetCheckedByLocatorResult` for locators.
 
 Reference output reports `set checked ref=<ref> value=<boolean>`. Direct selector output includes the resolved element and state.
+
+Package callers drain records with `TakeDomEvents`. Session callers use `events`.
 
 A later snapshot reports the current state and invalidates earlier references.
 
@@ -73,8 +110,8 @@ A later snapshot reports the current state and invalidates earlier references.
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
 | Flags and options | The package takes a reference or locator and Boolean. Session mode uses separate commands. | No checked-state flags exist. |
-| Project configuration | No checkbox configuration exists. | Nothing reloads. |
-| Target matrix | The current page and snapshot select one checkbox. | The action does not navigate. |
+| Project configuration | No checked-state configuration exists. | Nothing reloads. |
+| Target matrix | The current page and snapshot select one native control. | The action does not navigate. |
 | Output channel | The package returns a typed result. Session mode uses flushed text. | A later snapshot exposes the state. |
 
 ## Cancel and interrupt
@@ -89,7 +126,7 @@ A later snapshot reports the current state and invalidates earlier references.
 | The network fails or times out | The action uses no network. | The page already exists in memory. |
 | The inspected page changes | Navigation can stale the reference. | This action changes only checked state. |
 | Another lint run targets the page | It owns another session. | It cannot observe this state. |
-| The process exits outright | No action occurs. | No checkbox state survives. |
+| The process exits outright | No action occurs. | No checked state survives. |
 
 ## Interactions with other systems
 
@@ -101,7 +138,15 @@ A later snapshot reports the current state and invalidates earlier references.
 
 **Network and storage.** The action uses no network and writes no persistent storage.
 
-**Rendering compatibility.** The action mutates browser.jr's checkbox model. It does not implement the platform activation algorithm.
+**Rendering compatibility.** The action mutates browser.jr's native checked-state model.
+
+Changed requests record the Playwright `click`, `input`, `change` order. Idempotent requests remain silent.
+
+browser.jr does not run platform event handlers.
+
+Controlled Playwright 1.62.1 Chromium, Firefox, and WebKit runs matched changed and idempotent requests.
+
+Playwright requires stable geometry for changed checked-state actions.
 
 **Isolation.** Checked state belongs to one session and document.
 
@@ -111,19 +156,31 @@ A later snapshot reports the current state and invalidates earlier references.
 
 - An absent `checked` attribute starts false.
 - A present `checked` attribute starts true.
-- Repeated check and uncheck requests are idempotent.
-- Disabled native checkboxes remain readable but reject changes.
-- Radio buttons and switches reject checked-state mutation.
-- Explicit ARIA roles do not create native checkbox behavior.
+- The last initially checked radio in one group becomes the selected radio.
+- Repeated checkbox check and uncheck requests are idempotent.
+- Idempotent checked-state requests record no events.
+- Changed checkbox and radio requests record `click`, `input`, and `change`.
+- Inline animation or transition declarations block changed requests before mutation.
+- Repeated state requests return without changing page offsets.
+- Changed state reveals an off-screen supported target before mutation.
+- Unsupported target geometry leaves offsets unchanged and still commits a valid change.
+- Rejected checked-state changes preserve page offsets.
+- Repeated radio check requests are idempotent.
+- An unchecked radio accepts `uncheck` idempotently. A checked radio rejects `uncheck`.
+- Disabled native controls remain readable but reject changes.
+- Radios in different forms remain independent, even when their names match.
+- Unnamed radios form singleton groups.
+- Switches reject checked-state mutation.
+- Explicit ARIA roles do not create native checked behavior.
 - Rejected actions preserve state and the current reference.
 - Direct selectors resolve strictly without a prior snapshot.
 - A later snapshot invalidates the action reference.
 
 ## Open questions and verification
 
-- Define click activation, focus, and listener behavior before broadening event dispatch.
-- Define radio-group behavior before supporting radio changes.
-- Define ARIA state observation separately from native checkbox state.
+- Add page-script event delivery after JavaScript exists.
+- Define keyboard activation records separately from direct checked-state actions.
+- Define ARIA state observation separately from native checked state.
 - Add form submission after scripts and activation behavior exist.
 
-Drafted from Rust package and compiled-process tests on 2026-08-31.
+Drafted from Rust package and compiled-process tests on 2026-09-01.

@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use super::{ElementSource, collapse_whitespace};
+use super::{ElementSource, collapse_whitespace, parse_style};
+
+pub(super) const UNKNOWN_BOX_GEOMETRY: &str =
+    "inline geometry prevents a proven non-empty bounding box";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum VisibilityState {
@@ -15,6 +18,93 @@ pub(super) fn visibility_state(
     sources: &[ElementSource],
     styles: &[BTreeMap<String, String>],
 ) -> VisibilityState {
+    match inherited_visibility_state(source_index, source, sources, styles, true) {
+        VisibilityState::Visible => default_box_visibility(source),
+        result => result,
+    }
+}
+
+pub(super) enum FocusStyleEvidence<'a> {
+    Computed(&'a [BTreeMap<String, String>]),
+    InlineOnly,
+    UnsupportedStylesheet,
+}
+
+impl<'a> From<&'a [BTreeMap<String, String>]> for FocusStyleEvidence<'a> {
+    fn from(styles: &'a [BTreeMap<String, String>]) -> Self {
+        Self::Computed(styles)
+    }
+}
+
+impl From<bool> for FocusStyleEvidence<'_> {
+    fn from(has_stylesheet: bool) -> Self {
+        if has_stylesheet {
+            Self::UnsupportedStylesheet
+        } else {
+            Self::InlineOnly
+        }
+    }
+}
+
+pub(super) fn focus_visibility_state<'a>(
+    source_index: usize,
+    source: &ElementSource,
+    sources: &[ElementSource],
+    styles: impl Into<FocusStyleEvidence<'a>>,
+) -> VisibilityState {
+    match styles.into() {
+        FocusStyleEvidence::Computed(styles) => {
+            inherited_visibility_state(source_index, source, sources, styles, false)
+        }
+        FocusStyleEvidence::InlineOnly => {
+            let styles = sources
+                .iter()
+                .map(|source| {
+                    parse_style(
+                        source
+                            .attributes
+                            .get("style")
+                            .map(String::as_str)
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            inherited_visibility_state(source_index, source, sources, &styles, false)
+        }
+        FocusStyleEvidence::UnsupportedStylesheet => VisibilityState::Unsupported {
+            reason: "linked and embedded stylesheet visibility is not implemented".into(),
+        },
+    }
+}
+
+pub(super) fn accessibility_visibility_state(
+    source_index: usize,
+    source: &ElementSource,
+    sources: &[ElementSource],
+    styles: &[BTreeMap<String, String>],
+) -> VisibilityState {
+    let mut current = Some(source_index);
+    while let Some(index) = current {
+        let candidate = &sources[index];
+        if candidate
+            .attributes
+            .get("aria-hidden")
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+        {
+            return VisibilityState::Hidden;
+        }
+        current = candidate.parent;
+    }
+    focus_visibility_state(source_index, source, sources, styles)
+}
+
+fn inherited_visibility_state(
+    source_index: usize,
+    source: &ElementSource,
+    sources: &[ElementSource],
+    styles: &[BTreeMap<String, String>],
+    inspect_geometry: bool,
+) -> VisibilityState {
     let mut ancestry = vec![source_index];
     let mut parent = source.parent;
     while let Some(index) = parent {
@@ -25,7 +115,12 @@ pub(super) fn visibility_state(
 
     let mut evidence = VisibilityEvidence::default();
     for index in ancestry {
-        if inspect_visibility_candidate(&sources[index], &styles[index], &mut evidence) {
+        if inspect_visibility_candidate(
+            &sources[index],
+            &styles[index],
+            &mut evidence,
+            inspect_geometry,
+        ) {
             return VisibilityState::Hidden;
         }
     }
@@ -36,7 +131,7 @@ pub(super) fn visibility_state(
     if let Some(reason) = evidence.unsupported {
         return VisibilityState::Unsupported { reason };
     }
-    default_box_visibility(source)
+    VisibilityState::Visible
 }
 
 #[derive(Default)]
@@ -49,12 +144,14 @@ fn inspect_visibility_candidate(
     candidate: &ElementSource,
     properties: &BTreeMap<String, String>,
     evidence: &mut VisibilityEvidence,
+    inspect_geometry: bool,
 ) -> bool {
     if candidate_is_definitely_hidden(candidate, properties) {
         return true;
     }
     if evidence.unsupported.is_none() {
-        evidence.unsupported = unsupported_visibility_reason(candidate, properties);
+        evidence.unsupported =
+            unsupported_visibility_reason(candidate, properties, inspect_geometry);
     }
     apply_inherited_visibility(properties, evidence);
     false
@@ -78,11 +175,16 @@ fn candidate_is_definitely_hidden(
 fn unsupported_visibility_reason(
     candidate: &ElementSource,
     properties: &BTreeMap<String, String>,
+    inspect_geometry: bool,
 ) -> Option<String> {
     hidden_until_found_reason(candidate)
         .or_else(|| content_visibility_reason(properties))
         .or_else(|| display_reason(properties))
-        .or_else(|| geometry_reason(properties))
+        .or_else(|| {
+            inspect_geometry
+                .then(|| geometry_reason(properties))
+                .flatten()
+        })
 }
 
 fn hidden_until_found_reason(candidate: &ElementSource) -> Option<String> {
@@ -112,7 +214,7 @@ fn geometry_reason(properties: &BTreeMap<String, String>) -> Option<String> {
     properties
         .keys()
         .any(|name| box_geometry_property(name))
-        .then(|| "inline geometry prevents a proven non-empty bounding box".to_owned())
+        .then(|| UNKNOWN_BOX_GEOMETRY.to_owned())
 }
 
 fn apply_inherited_visibility(
@@ -136,7 +238,7 @@ fn default_box_visibility(source: &ElementSource) -> VisibilityState {
     if matches!(
         source.tag.as_str(),
         "button" | "input" | "select" | "textarea"
-    ) || !collapse_whitespace(&source.text).is_empty()
+    ) || !collapse_whitespace(&source.content.text).is_empty()
     {
         return VisibilityState::Visible;
     }

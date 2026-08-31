@@ -1,4 +1,4 @@
-# Verification: checkbox state
+# Verification: checked state
 
 Run these checks against a controlled loopback page. Record the fixture and browser.jr commit.
 
@@ -13,10 +13,16 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | CHECK-05 | P1 | pipe | Snapshots report native checkbox state ([Finish](../interaction/set-checked.md#finish)). | Serve one checkbox. | Snapshot, change state, then snapshot again. | Each snapshot reports its current Boolean state. | partial: package and compiled-process tests passed, 2026-08-31 |
 | CHECK-06 | P1 | pipe | New snapshots stale older state references ([Edge cases](../inspection/read-checked.md#edge-cases)). | Serve one checkbox. | Capture twice, then read with the first reference. | The read reports a stale reference. | partial: package boundary test passed, 2026-08-31 |
 | CHECK-07 | P1 | pipe | Direct selectors change and read checked state without a snapshot ([The simple case](../interaction/set-checked.md#the-simple-case)). | Serve one unchecked native checkbox. | Check it through CSS, then read checked state through CSS. | The action commits true and the read returns true. | partial: package, compiled-process, and controlled agent-browser comparison passed, 2026-08-31 |
-| CHECK-08 | P1 | pipe | Changed checkbox state records input before change ([While running](../interaction/set-checked.md#while-running)). | Serve a nested unchecked checkbox. | Check once, check again, then drain events. | One input and one change event appear in order. The idempotent action adds none. | partial: package test passed, 2026-08-31 |
+| CHECK-08 | P1 | package | Radio state is exclusive within one group ([While running](../interaction/set-checked.md#while-running)). | Serve named radios across two forms. | Check members in the first group, then read every radio. | One first-group radio is true. The second-form radio remains independent. | partial: unit and package tests passed, 2026-08-31 |
+| CHECK-09 | P1 | pipe | Radio state changes through role, CSS, and references ([The simple case](../interaction/set-checked.md#the-simple-case)). | Serve one labeled radio group. | Check by role, click by CSS, then read captured references. | Each selected radio becomes true and its group peer becomes false. | partial: package, compiled-process, controlled Chromium, and controlled agent-browser evidence passed, 2026-08-31 |
+| CHECK-10 | P1 | package | A checked radio rejects uncheck without mutation ([Edge cases](../interaction/set-checked.md#edge-cases)). | Serve one checked and one unchecked group member. | Uncheck each radio through its reference. | The false radio returns false. The true radio rejects and remains true. | partial: package test passed, 2026-08-31 |
+| CHECK-11 | P1 | package | Radio snapshots normalize initial group state ([Edge cases](../interaction/set-checked.md#edge-cases)). | Serve multiple checked radios in one group. | Open and capture the interactive state. | Only the last checked group member reports true. | partial: unit test passed, 2026-08-31 |
+| CHECK-12 | P1 | package | Changed checked state auto-scrolls transactionally ([While running](../interaction/set-checked.md#while-running)). | Put mutable and disabled checkboxes below a short viewport. | Change the mutable control, repeat it, then reject the disabled control. | The first change reveals its box. The no-op and rejection preserve offsets. | partial: package and compiled-process tests passed, 2026-08-31 |
+| CHECK-13 | P1 | package | Changed checked state records native events once ([While running](../interaction/set-checked.md#while-running)). | Serve an unchecked checkbox. | Check it, repeat the same request, then drain events. | The change records `click`, `input`, `change`. The no-op records nothing. | partial: package and compiled-process tests passed, 2026-08-31 |
+| CHECK-14 | P1 | pipe | Changed checked state blocks unsupported motion transactionally ([Begin running](../interaction/set-checked.md#begin-running)). | Give unchecked controls inline animation or transition declarations. | Check through reference and locator paths, then read state and events. | Both paths report the stable check. State and events remain unchanged. | partial: package and compiled-process tests passed, 2026-09-01 |
+| CHECK-15 | P1 | package | Checked-state events preserve normalized ancestry ([While running](../interaction/set-checked.md#while-running)). | Serve a nested unchecked checkbox. | Check once, repeat it, then drain events. | The change records `click`, `input`, `change` with target-to-root paths. The no-op adds none. | partial: package test passed, 2026-08-31 |
 
 Not checkable yet:
 
-- Click activation, focus, pointer events, and listener invocation do not exist.
-- Radio-group behavior does not exist.
+- Page-script checkbox event delivery does not exist.
 - ARIA checked-state observation does not exist.

@@ -6,7 +6,13 @@ Package callers use `ClickElement` with a reference from the latest interactive 
 
 Session-mode callers send `click <ref>` after `snapshot --interactive` in the same process.
 
-The implemented action follows one same-context HTML link. Other click behavior returns a typed unsupported result.
+This action follows one same-context HTML link.
+
+Native link `Enter` follows the same loading transaction. [`press-key.md`](../interaction/press-key.md) owns its typed effect.
+
+[`interaction/click-element.md`](../interaction/click-element.md) owns native control effects and unsupported click boundaries.
+
+[`interaction/submit-form.md`](../interaction/submit-form.md) owns bounded GET form navigation.
 
 The one-shot CLI has no `click` command. [`browser.jr session`](../automation/ai-session.md) preserves the required state over stdin.
 
@@ -57,11 +63,19 @@ The current page and reference remain usable until the replacement document load
 
 Links with `download` are unsupported. Links targeting another browsing context are unsupported.
 
-Buttons, form controls, and explicit interactive ARIA roles have no click execution yet.
+Supported submitter clicks may enter GET form navigation.
+
+Other native control clicks do not navigate. Explicit ARIA controls have no native default action.
 
 ### Finish
 
 Successful navigation installs a new document epoch. It invalidates the previous snapshot references and layout evidence.
+
+It also clears the previous page's stored [focus](../interaction/focus-element.md).
+
+The replacement starts [page scroll](../interaction/scroll-page.md) at zero on both axes.
+
+It keeps the page's configured [viewport size](../interaction/set-viewport.md).
 
 Session mode also clears its displayed-reference set.
 
@@ -69,9 +83,17 @@ Session mode also clears its displayed-reference set.
 
 Failed navigation preserves the current page and latest snapshot reference.
 
+It also preserves the current focus.
+
+It preserves the current page scroll offsets.
+
 The caller must capture another interactive snapshot before the next reference action.
 
 A [locator action](../inspection/query-elements.md) resolves the replacement document directly.
+
+[History navigation](history-navigation.md) records successful link and supported form navigation.
+
+Successful native link `Enter` navigation records the same history entry.
 
 ## Variants
 
@@ -110,7 +132,9 @@ A [locator action](../inspection/query-elements.md) resolves the replacement doc
 
 **Isolation.** A failed target cannot replace the current page. Separate sessions do not share page state.
 
-**Accessibility inspection.** The click uses a snapshot reference. It does not yet check visibility or event reception.
+**Accessibility inspection.** The click uses a snapshot reference, supported visibility, and static stability evidence.
+
+It does not sample motion frames or check event reception.
 
 ## Edge cases
 
@@ -118,7 +142,8 @@ A [locator action](../inspection/query-elements.md) resolves the replacement doc
 - A successful navigation makes its clicked reference stale.
 - A relative `href` resolves against the current page URL.
 - A non-loopback resolved URL fails without replacing the page.
-- A button returns an unsupported-click error.
+- A supported native button returns `Activated` without navigation.
+- A supported native submitter returns `Navigated` after GET form loading.
 - A `_blank` target does not silently navigate the current page.
 - A download link does not silently navigate the current page.
 - A session-mode click requires a reference from that process's latest snapshot.
@@ -127,8 +152,8 @@ A [locator action](../inspection/query-elements.md) resolves the replacement doc
 
 - Define same-document fragment navigation.
 - Define redirects and response commit boundaries.
-- Define forms, buttons, event dispatch, and JavaScript navigation.
-- Define actionability checks before expanding click coverage.
+- Define link event dispatch and JavaScript navigation.
+- Define motion frame sampling and receives-events checks.
 - Define whether a later one-shot client uses a daemon, socket, or another retained-session transport.
 
-Drafted from Rust implementation and package boundary tests on 2026-08-31.
+Drafted from Rust implementation and package boundary tests on 2026-09-01.

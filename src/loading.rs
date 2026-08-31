@@ -77,6 +77,88 @@ pub(crate) fn load_local_html(value: &str) -> Result<String, LoadError> {
         .map_err(|error| LoadError::InvalidBody(error.to_string()))
 }
 
+pub(crate) fn resolve_url_reference(base: &str, reference: &str) -> Result<String, LoadError> {
+    let (reference, fragment) = reference
+        .split_once('#')
+        .map_or((reference, None), |(reference, fragment)| {
+            (reference, Some(fragment))
+        });
+    let base = base
+        .parse::<Uri>()
+        .map_err(|error| LoadError::InvalidUrl(error.to_string()))?;
+    let mut resolved = if let Ok(absolute) = reference.parse::<Uri>()
+        && absolute.scheme().is_some()
+    {
+        absolute.to_string()
+    } else {
+        let scheme = base
+            .scheme_str()
+            .ok_or_else(|| LoadError::InvalidUrl("the base URL has no scheme".into()))?;
+        if reference.starts_with("//") {
+            format!("{scheme}:{reference}")
+        } else {
+            let authority = base
+                .authority()
+                .ok_or_else(|| LoadError::InvalidUrl("the base URL has no authority".into()))?;
+            let base_path = base
+                .path_and_query()
+                .map(|value| value.path())
+                .unwrap_or("/");
+            let base_path_and_query = base.path_and_query().map_or("/", |value| value.as_str());
+            let path_and_query = resolve_path_and_query(base_path, base_path_and_query, reference);
+            format!("{scheme}://{authority}{path_and_query}")
+        }
+    };
+    if let Some(fragment) = fragment {
+        resolved.push('#');
+        resolved.push_str(fragment);
+    }
+    Ok(resolved)
+}
+
+fn resolve_path_and_query(base_path: &str, base_path_and_query: &str, reference: &str) -> String {
+    if reference.is_empty() {
+        return base_path_and_query.into();
+    }
+    if reference.starts_with('?') {
+        return format!("{base_path}{reference}");
+    }
+    let (reference_path, query) = reference
+        .split_once('?')
+        .map_or((reference, None), |(path, query)| (path, Some(query)));
+    let joined = if reference_path.starts_with('/') {
+        reference_path.into()
+    } else {
+        let directory_end = base_path.rfind('/').map_or(0, |index| index + 1);
+        format!("{}{reference_path}", &base_path[..directory_end])
+    };
+    let mut result = normalize_path(&joined);
+    if let Some(query) = query {
+        result.push('?');
+        result.push_str(query);
+    }
+    result
+}
+
+fn normalize_path(path: &str) -> String {
+    let keep_trailing_slash = path.ends_with('/');
+    let mut segments = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            value => segments.push(value),
+        }
+    }
+    let mut normalized = format!("/{}", segments.join("/"));
+    if keep_trailing_slash && normalized != "/" {
+        normalized.push('/');
+    }
+    normalized
+}
+
 fn local_http_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .max_redirects(0)
@@ -120,7 +202,7 @@ fn validate_local_http_url(url: &Uri) -> Result<(), LoadError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoadError, local_http_agent, validate_local_http_url};
+    use super::{LoadError, local_http_agent, resolve_url_reference, validate_local_http_url};
     use http::Uri;
 
     #[test]
@@ -160,5 +242,19 @@ mod tests {
         assert_eq!(timeouts.send_request, None);
         assert_eq!(timeouts.recv_response, None);
         assert_eq!(timeouts.recv_body, None);
+    }
+
+    #[test]
+    fn resolves_document_urls_with_queries_and_fragments() {
+        let base = "http://localhost:3000/guide/current?old=1";
+
+        assert_eq!(
+            resolve_url_reference(base, "../next?q=1#details").unwrap(),
+            "http://localhost:3000/next?q=1#details"
+        );
+        assert_eq!(
+            resolve_url_reference(base, "#details").unwrap(),
+            "http://localhost:3000/guide/current?old=1#details"
+        );
     }
 }

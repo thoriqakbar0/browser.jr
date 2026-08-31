@@ -12,11 +12,11 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Caller.** The person, AI agent, or program that submits an evaluation. Caller identity must not change evaluation semantics.
 
-**CLI.** The primary developer interface. `lint` checks layout. `snapshot --interactive` reports supported semantic controls. `session` accepts persistent line commands.
+**CLI.** The primary developer interface. `lint` checks layout. `snapshot` reports supported accessibility evidence. `session` accepts persistent line commands.
 
 ## Sessions and pages
 
-**Session.** One isolated engine instance with its pages, configuration, and evaluation history. Whether a session may contain more than one page is open.
+**Session.** One isolated engine instance with its page, configuration, navigation history, keyboard state, snapshots, and native event transcript.
 
 **Session mode.** One long-lived CLI invocation that reads one command per stdin line. It keeps one engine session alive. It is separate from the planned JavaScript REPL.
 
@@ -30,7 +30,7 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Normalized HTML ancestry.** The parser-built element tree after implied elements, optional end tags, and other HTML repairs.
 
-**Navigation.** A request that may replace a page's current document. Package and session-mode link clicks implement one bounded subset.
+**Navigation.** A request that may replace a page's current document. Links and supported GET form submissions implement bounded subsets.
 
 **Reload.** A navigation that fetches the current URL again. Success installs a fresh document epoch.
 
@@ -39,6 +39,20 @@ The vocabulary used across these documents. Each definition states intended mean
 **Rendered state.** The engine's inspectable result after applying supported parsing, style, layout, and rendering rules.
 
 **Layout observation.** A structured value describing geometry or computed layout for one rendered element.
+
+**Bounding box.** One visible element's viewport-relative border box with `x`, `y`, `width`, and `height`.
+
+**Viewport.** The current page's configured CSS pixel viewing area. A session starts at 1280 by 720.
+
+**Viewport resize.** A size change that recomputes supported static geometry without replacing the current document.
+
+**Page scroll.** A bounded change to the current page's horizontal or vertical viewport offset.
+
+**Scroll into view.** A target action that adjusts page offsets to reveal one supported normal-flow box when possible.
+
+**Automatic action scrolling.** Local click, hover, changed check, and changed uncheck reveal a supported target box before mutation.
+
+**Normal flow.** Static block boxes placed in document order inside their parent's content box. Fixed boxes do not consume flow space.
 
 **Grid observation.** A layout observation for a CSS grid. It may include tracks, gaps, placement, alignment, and overflow once support is defined.
 
@@ -50,13 +64,37 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Snapshot.** An immutable capture of selected page evidence at a known point in the page's lifetime.
 
-**Interactive snapshot.** A whole-page or locator-scoped snapshot containing supported interactive roles, names, semantic identifiers, and ordered references.
+**Screenshot.** A PNG capture of the current viewport, full supported page, strict locator, or package rectangle.
 
-**Interactive element reference.** A snapshot-owned target identity such as `@e1`. Another capture or document makes it stale.
+**Paint scene.** One capture rectangle and ordered browser.jr-owned paint commands.
+
+**Software rasterizer.** The lazy in-process renderer for the implemented solid-box paint subset.
+
+**Screenshot paint limit.** One screenshot may contain at most 16,777,216 CSS pixels.
+
+**Screenshot work limit.** One raster may visit at most 67,108,864 clipped fill pixels.
+
+**Accessibility snapshot.** A whole-page or locator-scoped tree of supported roles, names, ordered text, state, and references.
+
+**Generated list marker.** A document-level accessibility node for one visible native list item. It has no element reference.
+
+**Interactive snapshot.** An agent-oriented projection of supported controls, links, headings, navigation landmarks, state, and references.
+
+**Interactive element reference.** A snapshot-owned target identity such as `@e1`. It may identify a control, link, heading, or navigation landmark.
+
+References use document-wide ordinals. Scoped snapshots may contain gaps. Another capture or document makes every prior reference stale.
 
 **Locator.** A reusable current-document query. Implemented kinds cover semantic text, source attributes, CSS, and XPath.
 
-**Role locator.** A role and optional accessible-name query over the supported semantic index.
+**Role locator.** A role query over the supported semantic index. It may filter name, description, state, level, and accessibility-hidden inclusion.
+
+**Accessible name.** Normalized text that identifies one semantic element. Supported content names keep descendant text and non-presentational image `alt` alternatives in document order.
+
+**Accessible description.** Normalized text that adds information to an accessible name. The supported subset follows ARIA description precedence.
+
+**Accessibility-hidden state.** Whether supported HTML, CSS, and ARIA evidence removes an element from default role matching.
+
+**Role state filter.** A Boolean checked, disabled, expanded, pressed, or selected condition applied during role resolution.
 
 **Text locator.** A normalized descendant-text query. A matching descendant takes priority over its matching ancestor.
 
@@ -76,7 +114,7 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **XPath locator.** An XPath 1.0 element query over a namespace-free mirror of the current normalized HTML document.
 
-**Direct selector.** A CSS or XPath target supplied directly to a session action, state read, HTML read, text read, attribute read, value read, or count command.
+**Direct selector.** A CSS or XPath target supplied directly to a session action, box read, state read, content read, or count command.
 
 **Locator resolution.** Matching a locator against the current document. Non-positioned resolution rejects zero or multiple matches.
 
@@ -86,29 +124,99 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Role match.** A locator match whose semantic role is present and required.
 
-**Locator action.** An action that resolves its locator when the request executes. Fill, check, uncheck, and supported link clicks are implemented.
+**Locator action.** An action that resolves its locator when the request executes. Supported actions include click, fill, type, focus, hover, scroll into view, press, select, check, and uncheck.
 
-**Actionability check.** Evidence required before an action mutates state. Current locator actions check supported visible, enabled, or editable state.
+**Actionability check.** Evidence required before some actions mutate state. Focus and press use their separate no-actionability boundary.
 
-**Click.** An action request against one current interactive element reference. Only same-context link navigation is implemented.
+**Stable state.** Supported static evidence that target geometry cannot change during one synchronous action. Motion declarations block this evidence.
 
-**Fill.** An action that replaces a supported text control's current value and records one bubbling `input` event.
+Successful pointer actions apply automatic action scrolling after their checks.
 
-**Select.** An exact value, label, or index action on one native select. A changed selection records bubbling `input` and `change` events.
+**Click.** An action that navigates a same-context link, submits a supported form, or applies a native control effect.
 
-**Native DOM event.** A supported `click`, `input`, or `change` record with its document, target, retained-content position, bubbling flag, and target-to-root path. browser.jr does not invoke JavaScript listeners yet.
+**Fill.** An action that focuses a supported text control and replaces its current value. Success records `beforeinput` and `input`.
+
+**Type.** An action that appends text to a supported text control's current value.
+
+Type records supported events in the native event transcript. It does not deliver them to page scripts.
+
+**Focus.** The current page's supported active target or document body. Focus does not dispatch browser events.
+
+**Focused state.** Whether one resolved target owns the current page focus at the time of a read.
+
+**Hover.** An action that stores one visible source element as the current page's pointer target.
+
+**Hovered state.** Whether one resolved target is the exact current pointer target. It does not imply CSS pseudo-class matching.
+
+**Sequential focus order.** Positive `tabindex` targets, then natural and zero-`tabindex` targets in document order.
+
+**Text selection.** One text control's anchor and focus, exposed as ordered UTF-16 start and end offsets.
+
+**Key press.** One bounded text edit, focus traversal, native activation, ignored default, link navigation, or form submission.
+
+Complete printable text and same-target native-control presses record their portable event sequences.
+
+Focus-changing, navigating, modified, and non-ASCII presses do not record incomplete sequences.
+
+**Held key.** One normalized key kept down in session state until the matching key-up request.
+
+Supported down phases record before storage. Their matching up records against the current focused target.
+
+Native-control `Space` down stores one pending activation without changing native state.
+
+Matching key-up applies one effect when the original target still owns focus.
+
+Repeated down preserves one pending activation. Another focused target at key-up cancels it.
+
+**Keyboard text input.** A focused `type` or `inserttext` request. It replaces the current supported text selection.
+
+Non-empty `inserttext` records `beforeinput`, then `input` on editable text. Read-only text records only `beforeinput`.
+
+`type` applies each Unicode scalar in order.
+
+Printable ASCII records `keydown`, `keypress`, `beforeinput`, `input`, then `keyup` on editable text.
+
+Editable non-ASCII input records `beforeinput`, then `input`.
+
+Read-only printable ASCII records the shared `keydown`, `keypress`, then `keyup` sequence.
+
+Read-only non-key input events differ across Playwright engines. browser.jr does not record them.
+
+**Form owner.** The exact form associated through a `form` attribute or nearest ancestor form.
+
+**Successful control.** A named, enabled, form-owned control that contributes entries under the implemented GET subset.
+
+**Implicit submission.** Text-control `Enter` activation that uses the form's default submitter or blocker count.
+
+**Form submission.** Explicit or implicit activation that serializes successful controls and performs same-context HTTP GET navigation.
+
+**Navigation history.** The ordered successful open, link, and supported form-navigation URLs. Reload does not add an entry.
+
+**Select.** An exact value, label, or index action on one native select. Success records `input` and `change`.
+
+**Native event transcript.** Session-owned, data-minimized records of supported native action events.
+
+Each record contains type, document epoch, target identity, source ordinal, ancestor path, and bubbling metadata. It contains no input value.
+
+The transcript does not dispatch events to page scripts. `TakeDomEvents` and session `events` drain it.
 
 **Value inspection.** A read of one current text-control or native-select value through a snapshot or typed request. Multiple selects report their first selected value.
 
-**Checked state.** The current Boolean state of a supported native checkbox. Snapshots and typed requests expose it.
+**Checked state.** The current Boolean state of a supported native checkbox or radio. Snapshots and typed requests expose it.
+
+**Radio group.** Radios sharing one non-empty name and form owner. Selecting one radio unchecks its group peers.
 
 **Element text.** Normalized non-inert descendant text from a loaded static element. It excludes raw style, script, and metadata text.
+
+**Page text.** Normalized static document text. It excludes metadata, scripts, styles, and source control values.
 
 **Element HTML.** Normalized static child markup for one element. It excludes the selected element's outer tags.
 
 **Element attribute.** One parsed static source attribute. Attribute reads distinguish present, missing, and blocked-sensitive values.
 
 **Enabled state.** Whether a supported native element lacks its native disabled state. It is not full actionability.
+
+**Editable state.** Whether a supported native control or HTML editing host accepts user editing under the modeled static state.
 
 **Visible state.** Whether supported static evidence proves a non-empty box without hidden computed visibility.
 
@@ -196,7 +304,7 @@ These terms describe decided but unimplemented REPL behavior.
 
 **Human-readable output.** Text meant for a person. The CLI emits it now. The intended REPL will use the same result terms.
 
-**Machine-readable output.** One JSON result for programs and AI agents. One-shot interactive snapshots implement the `success`, `data`, and `error` envelope. Session mode still emits flushed line-oriented text.
+**Machine-readable output.** JSON results for programs and AI agents. One-shot snapshots emit one envelope. JSON session mode emits newline-delimited envelopes.
 
 **Watch mode.** A decided but unimplemented lint invocation that checks the target again after relevant page changes settle.
 

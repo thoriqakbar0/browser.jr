@@ -1,4 +1,4 @@
-# Read checkbox state
+# Read checked state
 
 ## Summary
 
@@ -6,11 +6,11 @@ Package callers submit `GetElementChecked` with a reference or `GetCheckedByLoca
 
 Session-mode callers send `is checked <ref|selector>`. Direct selectors need no snapshot.
 
-Interactive snapshots also report current native checkbox state.
+Interactive snapshots also report current native checkbox and radio state.
 
 ## The simple case
 
-The caller opens a page and captures an interactive snapshot. It selects a checkbox reference.
+The caller opens a page and captures an interactive snapshot. It selects a checkbox or radio reference.
 
 browser.jr returns the current Boolean state without changing the page or reference.
 
@@ -22,7 +22,7 @@ stateDiagram-v2
     resolving_target --> rejected : stale, missing, or non-unique target
     resolving_target --> checking_state : current reference or strict locator
     checking_state --> unsupported : state unavailable
-    checking_state --> reporting : native checkbox
+    checking_state --> reporting : native checkbox or radio
     reporting --> finished
     rejected --> finished
     unsupported --> finished
@@ -44,7 +44,7 @@ An unknown session label reports invalid input. Neither path reads another eleme
 
 browser.jr resolves a reference through the latest interactive snapshot or a locator through the current document.
 
-State inspection supports native checkbox inputs, including disabled checkboxes.
+State inspection supports native checkbox and radio inputs, including disabled controls.
 
 ### While running
 
@@ -65,7 +65,7 @@ The reference remains current after the read.
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
 | Flags and options | The package and session commands take one reference or locator. | No state-read flags exist. |
-| Project configuration | No checkbox inspection configuration exists. | Nothing reloads. |
+| Project configuration | No checked-state inspection configuration exists. | Nothing reloads. |
 | Target matrix | The current page and snapshot select one control. | The read does not change it. |
 | Output channel | The package returns a typed value. Session mode uses flushed text. | Snapshots expose the same Boolean. |
 
@@ -93,7 +93,7 @@ The reference remains current after the read.
 
 **Network and storage.** The read uses no network and writes no storage.
 
-**Rendering compatibility.** The result comes from browser.jr's native checkbox model.
+**Rendering compatibility.** The result comes from browser.jr's native checked-state model.
 
 **Isolation.** Checked state and references belong to one session and document.
 
@@ -103,8 +103,9 @@ The reference remains current after the read.
 
 - Unchecked native checkboxes return false.
 - Checked native checkboxes return true.
-- Disabled native checkboxes remain readable.
-- Radio buttons, switches, buttons, links, and textboxes report unsupported state.
+- Native radios return their normalized exclusive group state.
+- Disabled native checkboxes and radios remain readable.
+- Switches, buttons, links, and textboxes report unsupported state.
 - A successful state change affects the next direct read immediately.
 - A direct read does not invalidate its reference.
 - Direct selectors resolve strictly without a prior snapshot.
@@ -112,7 +113,6 @@ The reference remains current after the read.
 
 ## Open questions and verification
 
-- Define radio checked-state inspection with group semantics.
 - Define ARIA checked-state inspection independently from native state.
 - Define machine-readable response encoding.
 

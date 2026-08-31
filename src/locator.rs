@@ -6,6 +6,24 @@ pub(crate) mod css;
 pub struct RoleLocator {
     role: String,
     name: Option<AccessibleNameMatch>,
+    description: Option<Box<AccessibleNameMatch>>,
+    filters: RoleFilters,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct RoleFilters {
+    states: RoleFilterStates,
+    include_hidden: bool,
+    level: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RoleFilterStates {
+    pub(crate) checked: Option<bool>,
+    pub(crate) disabled: Option<bool>,
+    pub(crate) expanded: Option<bool>,
+    pub(crate) pressed: Option<bool>,
+    pub(crate) selected: Option<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +109,12 @@ struct TextMatch {
 pub enum RoleLocatorError {
     EmptyRole,
     InvalidRole,
+    InvalidLevel,
+    UnsupportedCheckedRole,
+    UnsupportedExpandedRole,
+    UnsupportedLevelRole,
+    UnsupportedPressedRole,
+    UnsupportedSelectedRole,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -119,11 +143,34 @@ pub(crate) struct LocatorCandidate<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SemanticLocatorCandidate<'a> {
-    pub(crate) role: Option<&'a str>,
-    pub(crate) name: &'a str,
+    pub(crate) accessibility: AccessibilityLocatorCandidate<'a>,
     pub(crate) text: &'a str,
     pub(crate) label: Option<&'a str>,
     pub(crate) placeholder: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AccessibilityLocatorCandidate<'a> {
+    pub(crate) role: Option<&'a str>,
+    pub(crate) name: &'a str,
+    pub(crate) description: &'a str,
+    pub(crate) role_state: RoleStateCandidate<'a>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RoleStateCandidate<'a> {
+    pub(crate) values: RoleStateValues,
+    pub(crate) level: Option<u32>,
+    pub(crate) visible_to_accessibility: Result<bool, &'a str>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RoleStateValues {
+    pub(crate) checked: Option<bool>,
+    pub(crate) disabled: bool,
+    pub(crate) expanded: Option<bool>,
+    pub(crate) pressed: Option<bool>,
+    pub(crate) selected: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -147,6 +194,8 @@ impl RoleLocator {
         Ok(Self {
             role: role.to_ascii_lowercase(),
             name: None,
+            description: None,
+            filters: RoleFilters::default(),
         })
     }
 
@@ -158,6 +207,106 @@ impl RoleLocator {
     pub fn with_exact_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(AccessibleNameMatch::Exact(normalize_name(name.into())));
         self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(Box::new(AccessibleNameMatch::Contains(normalize_name(
+            description.into(),
+        ))));
+        self
+    }
+
+    pub fn with_exact_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(Box::new(AccessibleNameMatch::Exact(normalize_name(
+            description.into(),
+        ))));
+        self
+    }
+
+    pub fn with_checked(mut self, checked: bool) -> Result<Self, RoleLocatorError> {
+        if !matches!(
+            self.role.as_str(),
+            "checkbox"
+                | "menuitemcheckbox"
+                | "menuitemradio"
+                | "option"
+                | "radio"
+                | "switch"
+                | "treeitem"
+        ) {
+            return Err(RoleLocatorError::UnsupportedCheckedRole);
+        }
+        self.filters.states.checked = Some(checked);
+        Ok(self)
+    }
+
+    pub fn with_disabled(mut self, disabled: bool) -> Self {
+        self.filters.states.disabled = Some(disabled);
+        self
+    }
+
+    pub fn with_expanded(mut self, expanded: bool) -> Result<Self, RoleLocatorError> {
+        if !matches!(
+            self.role.as_str(),
+            "application"
+                | "button"
+                | "checkbox"
+                | "columnheader"
+                | "combobox"
+                | "gridcell"
+                | "link"
+                | "listbox"
+                | "menuitem"
+                | "menuitemcheckbox"
+                | "menuitemradio"
+                | "row"
+                | "rowheader"
+                | "switch"
+                | "tab"
+                | "treeitem"
+        ) {
+            return Err(RoleLocatorError::UnsupportedExpandedRole);
+        }
+        self.filters.states.expanded = Some(expanded);
+        Ok(self)
+    }
+
+    pub fn with_include_hidden(mut self, include_hidden: bool) -> Self {
+        self.filters.include_hidden = include_hidden;
+        self
+    }
+
+    pub fn with_level(mut self, level: u32) -> Result<Self, RoleLocatorError> {
+        if !matches!(
+            self.role.as_str(),
+            "heading" | "listitem" | "row" | "treeitem"
+        ) {
+            return Err(RoleLocatorError::UnsupportedLevelRole);
+        }
+        if level == 0 {
+            return Err(RoleLocatorError::InvalidLevel);
+        }
+        self.filters.level = Some(level);
+        Ok(self)
+    }
+
+    pub fn with_pressed(mut self, pressed: bool) -> Result<Self, RoleLocatorError> {
+        if self.role != "button" {
+            return Err(RoleLocatorError::UnsupportedPressedRole);
+        }
+        self.filters.states.pressed = Some(pressed);
+        Ok(self)
+    }
+
+    pub fn with_selected(mut self, selected: bool) -> Result<Self, RoleLocatorError> {
+        if !matches!(
+            self.role.as_str(),
+            "columnheader" | "gridcell" | "option" | "row" | "rowheader" | "tab" | "treeitem"
+        ) {
+            return Err(RoleLocatorError::UnsupportedSelectedRole);
+        }
+        self.filters.states.selected = Some(selected);
+        Ok(self)
     }
 
     pub fn role(&self) -> &str {
@@ -177,17 +326,96 @@ impl RoleLocator {
         matches!(self.name, Some(AccessibleNameMatch::Exact(_)))
     }
 
-    pub(crate) fn matches(&self, role: &str, name: &str) -> bool {
+    pub fn description(&self) -> Option<&str> {
+        match self.description.as_deref() {
+            Some(
+                AccessibleNameMatch::Contains(description)
+                | AccessibleNameMatch::Exact(description),
+            ) => Some(description),
+            None => None,
+        }
+    }
+
+    pub fn description_exact(&self) -> bool {
+        matches!(
+            self.description.as_deref(),
+            Some(AccessibleNameMatch::Exact(_))
+        )
+    }
+
+    pub fn checked(&self) -> Option<bool> {
+        self.filters.states.checked
+    }
+
+    pub fn disabled(&self) -> Option<bool> {
+        self.filters.states.disabled
+    }
+
+    pub fn expanded(&self) -> Option<bool> {
+        self.filters.states.expanded
+    }
+
+    pub fn includes_hidden(&self) -> bool {
+        self.filters.include_hidden
+    }
+
+    pub fn level(&self) -> Option<u32> {
+        self.filters.level
+    }
+
+    pub fn pressed(&self) -> Option<bool> {
+        self.filters.states.pressed
+    }
+
+    pub fn selected(&self) -> Option<bool> {
+        self.filters.states.selected
+    }
+
+    pub(crate) fn matches<'a>(
+        &self,
+        candidate: SemanticLocatorCandidate<'a>,
+    ) -> Result<bool, &'a str> {
+        let accessibility = candidate.accessibility;
+        let Some(role) = accessibility.role else {
+            return Ok(false);
+        };
         if !self.role.eq_ignore_ascii_case(role) {
-            return false;
+            return Ok(false);
         }
-        match &self.name {
-            None => true,
-            Some(AccessibleNameMatch::Contains(expected)) => name
-                .to_lowercase()
-                .contains(expected.to_lowercase().as_str()),
-            Some(AccessibleNameMatch::Exact(expected)) => name == expected,
+        let name_matches = accessible_text_matches(self.name.as_ref(), accessibility.name);
+        let description_matches =
+            accessible_text_matches(self.description.as_deref(), accessibility.description);
+        let state = accessibility.role_state;
+        let values = state.values;
+        let filters = self.filters.states;
+        if !name_matches
+            || !description_matches
+            || filters
+                .checked
+                .is_some_and(|value| values.checked != Some(value))
+            || filters
+                .disabled
+                .is_some_and(|value| values.disabled != value)
+            || filters
+                .expanded
+                .is_some_and(|value| values.expanded != Some(value))
+            || self
+                .filters
+                .level
+                .is_some_and(|value| state.level != Some(value))
+            || filters
+                .pressed
+                .is_some_and(|value| values.pressed != Some(value))
+            || filters
+                .selected
+                .is_some_and(|value| values.selected != Some(value))
+        {
+            return Ok(false);
         }
+        if self.filters.include_hidden {
+            return Ok(true);
+        }
+        state.visible_to_accessibility
     }
 }
 
@@ -308,31 +536,29 @@ impl XPathLocator {
 }
 
 impl Locator {
-    pub(crate) fn matches(&self, candidate: LocatorCandidate<'_>) -> bool {
+    pub(crate) fn matches<'a>(&self, candidate: LocatorCandidate<'a>) -> Result<bool, &'a str> {
         let semantic = candidate.semantic;
         let source = candidate.source;
         match self {
-            Self::Role(locator) => semantic
-                .role
-                .is_some_and(|role| locator.matches(role, semantic.name)),
-            Self::Text(locator) => locator.matches(semantic.text),
-            Self::Label(locator) => semantic.label.is_some_and(|label| locator.matches(label)),
-            Self::Placeholder(locator) => semantic
+            Self::Role(locator) => locator.matches(semantic),
+            Self::Text(locator) => Ok(locator.matches(semantic.text)),
+            Self::Label(locator) => Ok(semantic.label.is_some_and(|label| locator.matches(label))),
+            Self::Placeholder(locator) => Ok(semantic
                 .placeholder
-                .is_some_and(|placeholder| locator.matches(placeholder)),
-            Self::Alt(locator) => source
+                .is_some_and(|placeholder| locator.matches(placeholder))),
+            Self::Alt(locator) => Ok(source
                 .attributes
                 .get("alt")
-                .is_some_and(|alt| locator.matches(alt)),
-            Self::Title(locator) => source
+                .is_some_and(|alt| locator.matches(alt))),
+            Self::Title(locator) => Ok(source
                 .attributes
                 .get("title")
-                .is_some_and(|title| locator.matches(title)),
-            Self::TestId(locator) => source
+                .is_some_and(|title| locator.matches(title))),
+            Self::TestId(locator) => Ok(source
                 .attributes
                 .get("data-testid")
-                .is_some_and(|test_id| locator.matches(test_id)),
-            Self::Css(_) | Self::XPath(_) => false,
+                .is_some_and(|test_id| locator.matches(test_id))),
+            Self::Css(_) | Self::XPath(_) => Ok(false),
         }
     }
 
@@ -448,16 +674,76 @@ impl LocatorMatch {
 impl std::fmt::Display for RoleLocator {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "role {:?}", self.role)?;
-        match &self.name {
-            Some(AccessibleNameMatch::Contains(name)) => {
-                write!(formatter, " with accessible name containing {name:?}")
-            }
-            Some(AccessibleNameMatch::Exact(name)) => {
-                write!(formatter, " with exact accessible name {name:?}")
-            }
-            None => Ok(()),
-        }
+        write_accessible_filters(formatter, self)?;
+        write_role_filters(formatter, &self.filters)
     }
+}
+
+fn write_accessible_filters(
+    formatter: &mut std::fmt::Formatter<'_>,
+    locator: &RoleLocator,
+) -> std::fmt::Result {
+    write_accessible_match(formatter, "accessible name", locator.name.as_ref())?;
+    write_accessible_match(
+        formatter,
+        "accessible description",
+        locator.description.as_deref(),
+    )
+}
+
+fn write_role_filters(
+    formatter: &mut std::fmt::Formatter<'_>,
+    filters: &RoleFilters,
+) -> std::fmt::Result {
+    let states = filters.states;
+    write_optional_bool(formatter, "checked", states.checked)?;
+    write_optional_bool(formatter, "disabled", states.disabled)?;
+    write_optional_bool(formatter, "expanded", states.expanded)?;
+    if filters.include_hidden {
+        formatter.write_str(" including hidden elements")?;
+    }
+    if let Some(level) = filters.level {
+        write!(formatter, " with level {level}")?;
+    }
+    write_optional_bool(formatter, "pressed", states.pressed)?;
+    write_optional_bool(formatter, "selected", states.selected)
+}
+
+fn write_accessible_match(
+    formatter: &mut std::fmt::Formatter<'_>,
+    kind: &str,
+    value: Option<&AccessibleNameMatch>,
+) -> std::fmt::Result {
+    match value {
+        Some(AccessibleNameMatch::Contains(value)) => {
+            write!(formatter, " with {kind} containing {value:?}")
+        }
+        Some(AccessibleNameMatch::Exact(value)) => {
+            write!(formatter, " with exact {kind} {value:?}")
+        }
+        None => Ok(()),
+    }
+}
+
+fn accessible_text_matches(expected: Option<&AccessibleNameMatch>, actual: &str) -> bool {
+    match expected {
+        None => true,
+        Some(AccessibleNameMatch::Contains(expected)) => actual
+            .to_lowercase()
+            .contains(expected.to_lowercase().as_str()),
+        Some(AccessibleNameMatch::Exact(expected)) => actual == expected,
+    }
+}
+
+fn write_optional_bool(
+    formatter: &mut std::fmt::Formatter<'_>,
+    name: &str,
+    value: Option<bool>,
+) -> std::fmt::Result {
+    if let Some(value) = value {
+        write!(formatter, " with {name} {value}")?;
+    }
+    Ok(())
 }
 
 impl std::fmt::Display for Locator {
@@ -482,6 +768,22 @@ impl std::fmt::Display for RoleLocatorError {
             Self::EmptyRole => formatter.write_str("role must not be empty"),
             Self::InvalidRole => {
                 formatter.write_str("role must use only ASCII letters, digits, or hyphens")
+            }
+            Self::InvalidLevel => formatter.write_str("role level must be greater than zero"),
+            Self::UnsupportedCheckedRole => {
+                formatter.write_str("checked filter is not supported for this role")
+            }
+            Self::UnsupportedExpandedRole => {
+                formatter.write_str("expanded filter is not supported for this role")
+            }
+            Self::UnsupportedLevelRole => {
+                formatter.write_str("level filter is not supported for this role")
+            }
+            Self::UnsupportedPressedRole => {
+                formatter.write_str("pressed filter is not supported for this role")
+            }
+            Self::UnsupportedSelectedRole => {
+                formatter.write_str("selected filter is not supported for this role")
             }
         }
     }
@@ -588,12 +890,43 @@ fn normalize_name(name: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AltLocator, CssLocator, CssLocatorError, LabelLocator, Locator, LocatorCandidate,
-        LocatorPosition, LocatorValueError, PlaceholderLocator, RoleLocator, RoleLocatorError,
+        AccessibilityLocatorCandidate, AltLocator, CssLocator, CssLocatorError, LabelLocator,
+        Locator, LocatorCandidate, LocatorPosition, LocatorValueError, PlaceholderLocator,
+        RoleLocator, RoleLocatorError, RoleStateCandidate, RoleStateValues,
         SemanticLocatorCandidate, SourceLocatorCandidate, TestIdLocator, TextLocator, TitleLocator,
         XPathLocator, XPathLocatorError,
     };
     use std::collections::BTreeMap;
+
+    fn semantic_candidate<'a>(
+        role: Option<&'a str>,
+        name: &'a str,
+        text: &'a str,
+        label: Option<&'a str>,
+        placeholder: Option<&'a str>,
+    ) -> SemanticLocatorCandidate<'a> {
+        SemanticLocatorCandidate {
+            accessibility: AccessibilityLocatorCandidate {
+                role,
+                name,
+                description: "",
+                role_state: RoleStateCandidate {
+                    values: RoleStateValues {
+                        checked: None,
+                        disabled: false,
+                        expanded: None,
+                        pressed: None,
+                        selected: None,
+                    },
+                    level: None,
+                    visible_to_accessibility: Ok(true),
+                },
+            },
+            text,
+            label,
+            placeholder,
+        }
+    }
 
     #[test]
     fn role_tokens_are_normalized_and_validated() {
@@ -618,13 +951,160 @@ mod tests {
             .unwrap()
             .with_exact_name("  Save\nChanges  ");
 
-        assert!(contains.matches("BUTTON", "Save Changes Now"));
+        assert!(
+            contains
+                .matches(semantic_candidate(
+                    Some("BUTTON"),
+                    "Save Changes Now",
+                    "",
+                    None,
+                    None,
+                ))
+                .unwrap()
+        );
         assert_eq!(contains.name(), Some("save changes"));
         assert!(!contains.exact());
-        assert!(exact.matches("button", "Save Changes"));
+        assert!(
+            exact
+                .matches(semantic_candidate(
+                    Some("button"),
+                    "Save Changes",
+                    "",
+                    None,
+                    None,
+                ))
+                .unwrap()
+        );
         assert_eq!(exact.name(), Some("Save Changes"));
-        assert!(!exact.matches("button", "save changes"));
+        assert!(
+            !exact
+                .matches(semantic_candidate(
+                    Some("button"),
+                    "save changes",
+                    "",
+                    None,
+                    None,
+                ))
+                .unwrap()
+        );
         assert!(exact.exact());
+    }
+
+    #[test]
+    fn role_state_filters_match_typed_accessibility_evidence() {
+        let locator = RoleLocator::new("checkbox")
+            .unwrap()
+            .with_exact_name("Terms")
+            .with_checked(true)
+            .unwrap()
+            .with_disabled(false)
+            .with_expanded(false)
+            .unwrap();
+        let mut candidate = semantic_candidate(Some("checkbox"), "Terms", "", None, None);
+        candidate.accessibility.role_state.values.checked = Some(true);
+        candidate.accessibility.role_state.values.expanded = Some(false);
+
+        assert!(locator.matches(candidate).unwrap());
+        candidate.accessibility.role_state.values.checked = Some(false);
+        assert!(!locator.matches(candidate).unwrap());
+        assert_eq!(locator.checked(), Some(true));
+        assert_eq!(locator.disabled(), Some(false));
+        assert_eq!(locator.expanded(), Some(false));
+        assert_eq!(
+            RoleLocator::new("heading")
+                .unwrap()
+                .with_level(2)
+                .unwrap()
+                .level(),
+            Some(2)
+        );
+        assert_eq!(
+            RoleLocator::new("button")
+                .unwrap()
+                .with_pressed(false)
+                .unwrap()
+                .pressed(),
+            Some(false)
+        );
+        assert_eq!(
+            RoleLocator::new("tab")
+                .unwrap()
+                .with_selected(true)
+                .unwrap()
+                .selected(),
+            Some(true)
+        );
+        assert_eq!(
+            RoleLocator::new("heading").unwrap().with_level(0),
+            Err(RoleLocatorError::InvalidLevel)
+        );
+        assert_eq!(
+            RoleLocator::new("heading").unwrap().with_checked(false),
+            Err(RoleLocatorError::UnsupportedCheckedRole)
+        );
+        assert_eq!(
+            RoleLocator::new("heading").unwrap().with_expanded(false),
+            Err(RoleLocatorError::UnsupportedExpandedRole)
+        );
+        assert_eq!(
+            RoleLocator::new("button").unwrap().with_level(1),
+            Err(RoleLocatorError::UnsupportedLevelRole)
+        );
+        assert_eq!(
+            RoleLocator::new("tab").unwrap().with_pressed(false),
+            Err(RoleLocatorError::UnsupportedPressedRole)
+        );
+        assert_eq!(
+            RoleLocator::new("button").unwrap().with_selected(false),
+            Err(RoleLocatorError::UnsupportedSelectedRole)
+        );
+    }
+
+    #[test]
+    fn role_descriptions_follow_name_matching_rules() {
+        let mut candidate = semantic_candidate(Some("button"), "Save", "", None, None);
+        candidate.accessibility.description = "Opens account settings";
+
+        let contains = RoleLocator::new("button")
+            .unwrap()
+            .with_description("ACCOUNT SETTINGS");
+        assert!(contains.matches(candidate).unwrap());
+        assert_eq!(contains.description(), Some("ACCOUNT SETTINGS"));
+        assert!(!contains.description_exact());
+
+        let exact = RoleLocator::new("button")
+            .unwrap()
+            .with_exact_description("Opens account settings");
+        assert!(exact.matches(candidate).unwrap());
+        assert!(exact.description_exact());
+
+        let wrong_case = RoleLocator::new("button")
+            .unwrap()
+            .with_exact_description("opens account settings");
+        assert!(!wrong_case.matches(candidate).unwrap());
+    }
+
+    #[test]
+    fn role_locators_exclude_hidden_candidates_by_default() {
+        let locator = RoleLocator::new("button").unwrap();
+        let mut candidate = semantic_candidate(Some("button"), "Hidden", "", None, None);
+        candidate.accessibility.role_state.visible_to_accessibility = Ok(false);
+
+        assert!(!locator.matches(candidate).unwrap());
+        assert!(
+            locator
+                .clone()
+                .with_include_hidden(true)
+                .matches(candidate)
+                .unwrap()
+        );
+        assert!(locator.clone().with_include_hidden(true).includes_hidden());
+        candidate.accessibility.role_state.visible_to_accessibility =
+            Err("stylesheet visibility is unknown");
+        assert_eq!(
+            locator.matches(candidate),
+            Err("stylesheet visibility is unknown")
+        );
     }
 
     #[test]
@@ -654,49 +1134,31 @@ mod tests {
             attributes: &attributes,
         };
 
-        assert!(role.matches(LocatorCandidate {
-            semantic: SemanticLocatorCandidate {
-                role: Some("button"),
-                name: "Save",
-                text: "Draft",
-                label: None,
-                placeholder: None,
-            },
-            source,
-        }));
-        assert!(text.matches(LocatorCandidate {
-            semantic: SemanticLocatorCandidate {
-                role: None,
-                name: "",
-                text: "Draft",
-                label: None,
-                placeholder: None,
-            },
-            source,
-        }));
+        assert!(
+            role.matches(LocatorCandidate {
+                semantic: semantic_candidate(Some("button"), "Save", "Draft", None, None),
+                source,
+            })
+            .unwrap()
+        );
+        assert!(
+            text.matches(LocatorCandidate {
+                semantic: semantic_candidate(None, "", "Draft", None, None),
+                source,
+            })
+            .unwrap()
+        );
         let labeled = LocatorCandidate {
-            semantic: SemanticLocatorCandidate {
-                role: Some("textbox"),
-                name: "Email",
-                text: "",
-                label: Some("Email"),
-                placeholder: None,
-            },
+            semantic: semantic_candidate(Some("textbox"), "Email", "", Some("Email"), None),
             source,
         };
-        assert!(label.matches(labeled));
+        assert!(label.matches(labeled).unwrap());
         let placeholder_candidate = LocatorCandidate {
-            semantic: SemanticLocatorCandidate {
-                role: Some("searchbox"),
-                name: "",
-                text: "",
-                label: None,
-                placeholder: Some("Search docs"),
-            },
+            semantic: semantic_candidate(Some("searchbox"), "", "", None, Some("Search docs")),
             source,
         };
-        assert!(placeholder.matches(placeholder_candidate));
-        assert!(!label.matches(placeholder_candidate));
+        assert!(placeholder.matches(placeholder_candidate).unwrap());
+        assert!(!label.matches(placeholder_candidate).unwrap());
     }
 
     #[test]
@@ -710,25 +1172,25 @@ mod tests {
             ("data-testid".into(), "SAVE-card".into()),
         ]);
         let candidate = LocatorCandidate {
-            semantic: SemanticLocatorCandidate {
-                role: None,
-                name: "",
-                text: "",
-                label: None,
-                placeholder: None,
-            },
+            semantic: semantic_candidate(None, "", "", None, None),
             source: SourceLocatorCandidate {
                 attributes: &attributes,
             },
         };
 
-        assert!(alt.matches(candidate));
-        assert!(title.matches(candidate));
+        assert!(alt.matches(candidate).unwrap());
+        assert!(title.matches(candidate).unwrap());
         assert!(
-            !Locator::from(TitleLocator::new("issue count").unwrap().exact()).matches(candidate)
+            !Locator::from(TitleLocator::new("issue count").unwrap().exact())
+                .matches(candidate)
+                .unwrap()
         );
-        assert!(test_id.matches(candidate));
-        assert!(!Locator::from(TestIdLocator::new("save-card").unwrap()).matches(candidate));
+        assert!(test_id.matches(candidate).unwrap());
+        assert!(
+            !Locator::from(TestIdLocator::new("save-card").unwrap())
+                .matches(candidate)
+                .unwrap()
+        );
     }
 
     #[test]

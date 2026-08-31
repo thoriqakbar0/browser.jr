@@ -5,6 +5,7 @@ use crate::Locator;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CaptureTarget {
     Viewport,
+    FullPage,
     Element(Locator),
     Rect(CaptureRect),
 }
@@ -105,6 +106,9 @@ pub struct RasterImage {
     rgba: Vec<u8>,
 }
 
+pub const MAX_SCREENSHOT_PIXELS: u64 = 16_777_216;
+pub const MAX_SCREENSHOT_PAINT_PIXELS: u64 = 67_108_864;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RasterImageError {
     EmptyWidth,
@@ -157,6 +161,17 @@ pub enum RasterProcessError {
     Render { reason: String },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PngEncodingError {
+    reason: String,
+}
+
+impl PngEncodingError {
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+}
+
 pub trait RasterProcess {
     fn render(
         &mut self,
@@ -170,12 +185,177 @@ pub trait RasterProcessFactory {
     fn start(&mut self) -> Result<Self::Process, RasterProcessError>;
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SoftwareRasterProcessFactory;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SoftwareRasterProcess;
+
+impl RasterProcessFactory for SoftwareRasterProcessFactory {
+    type Process = SoftwareRasterProcess;
+
+    fn start(&mut self) -> Result<Self::Process, RasterProcessError> {
+        Ok(SoftwareRasterProcess)
+    }
+}
+
+impl RasterProcess for SoftwareRasterProcess {
+    fn render(
+        &mut self,
+        screenshot: &PreparedScreenshot,
+    ) -> Result<RasterImage, RasterProcessError> {
+        rasterize_scene(&screenshot.scene)
+    }
+}
+
+#[derive(Debug)]
 pub struct OnDemandRasterProcess<F>
 where
     F: RasterProcessFactory,
 {
     factory: F,
     process: Option<F::Process>,
+}
+
+pub fn encode_png(image: &RasterImage) -> Result<Vec<u8>, PngEncodingError> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, image.width(), image.height());
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(png_error)?;
+        writer.write_image_data(image.rgba()).map_err(png_error)?;
+        writer.finish().map_err(png_error)?;
+    }
+    Ok(bytes)
+}
+
+fn png_error(error: png::EncodingError) -> PngEncodingError {
+    PngEncodingError {
+        reason: error.to_string(),
+    }
+}
+
+fn rasterize_scene(scene: &PaintScene) -> Result<RasterImage, RasterProcessError> {
+    let width = u32::try_from(scene.capture_bounds.width())
+        .map_err(|_| render_error("capture width exceeds the software rasterizer limit"))?;
+    let height = u32::try_from(scene.capture_bounds.height())
+        .map_err(|_| render_error("capture height exceeds the software rasterizer limit"))?;
+    let pixel_count = u64::from(width)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| render_error("capture pixel count overflows"))?;
+    if pixel_count > MAX_SCREENSHOT_PIXELS {
+        return Err(render_error(format!(
+            "capture has {pixel_count} pixels; the limit is {MAX_SCREENSHOT_PIXELS}"
+        )));
+    }
+    let mut paint_pixels = 0_u64;
+    for command in &scene.commands {
+        let PaintCommand::FillRect { bounds, .. } = command;
+        paint_pixels = paint_pixels
+            .checked_add(clipped_pixel_count(scene.capture_bounds, *bounds))
+            .ok_or_else(|| render_error("capture paint work overflows"))?;
+        if paint_pixels > MAX_SCREENSHOT_PAINT_PIXELS {
+            return Err(render_error(format!(
+                "capture paints {paint_pixels} clipped pixels; the limit is {MAX_SCREENSHOT_PAINT_PIXELS}"
+            )));
+        }
+    }
+    let byte_count = usize::try_from(
+        pixel_count
+            .checked_mul(4)
+            .ok_or_else(|| render_error("capture byte length overflows"))?,
+    )
+    .map_err(|_| render_error("capture byte length exceeds platform limits"))?;
+    let mut rgba = vec![0; byte_count];
+    for command in &scene.commands {
+        match command {
+            PaintCommand::FillRect { bounds, color, .. } => {
+                rasterize_fill_rect(&mut rgba, width, scene.capture_bounds, *bounds, *color);
+            }
+        }
+    }
+    RasterImage::new(width, height, rgba).map_err(|error| RasterProcessError::Protocol {
+        reason: error.to_string(),
+    })
+}
+
+fn clipped_pixel_count(capture: CaptureRect, bounds: CaptureRect) -> u64 {
+    let left = bounds.x().max(capture.x());
+    let top = bounds.y().max(capture.y());
+    let right = bounds.right().min(capture.right());
+    let bottom = bounds.bottom().min(capture.bottom());
+    if left >= right || top >= bottom {
+        return 0;
+    }
+    let width = u64::try_from(i128::from(right) - i128::from(left))
+        .expect("clipped width is non-negative and bounded by a validated capture");
+    let height = u64::try_from(i128::from(bottom) - i128::from(top))
+        .expect("clipped height is non-negative and bounded by a validated capture");
+    width
+        .checked_mul(height)
+        .expect("clipped area cannot exceed the validated capture area")
+}
+
+fn rasterize_fill_rect(
+    rgba: &mut [u8],
+    image_width: u32,
+    capture: CaptureRect,
+    bounds: CaptureRect,
+    color: Rgba8,
+) {
+    let left = bounds.x().max(capture.x());
+    let top = bounds.y().max(capture.y());
+    let right = bounds.right().min(capture.right());
+    let bottom = bounds.bottom().min(capture.bottom());
+    if left >= right || top >= bottom || color.alpha == 0 {
+        return;
+    }
+    let local_left = usize::try_from(i128::from(left) - i128::from(capture.x()))
+        .expect("clipped left edge is inside the capture");
+    let local_top = usize::try_from(i128::from(top) - i128::from(capture.y()))
+        .expect("clipped top edge is inside the capture");
+    let local_right = usize::try_from(i128::from(right) - i128::from(capture.x()))
+        .expect("clipped right edge is inside the capture");
+    let local_bottom = usize::try_from(i128::from(bottom) - i128::from(capture.y()))
+        .expect("clipped bottom edge is inside the capture");
+    let row_width = usize::try_from(image_width).expect("u32 image width fits usize");
+    for y in local_top..local_bottom {
+        for x in local_left..local_right {
+            let index = (y * row_width + x) * 4;
+            blend_source_over(&mut rgba[index..index + 4], color);
+        }
+    }
+}
+
+fn blend_source_over(destination: &mut [u8], source: Rgba8) {
+    let source_alpha = u32::from(source.alpha);
+    if source_alpha == 255 {
+        destination.copy_from_slice(&[source.red, source.green, source.blue, source.alpha]);
+        return;
+    }
+    let destination_alpha = u32::from(destination[3]);
+    let inverse = 255 - source_alpha;
+    let output_alpha = source_alpha + (destination_alpha * inverse + 127) / 255;
+    if output_alpha == 0 {
+        destination.fill(0);
+        return;
+    }
+    for (channel, source_channel) in [source.red, source.green, source.blue]
+        .into_iter()
+        .enumerate()
+    {
+        let premultiplied = u32::from(source_channel) * source_alpha
+            + (u32::from(destination[channel]) * destination_alpha * inverse + 127) / 255;
+        destination[channel] = ((premultiplied + output_alpha / 2) / output_alpha) as u8;
+    }
+    destination[3] = output_alpha as u8;
+}
+
+fn render_error(reason: impl Into<String>) -> RasterProcessError {
+    RasterProcessError::Render {
+        reason: reason.into(),
+    }
 }
 
 impl<F> OnDemandRasterProcess<F>
@@ -254,12 +434,20 @@ impl std::fmt::Display for RasterProcessError {
 
 impl std::error::Error for RasterProcessError {}
 
+impl std::fmt::Display for PngEncodingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "PNG encoding failed: {}", self.reason)
+    }
+}
+
+impl std::error::Error for PngEncodingError {}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CaptureRect, CaptureRectError, CaptureTarget, OnDemandRasterProcess, PaintScene,
-        PreparedScreenshot, RasterImage, RasterImageError, RasterProcess, RasterProcessError,
-        RasterProcessFactory,
+        CaptureRect, CaptureRectError, CaptureTarget, OnDemandRasterProcess, PaintCommand,
+        PaintScene, PreparedScreenshot, RasterImage, RasterImageError, RasterProcess,
+        RasterProcessError, RasterProcessFactory, Rgba8, SoftwareRasterProcessFactory, encode_png,
     };
     use std::cell::Cell;
     use std::rc::Rc;
@@ -388,5 +576,97 @@ mod tests {
         assert_eq!(image.width(), 2);
         assert_eq!(image.height(), 1);
         assert_eq!(image.rgba().len(), 8);
+    }
+
+    #[test]
+    fn software_rasterizer_composites_and_encodes_rgba_pixels() {
+        let capture = CaptureRect::new(0, 0, 2, 1).unwrap();
+        let left = CaptureRect::new(0, 0, 1, 1).unwrap();
+        let screenshot = PreparedScreenshot {
+            target: CaptureTarget::Viewport,
+            scene: PaintScene {
+                capture_bounds: capture,
+                commands: vec![
+                    PaintCommand::FillRect {
+                        source: "canvas".into(),
+                        bounds: capture,
+                        color: Rgba8 {
+                            red: 0,
+                            green: 0,
+                            blue: 255,
+                            alpha: 255,
+                        },
+                    },
+                    PaintCommand::FillRect {
+                        source: "overlay".into(),
+                        bounds: left,
+                        color: Rgba8 {
+                            red: 255,
+                            green: 0,
+                            blue: 0,
+                            alpha: 128,
+                        },
+                    },
+                ],
+            },
+        };
+        let mut raster = OnDemandRasterProcess::new(SoftwareRasterProcessFactory);
+
+        let image = raster.render(&screenshot).unwrap();
+        let png = encode_png(&image).unwrap();
+
+        assert_eq!(image.rgba(), &[128, 0, 127, 255, 0, 0, 255, 255]);
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[test]
+    fn software_rasterizer_rejects_oversized_captures_before_allocation() {
+        let capture = CaptureRect::new(0, 0, 4097, 4097).unwrap();
+        let screenshot = PreparedScreenshot {
+            target: CaptureTarget::FullPage,
+            scene: PaintScene {
+                capture_bounds: capture,
+                commands: vec![],
+            },
+        };
+        let mut raster = OnDemandRasterProcess::new(SoftwareRasterProcessFactory);
+
+        let result = raster.render(&screenshot);
+
+        assert!(matches!(
+            result,
+            Err(RasterProcessError::Render { reason }) if reason.contains("the limit is")
+        ));
+    }
+
+    #[test]
+    fn software_rasterizer_rejects_excessive_overdraw_before_allocation() {
+        let capture = CaptureRect::new(0, 0, 4096, 4096).unwrap();
+        let screenshot = PreparedScreenshot {
+            target: CaptureTarget::FullPage,
+            scene: PaintScene {
+                capture_bounds: capture,
+                commands: (0..5)
+                    .map(|index| PaintCommand::FillRect {
+                        source: format!("layer-{index}"),
+                        bounds: capture,
+                        color: Rgba8 {
+                            red: 0,
+                            green: 0,
+                            blue: 0,
+                            alpha: 255,
+                        },
+                    })
+                    .collect(),
+            },
+        };
+        let mut raster = OnDemandRasterProcess::new(SoftwareRasterProcessFactory);
+
+        let result = raster.render(&screenshot);
+
+        assert!(matches!(
+            result,
+            Err(RasterProcessError::Render { reason }) if reason.contains("clipped pixels")
+        ));
     }
 }

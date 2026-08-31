@@ -14,47 +14,81 @@ Start a local web server, then run:
 ./browser.jr lint http://localhost:3000
 ```
 
-Inspect interactive elements:
+Inspect the supported accessibility tree:
+
+```sh
+./browser.jr snapshot http://localhost:3000
+```
+
+Project the tree to agent-oriented reference targets:
 
 ```sh
 ./browser.jr snapshot http://localhost:3000 --interactive
 ```
 
-Pipe one interactive snapshot as JSON:
+Pipe one full snapshot as JSON:
 
 ```sh
-./browser.jr --json snapshot http://localhost:3000 --interactive
+./browser.jr --json snapshot http://localhost:3000
 ```
 
 Keep one page alive across commands:
 
 ```sh
-printf 'open http://localhost:3000\nsnapshot --interactive\nget title\nexit\n' \
+printf 'open http://localhost:3000\nsnapshot\nget title\nexit\n' \
+  | ./browser.jr session
+```
+
+Stream identified JSON results for the same commands:
+
+```sh
+printf 'open http://localhost:3000\nget title\nexit\n' \
+  | ./browser.jr --json session
+```
+
+Capture its current viewport as a PNG:
+
+```sh
+printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
   | ./browser.jr session
 ```
 
 ## What works
 
 - bounded loopback HTTP loading
-- normalized static HTML ancestry
-- a small inline and embedded CSS cascade with horizontal layout
-- role, text, label, attribute, CSS, and XPath locators
+- static HTML parsing with normalized ancestry
+- a small inline and embedded CSS cascade with horizontal and static block-flow layout subsets
+- role locators with current HTML roles, non-presentational descendant image `alt` text, description, state, level, and accessibility-hidden filters
+- text, label, attribute, CSS, and XPath locators
 - direct CSS and XPath targets for implemented session actions, reads, and counts
-- text input, checkbox, native single-select, multiple-select, and same-context link actions
-- URL, title, HTML, text, value, attribute, enabled, and visibility reads
-- whole-page and CSS-scoped interactive snapshots with a tested accessibility subset
+- text fill, append, focused keyboard insertion, held-key modifiers, phase-correct native `Space`, sequential focus, bounded caret editing, native activation, link navigation, and visible-target hover state
+- a data-minimized native event transcript for supported fill, focused text input, press, held-key phases, select, click, check, and uncheck actions
+- bounded same-context native GET form submission through submitters and implicit text-control `Enter`
+- native checkbox and radio checked-state reads, writes, snapshots, and exclusive radio groups
+- back and forward navigation through bounded same-context history
+- URL, title, HTML, text, value, attribute, checked, editable, enabled, focused, hovered, and visibility reads
+- complete viewport-relative boxes for supported fixed and static block geometry
+- bounded page scrolling, explicit scroll-into-view, and supported-box auto-scroll for local click, hover, check, and uncheck
+- supported static stability checks for click, hover, and changed checked-state actions
+- runtime viewport sizing with state-preserving static page reflow
+- normalized whole-page static text through package, one-shot CLI, and session mode
+- whole-page and CSS-scoped accessibility-tree snapshots with ordered text, native list markers, compact pruning, depth limits, and resolved link URLs
+- agent-oriented snapshots with controls, links, headings, navigation landmarks, nested references, and document-wide scoped labels
 - one-shot snapshot JSON with structured success and failure envelopes
+- line-oriented session JSON with lifecycle events and command sequence identifiers
 - two deterministic layout checks
 - transactional incremental layout for `x` and `width`
-- validated screenshot regions, paint commands, RGBA output, and lazy raster-process activation
-- recorded native `click`, `input`, and `change` events
+- viewport, full-page, and strict-locator screenshots through session mode
+- bounded solid-box paint lists, source-over RGBA compositing, and PNG output
+- lazy software-rasterizer activation with image and clipped-paint work limits
 
 ## What does not work
 
 - JavaScript
-- JavaScript event listeners and a complete DOM event loop
+- DOM event delivery to page scripts, plus pointer, focus, and complete keyboard event coverage
 - a complete DOM, CSS cascade, or layout engine
-- page paint-list construction, screenshot output, or compositing
+- text, image, native-control, stylesheet, clip, effect, or complete browser paint
+- a separate screenshot helper process or complete browser compositor
 - Playwright or `agent-browser` protocol compatibility
 - remote websites or HTTPS
 - a browser window
@@ -115,4 +149,101 @@ These numbers measure browser-control latency, not rendering-engine speed or bro
 - [`bug-triage.md`](bug-triage.md) records confirmed conflicts.
 - [`benchmarks/README.md`](benchmarks/README.md) defines cross-engine correctness and latency checks.
 
-Evidence date: 31 August 2026.
+Evidence date: 1 September 2026.
+
+## Coverage
+
+`drafted` means code or a product decision supports the document. `verified` requires a recorded runtime check.
+
+| Document | Status |
+| --- | --- |
+| `architecture.md` | drafted |
+| `glossary.md` | drafted |
+| `bug-triage.md` | drafted |
+| `verification/README.md` | drafted |
+| `verification/design-lint.md` | drafted |
+| `verification/capture-snapshot.md` | drafted |
+| `verification/capture-screenshot.md` | drafted |
+| `verification/query-elements.md` | drafted |
+| `verification/navigation.md` | drafted |
+| `verification/history-navigation.md` | drafted |
+| `verification/ai-session.md` | drafted |
+| `verification/fill-text.md` | drafted |
+| `verification/type-text.md` | drafted |
+| `verification/focus-element.md` | drafted |
+| `verification/hover-element.md` | drafted |
+| `verification/click-element.md` | drafted |
+| `verification/press-key.md` | drafted |
+| `verification/submit-form.md` | drafted |
+| `verification/read-value.md` | drafted |
+| `verification/select-option.md` | drafted |
+| `verification/check-state.md` | drafted |
+| `verification/read-text.md` | drafted |
+| `verification/read-page.md` | drafted |
+| `verification/read-attribute.md` | drafted |
+| `verification/read-html.md` | drafted |
+| `verification/read-enabled.md` | drafted |
+| `verification/read-editable.md` | drafted |
+| `verification/read-focused.md` | drafted |
+| `verification/read-hovered.md` | drafted |
+| `verification/read-visible.md` | drafted |
+| `verification/inspect-layout.md` | drafted |
+| `verification/scroll-page.md` | drafted |
+| `verification/set-viewport.md` | drafted |
+| `verification/reload-page.md` | drafted |
+| `verification/` remaining checklists | not started |
+| `foundations/evaluation.md` | not started |
+| `foundations/session.md` | not started |
+| `foundations/page-and-document.md` | not started |
+| `foundations/snapshot.md` | not started |
+| `foundations/user-agent-profile.md` | not started |
+| `foundations/check.md` | not started |
+| `cli/help.md` | drafted |
+| `repl/simple-expression.md` | not started |
+| `repl/help-and-discovery.md` | not started |
+| `repl/output.md` | not started |
+| `loading/open-page.md` | drafted |
+| `loading/navigation.md` | drafted |
+| `loading/history-navigation.md` | drafted |
+| `loading/reload-page.md` | drafted |
+| `loading/network-control.md` | not started |
+| `interaction/fill-text.md` | drafted |
+| `interaction/type-text.md` | drafted |
+| `interaction/focus-element.md` | drafted |
+| `interaction/hover-element.md` | drafted |
+| `interaction/scroll-page.md` | drafted |
+| `interaction/set-viewport.md` | drafted |
+| `interaction/click-element.md` | drafted |
+| `interaction/press-key.md` | drafted |
+| `interaction/submit-form.md` | drafted |
+| `interaction/select-option.md` | drafted |
+| `interaction/set-checked.md` | drafted |
+| `inspection/query-elements.md` | drafted |
+| `inspection/read-value.md` | drafted |
+| `inspection/read-checked.md` | drafted |
+| `inspection/read-text.md` | drafted |
+| `inspection/read-page.md` | drafted |
+| `inspection/read-attribute.md` | drafted |
+| `inspection/read-html.md` | drafted |
+| `inspection/read-enabled.md` | drafted |
+| `inspection/read-editable.md` | drafted |
+| `inspection/read-focused.md` | drafted |
+| `inspection/read-hovered.md` | drafted |
+| `inspection/read-visible.md` | drafted |
+| `inspection/inspect-layout.md` | drafted |
+| `inspection/inspect-grid.md` | not started |
+| `inspection/compare-user-agents.md` | not started |
+| `inspection/capture-snapshot.md` | drafted |
+| `inspection/capture-screenshot.md` | drafted |
+| `verification-features/design-lint.md` | drafted |
+| `verification-features/evaluate-check.md` | not started |
+| `verification-features/diagnostics.md` | not started |
+| `verification-features/batch-checks.md` | not started |
+| `automation/package-session.md` | not started |
+| `automation/ai-session.md` | drafted |
+| `automation/reproducible-script.md` | not started |
+| `cross-cutting/determinism.md` | not started |
+| `cross-cutting/resource-limits.md` | not started |
+| `cross-cutting/isolation.md` | not started |
+| `cross-cutting/compatibility.md` | not started |
+| `cross-cutting/accessibility-inspection.md` | not started |
