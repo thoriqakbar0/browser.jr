@@ -12,7 +12,7 @@ Treat unimplemented intent as decided behavior, not runtime evidence.
 - Each feature document owns its observable behavior.
 - `glossary.md` owns shared terms.
 - `architecture.md` owns internal design and must not redefine user-visible behavior.
-- `inspection/query-elements.md` owns locator syntax, matching, resolution, and failure behavior.
+- `inspection/query-elements.md` owns locator types, syntax, matching, selection, resolution, actions, and failure behavior.
 - `verification/` records runtime proof and must not define desired behavior.
 - `bug-triage.md` records confirmed conflicts between intent and evidence.
 

@@ -6,7 +6,7 @@ Package callers submit `FillElement` with a current interactive reference and re
 
 Session-mode callers send `fill <ref> <text>` after an interactive snapshot in the same process.
 
-[Role locator actions](../inspection/query-elements.md) define the snapshot-free fill path.
+[Locator actions](../inspection/query-elements.md) define the snapshot-free fill path.
 
 Fill replaces the complete value. It does not imitate keyboard entry or dispatch browser events.
 

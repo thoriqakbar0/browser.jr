@@ -59,7 +59,7 @@ Interactive snapshot tests cover semantics, control state, references, empty pag
 
 Navigation tests cover relative links, fresh and stale references, unsupported clicks, and failed-navigation recovery. NAV-01 through NAV-06 have partial automated evidence from 2026-08-31.
 
-Session-mode tests cover persistent actions, observations, role actions, reload, metadata, stale labels, and recovery. AISESSION-01 through AISESSION-19 have partial evidence from 2026-08-31.
+Session-mode tests cover persistent actions, observations, locator actions, reload, metadata, stale labels, and recovery. AISESSION-01 through AISESSION-24 have partial evidence from 2026-08-31.
 
 Fill tests cover initial values, replacement, snapshot evidence, stale references, and session-mode text. FILL-01 through FILL-05 have partial automated evidence from 2026-08-31.
 
@@ -79,6 +79,6 @@ Visibility tests cover static boxes, hidden states, unsupported evidence, and re
 
 Reload tests cover replacement, stale references, failed-load recovery, and missing pages. RELOAD-01 through RELOAD-04 have partial automated evidence from 2026-08-31.
 
-Role-locator tests cover semantic matching, direct actions, actionability, strict resolution, navigation, and reference lifetimes. QUERY-01 through QUERY-17 have partial automated evidence from 2026-08-31.
+Locator tests cover semantic, attribute, and positioned compound CSS matching. They also cover direct actions, strict resolution, document order, navigation, and reference lifetimes. QUERY-01 through QUERY-29 have partial automated evidence from 2026-08-31.
 
 TTY conditions, interactive cancellation, and broader rendering remain unverified.

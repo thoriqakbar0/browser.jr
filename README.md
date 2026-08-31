@@ -16,11 +16,19 @@ Package layout requests can apply `x` and `width` changes as one transactional b
 
 `snapshot <url> --interactive` reports a stated native HTML and ARIA role subset. It assigns ordered references for agent use.
 
-Package and session callers can resolve one supported semantic role locator without an earlier snapshot. The current subset includes interactive controls, headings, lists, landmarks, and common document structure. Resolution supports optional accessible-name matching and rejects ambiguous targets.
+Package and session callers can resolve role, text, label, placeholder, alt, title, and test ID locators without an earlier snapshot. Non-positioned resolution normalizes user-facing text and rejects ambiguous targets.
 
-Role resolution returns the semantic identifier, role, accessible name, and normalized descendant text. It does not capture a snapshot or change interactive references.
+Role locators cover interactive controls, headings, lists, landmarks, and common document structure. Label locators use associated and ARIA labels.
 
-Session and package callers can compose role locators with click, fill, check, uncheck, hover, and text operations. Role commands default to click.
+Text locators inspect parsed content and submit-button values. Matching nested text selects the matching descendant instead of its matching ancestor.
+
+Test ID locators use exact `data-testid` values. Alt and title locators support default substring or exact text matching.
+
+First, last, and zero-based nth locators select document-order matches from a stated compound CSS subset.
+
+Locator results return the semantic identifier, optional role, accessible name, and normalized text. Resolution does not capture a snapshot or change interactive references.
+
+Session and package callers can compose every locator kind with click, fill, check, uncheck, hover, and text operations. Locator commands default to click.
 
 Direct fill and checked-state actions mutate supported controls without a snapshot. Direct link clicks navigate after supported visibility and enabled checks.
 
@@ -46,7 +54,7 @@ Package sessions can inspect supported static visibility. Missing style or box e
 
 Package sessions can reload the current URL. Success installs a fresh document and stale references.
 
-`session` reads page, role-locator, snapshot, link, text, select, checkbox, visibility, URL, and title commands from stdin. It preserves typed identity behind each `@eN` label.
+`session` reads page, locator, snapshot, link, text, select, checkbox, visibility, URL, and title commands from stdin. It preserves typed identity behind each `@eN` label.
 
 Grid inspection, user-agent comparison, watch mode, JavaScript execution, machine-readable output, and the REPL remain unimplemented. Numeric budgets remain open.
 
@@ -88,6 +96,18 @@ Act through the same current-document locator:
 
 ```sh
 printf 'open http://localhost:3000\nfind role textbox fill hello --name Email\nfind role checkbox check --name Terms\nexit\n' | ./browser.jr session
+```
+
+Use user-facing labels, placeholders, or visible text:
+
+```sh
+printf 'open http://localhost:3000\nfind label "Email address" fill hello --exact\nfind placeholder Search fill query\nfind text "Save draft" text --exact\nexit\n' | ./browser.jr session
+```
+
+Use attribute contracts or an explicit document-order position:
+
+```sh
+printf 'open http://localhost:3000\nfind testid save-button text\nfind alt "Product image" text --exact\nfind nth 1 .card text\nexit\n' | ./browser.jr session
 ```
 
 The element argument is a semantic element identifier. An HTML `id` supplies that identifier when present.
@@ -250,7 +270,8 @@ src/
   page/visibility.rs                   supported static visibility evidence
   session.rs                           typed page, action, snapshot, and rule requests
   layout.rs                            field program, clean layout, and transactional invalidation
-  locator.rs                           typed role and accessible-name matching
+  locator.rs                           typed semantic, attribute, and positioned CSS matching
+  locator/css.rs                       validated compound CSS selector subset
   non_empty.rs                         non-empty evidence and result collections
   snapshot.rs                          immutable layout and interactive evidence
   rules.rs                             built-in overflow and project width evaluation
@@ -263,7 +284,7 @@ verification/
   README.md                            hand-verification protocol
   design-lint.md                       checks for the primary lint workflow
   capture-snapshot.md                  checks for interactive semantic snapshots
-  query-elements.md                    checks for semantic role locator resolution
+  query-elements.md                    checks for semantic, attribute, and positioned CSS locators
   navigation.md                        checks for package link navigation
   ai-session.md                        checks for persistent CLI action state
   fill-text.md                         checks for package and CLI fill behavior

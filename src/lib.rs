@@ -12,18 +12,25 @@ mod snapshot;
 pub use cli::{ExitStatus, run_cli, run_cli_with_input};
 pub use layout::{ElementInput, LayoutError, LayoutInput, LayoutMutation, SemanticElementId};
 pub use loading::LoadError;
-pub use locator::{RoleLocator, RoleLocatorError, RoleMatch};
+pub use locator::{
+    AltLocator, CssLocator, CssLocatorError, LabelLocator, Locator, LocatorMatch, LocatorPosition,
+    LocatorValueError, PlaceholderLocator, RoleLocator, RoleLocatorError, RoleMatch, TestIdLocator,
+    TextLocator, TitleLocator,
+};
 pub use non_empty::NonEmpty;
 pub use rules::{Comparison, Finding, RuleConstraint, RuleResult, WidthFinding};
 pub use session::{
     ActionabilityCheck, ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot,
-    CheckElementWidth, ClickByRole, ClickByRoleResult, ClickElement, ClickResult, ElementAttribute,
-    ElementChecked, ElementEnabled, ElementText, ElementValue, ElementVisible, FillByRole,
-    FillByRoleResult, FillElement, FillResult, FindByRole, GetElementAttribute, GetElementChecked,
+    CheckElementWidth, ClickByLocator, ClickByLocatorResult, ClickByRole, ClickByRoleResult,
+    ClickElement, ClickResult, ElementAttribute, ElementChecked, ElementEnabled, ElementText,
+    ElementValue, ElementVisible, FillByLocator, FillByLocatorResult, FillByRole, FillByRoleResult,
+    FillElement, FillResult, FindByLocator, FindByRole, GetElementAttribute, GetElementChecked,
     GetElementEnabled, GetElementText, GetElementValue, GetElementVisible, GetPageTitle,
-    GetPageUrl, HoverByRole, HoverByRoleResult, LintLayout, OpenPage, OpenedPage, PageTitle,
-    PageUrl, ReloadPage, RoleAction, SelectElement, SelectResult, Session, SessionError,
-    SessionRequest, SetCheckedByRole, SetCheckedByRoleResult, SetCheckedResult, SetElementChecked,
+    GetPageUrl, HoverByLocator, HoverByLocatorResult, HoverByRole, HoverByRoleResult, LintLayout,
+    LocatorAction, OpenPage, OpenedPage, PageTitle, PageUrl, ReloadPage, RoleAction, SelectElement,
+    SelectResult, Session, SessionError, SessionRequest, SetCheckedByLocator,
+    SetCheckedByLocatorResult, SetCheckedByRole, SetCheckedByRoleResult, SetCheckedResult,
+    SetElementChecked,
 };
 pub use snapshot::{
     EvidenceRef, InteractiveElement, InteractiveElementRef, InteractiveElementState,

@@ -2,11 +2,13 @@ use std::io::{BufRead, Write};
 
 use crate::cli::{ExitStatus, combine_status, write_line, write_session_error};
 use crate::{
-    CaptureInteractiveSnapshot, ClickByRole, ClickByRoleResult, ClickElement, ClickResult,
-    FillByRole, FillElement, FindByRole, GetElementAttribute, GetElementChecked, GetElementEnabled,
-    GetElementText, GetElementValue, GetElementVisible, GetPageTitle, GetPageUrl, HoverByRole,
-    HoverByRoleResult, InteractiveElementRef, InteractiveElementState, InteractiveSnapshot,
-    OpenPage, ReloadPage, RoleLocator, SelectElement, Session, SetCheckedByRole, SetElementChecked,
+    AltLocator, CaptureInteractiveSnapshot, ClickByLocator, ClickByLocatorResult, ClickElement,
+    ClickResult, CssLocator, FillByLocator, FillElement, FindByLocator, GetElementAttribute,
+    GetElementChecked, GetElementEnabled, GetElementText, GetElementValue, GetElementVisible,
+    GetPageTitle, GetPageUrl, HoverByLocator, HoverByLocatorResult, InteractiveElementRef,
+    InteractiveElementState, InteractiveSnapshot, LabelLocator, Locator, OpenPage,
+    PlaceholderLocator, ReloadPage, RoleLocator, SelectElement, Session, SetCheckedByLocator,
+    SetElementChecked, TestIdLocator, TextLocator, TitleLocator,
 };
 
 const SESSION_HELP: &str = "session commands:
@@ -14,6 +16,15 @@ const SESSION_HELP: &str = "session commands:
   reload
   snapshot --interactive
   find role <role> [click|fill <text>|check|uncheck|hover|text] [--name <accessible-name>] [--exact]
+  find text <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
+  find label <label> [click|fill <text>|check|uncheck|hover|text] [--exact]
+  find placeholder <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
+  find alt <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
+  find title <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
+  find testid <id> [click|fill <text>|check|uncheck|hover|text]
+  find first <selector> [click|fill <text>|check|uncheck|hover|text]
+  find last <selector> [click|fill <text>|check|uncheck|hover|text]
+  find nth <index> <selector> [click|fill <text>|check|uncheck|hover|text]
   click <ref>
   fill <ref> <text>
   select <ref> <value>
@@ -96,6 +107,12 @@ impl CliSession {
                 exact,
                 action,
             } => self.find_role(role, name, exact, action, output, errors),
+            ElementCommand::FindLocator {
+                kind,
+                value,
+                exact,
+                action,
+            } => self.find_typed_locator(kind, value, exact, action, output, errors),
             ElementCommand::Fill(reference, value) => self.fill(reference, value, output, errors),
             ElementCommand::Select(reference, value) => {
                 self.select(reference, value, output, errors)
@@ -186,15 +203,47 @@ impl CliSession {
                 ));
             }
         };
+        self.find_locator(locator.into(), action, output, errors)
+    }
+
+    fn find_typed_locator(
+        &mut self,
+        kind: FindLocatorKind,
+        value: &str,
+        exact: bool,
+        action: FindRoleAction<'_>,
+        output: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> SessionStep {
+        let locator = match build_locator(kind, value, exact) {
+            Ok(locator) => locator,
+            Err(error) => {
+                return SessionStep::Continue(write_line(
+                    errors,
+                    &format!("browser.jr: invalid locator: {error}"),
+                    ExitStatus::InvalidInput,
+                ));
+            }
+        };
+        self.find_locator(locator, action, output, errors)
+    }
+
+    fn find_locator(
+        &mut self,
+        locator: Locator,
+        action: FindRoleAction<'_>,
+        output: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> SessionStep {
         match action {
-            FindRoleAction::Click => match self.engine.execute(ClickByRole { locator }) {
-                Ok(ClickByRoleResult::Navigated { matched, page }) => {
+            FindRoleAction::Click => match self.engine.execute(ClickByLocator { locator }) {
+                Ok(ClickByLocatorResult::Navigated { matched, page }) => {
                     self.current_references.clear();
                     SessionStep::Continue(write_line(
                         output,
                         &format!(
                             "navigated role={:?} name={:?} element={:?} url={} elements={}",
-                            matched.role,
+                            matched.role.as_deref().unwrap_or(""),
                             matched.name,
                             matched.element,
                             page.url,
@@ -205,7 +254,7 @@ impl CliSession {
                 }
                 Err(error) => SessionStep::Continue(write_session_error(errors, error)),
             },
-            FindRoleAction::Fill(value) => match self.engine.execute(FillByRole {
+            FindRoleAction::Fill(value) => match self.engine.execute(FillByLocator {
                 locator,
                 value: value.into(),
             }) {
@@ -213,7 +262,7 @@ impl CliSession {
                     output,
                     &format!(
                         "filled role={:?} name={:?} element={:?} characters={}",
-                        result.matched.role,
+                        result.matched.role.as_deref().unwrap_or(""),
                         result.matched.name,
                         result.matched.element,
                         result.value.chars().count()
@@ -224,12 +273,15 @@ impl CliSession {
             },
             FindRoleAction::Check | FindRoleAction::Uncheck => {
                 let checked = action == FindRoleAction::Check;
-                match self.engine.execute(SetCheckedByRole { locator, checked }) {
+                match self
+                    .engine
+                    .execute(SetCheckedByLocator { locator, checked })
+                {
                     Ok(result) => SessionStep::Continue(write_line(
                         output,
                         &format!(
                             "checked role={:?} name={:?} element={:?} checked={}",
-                            result.matched.role,
+                            result.matched.role.as_deref().unwrap_or(""),
                             result.matched.name,
                             result.matched.element,
                             result.checked
@@ -239,18 +291,20 @@ impl CliSession {
                     Err(error) => SessionStep::Continue(write_session_error(errors, error)),
                 }
             }
-            FindRoleAction::Hover => match self.engine.execute(HoverByRole { locator }) {
-                Ok(HoverByRoleResult { matched }) => SessionStep::Continue(write_line(
+            FindRoleAction::Hover => match self.engine.execute(HoverByLocator { locator }) {
+                Ok(HoverByLocatorResult { matched }) => SessionStep::Continue(write_line(
                     output,
                     &format!(
                         "hovered role={:?} name={:?} element={:?}",
-                        matched.role, matched.name, matched.element
+                        matched.role.as_deref().unwrap_or(""),
+                        matched.name,
+                        matched.element
                     ),
                     ExitStatus::Success,
                 )),
                 Err(error) => SessionStep::Continue(write_session_error(errors, error)),
             },
-            FindRoleAction::Text => match self.engine.execute(FindByRole { locator }) {
+            FindRoleAction::Text => match self.engine.execute(FindByLocator { locator }) {
                 Ok(element) => {
                     SessionStep::Continue(write_line(output, &element.text, ExitStatus::Success))
                 }
@@ -530,6 +584,38 @@ impl CliSession {
     }
 }
 
+fn build_locator(kind: FindLocatorKind, value: &str, exact: bool) -> Result<Locator, String> {
+    match kind {
+        FindLocatorKind::Text => TextLocator::new(value)
+            .map(|locator| Locator::from(if exact { locator.exact() } else { locator }))
+            .map_err(|error| error.to_string()),
+        FindLocatorKind::Label => LabelLocator::new(value)
+            .map(|locator| Locator::from(if exact { locator.exact() } else { locator }))
+            .map_err(|error| error.to_string()),
+        FindLocatorKind::Placeholder => PlaceholderLocator::new(value)
+            .map(|locator| Locator::from(if exact { locator.exact() } else { locator }))
+            .map_err(|error| error.to_string()),
+        FindLocatorKind::Alt => AltLocator::new(value)
+            .map(|locator| Locator::from(if exact { locator.exact() } else { locator }))
+            .map_err(|error| error.to_string()),
+        FindLocatorKind::Title => TitleLocator::new(value)
+            .map(|locator| Locator::from(if exact { locator.exact() } else { locator }))
+            .map_err(|error| error.to_string()),
+        FindLocatorKind::TestId => TestIdLocator::new(value)
+            .map(Locator::from)
+            .map_err(|error| error.to_string()),
+        FindLocatorKind::First => CssLocator::first(value)
+            .map(Locator::from)
+            .map_err(|error| error.to_string()),
+        FindLocatorKind::Last => CssLocator::last(value)
+            .map(Locator::from)
+            .map_err(|error| error.to_string()),
+        FindLocatorKind::Nth(index) => CssLocator::nth(index, value)
+            .map(Locator::from)
+            .map_err(|error| error.to_string()),
+    }
+}
+
 fn unknown_reference(errors: &mut impl Write, reference_name: &str) -> SessionStep {
     SessionStep::Continue(write_line(
         errors,
@@ -561,6 +647,12 @@ enum ElementCommand<'a> {
         exact: bool,
         action: FindRoleAction<'a>,
     },
+    FindLocator {
+        kind: FindLocatorKind,
+        value: &'a str,
+        exact: bool,
+        action: FindRoleAction<'a>,
+    },
     Click(&'a str),
     Fill(&'a str, &'a str),
     Select(&'a str, &'a str),
@@ -572,6 +664,19 @@ enum ElementCommand<'a> {
     GetAttribute(&'a str, &'a str),
     GetText(&'a str),
     GetValue(&'a str),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FindLocatorKind {
+    Text,
+    Label,
+    Placeholder,
+    Alt,
+    Title,
+    TestId,
+    First,
+    Last,
+    Nth(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -709,10 +814,31 @@ fn parse_command(line: &str) -> Result<SessionCommand<'_>, &'static str> {
 }
 
 fn parse_find_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
-    const ERROR: &str = "browser.jr: find requires role <role> [click|fill <text>|check|uncheck|hover|text] [--name <accessible-name>] [--exact]";
+    const ERROR: &str = "browser.jr: find requires role|text|label|placeholder|alt|title|testid|first|last|nth and a valid value";
     let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
-    let rest = strip_option(rest, "role").ok_or(ERROR)?;
+    let (kind, rest) = split_first_token(rest).ok_or(ERROR)?;
     let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
+    if kind != "role" {
+        let kind = match kind {
+            "text" => FindLocatorKind::Text,
+            "label" => FindLocatorKind::Label,
+            "placeholder" => FindLocatorKind::Placeholder,
+            "alt" => FindLocatorKind::Alt,
+            "title" => FindLocatorKind::Title,
+            "testid" => FindLocatorKind::TestId,
+            "first" => FindLocatorKind::First,
+            "last" => FindLocatorKind::Last,
+            "nth" => {
+                let (index, remaining) = split_first_token(rest).ok_or(ERROR)?;
+                let index = index.parse::<usize>().map_err(|_| ERROR)?;
+                let remaining =
+                    remaining.trim_start_matches(|value: char| value.is_ascii_whitespace());
+                return parse_non_role_locator(FindLocatorKind::Nth(index), remaining, ERROR);
+            }
+            _ => return Err(ERROR),
+        };
+        return parse_non_role_locator(kind, rest, ERROR);
+    }
     let (role, rest) = split_first_token(rest).ok_or(ERROR)?;
     let (action, options) = parse_find_action(rest).ok_or(ERROR)?;
     let (name, exact) = parse_find_options(options).ok_or(ERROR)?;
@@ -722,6 +848,63 @@ fn parse_find_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
         exact,
         action,
     }))
+}
+
+fn parse_non_role_locator<'a>(
+    kind: FindLocatorKind,
+    rest: &'a str,
+    error: &'static str,
+) -> Result<SessionCommand<'a>, &'static str> {
+    let (value, rest) = split_locator_value(rest).ok_or(error)?;
+    let (action, options) = parse_find_action(rest).ok_or(error)?;
+    let exact = parse_exact_option(options).ok_or(error)?;
+    let supports_exact = matches!(
+        kind,
+        FindLocatorKind::Text
+            | FindLocatorKind::Label
+            | FindLocatorKind::Placeholder
+            | FindLocatorKind::Alt
+            | FindLocatorKind::Title
+    );
+    if exact && !supports_exact {
+        return Err(error);
+    }
+    Ok(SessionCommand::Element(ElementCommand::FindLocator {
+        kind,
+        value,
+        exact,
+        action,
+    }))
+}
+
+fn split_locator_value(value: &str) -> Option<(&str, &str)> {
+    let value = value.trim_start_matches(|character: char| character.is_ascii_whitespace());
+    let quote = value.as_bytes().first().copied();
+    if matches!(quote, Some(b'\'' | b'"')) {
+        let quote = quote.expect("matched quote must exist");
+        let end = value.as_bytes()[1..]
+            .iter()
+            .position(|candidate| *candidate == quote)?
+            + 1;
+        let locator_value = &value[1..end];
+        let remaining = &value[end + 1..];
+        if locator_value.is_empty()
+            || (!remaining.is_empty() && !remaining.as_bytes()[0].is_ascii_whitespace())
+        {
+            return None;
+        }
+        return Some((locator_value, remaining));
+    }
+    split_first_token(value)
+}
+
+fn parse_exact_option(options: &str) -> Option<bool> {
+    let options = options.trim_matches(|value: char| value.is_ascii_whitespace());
+    match options {
+        "" => Some(false),
+        "--exact" => Some(true),
+        _ => None,
+    }
 }
 
 fn parse_find_action(rest: &str) -> Option<(FindRoleAction<'_>, &str)> {
@@ -925,8 +1108,8 @@ fn flush_streams(output: &mut impl Write, errors: &mut impl Write) -> std::io::R
 #[cfg(test)]
 mod tests {
     use super::{
-        ElementCommand, ExitStatus, FindRoleAction, PageCommand, SessionCommand, parse_command,
-        run_session,
+        ElementCommand, ExitStatus, FindLocatorKind, FindRoleAction, PageCommand, SessionCommand,
+        parse_command, run_session,
     };
     use std::io::Cursor;
 
@@ -943,6 +1126,9 @@ mod tests {
         assert!(output.contains("session ready"));
         assert!(output.contains("session commands:"));
         assert!(output.contains("find role <role>"));
+        assert!(output.contains("find label <label>"));
+        assert!(output.contains("find testid <id>"));
+        assert!(output.contains("find nth <index> <selector>"));
         assert!(output.contains("session closed"));
         assert_eq!(
             String::from_utf8(errors).unwrap(),
@@ -1129,6 +1315,115 @@ mod tests {
         assert!(parse_command("find role button --name --exact").is_err());
         assert!(parse_command("find role button --exact").is_err());
         assert!(parse_command("find role textbox fill --name Email").is_err());
-        assert!(parse_command("find text Save").is_err());
+    }
+
+    #[test]
+    fn semantic_and_position_locators_parse_values_and_actions() {
+        assert!(matches!(
+            parse_command("find text Save"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::Text,
+                value: "Save",
+                exact: false,
+                action: FindRoleAction::Click,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find text \"Save draft\" text --exact"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::Text,
+                value: "Save draft",
+                exact: true,
+                action: FindRoleAction::Text,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find label 'Email address' fill hello world --exact"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::Label,
+                value: "Email address",
+                exact: true,
+                action: FindRoleAction::Fill("hello world"),
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find placeholder Search fill query"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::Placeholder,
+                value: "Search",
+                exact: false,
+                action: FindRoleAction::Fill("query"),
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find alt 'Product image' text --exact"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::Alt,
+                value: "Product image",
+                exact: true,
+                action: FindRoleAction::Text,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find title Issues text"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::Title,
+                value: "Issues",
+                exact: false,
+                action: FindRoleAction::Text,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find testid save-card text"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::TestId,
+                value: "save-card",
+                exact: false,
+                action: FindRoleAction::Text,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find first .card text"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::First,
+                value: ".card",
+                exact: false,
+                action: FindRoleAction::Text,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find first \"input[title='hello world']\" text"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::First,
+                value: "input[title='hello world']",
+                exact: false,
+                action: FindRoleAction::Text,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find last div.card text"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::Last,
+                value: "div.card",
+                exact: false,
+                action: FindRoleAction::Text,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find nth 2 '[data-kind=item]' hover"),
+            Ok(SessionCommand::Element(ElementCommand::FindLocator {
+                kind: FindLocatorKind::Nth(2),
+                value: "[data-kind=item]",
+                exact: false,
+                action: FindRoleAction::Hover,
+            }))
+        ));
+        assert!(parse_command("find text Save changes").is_err());
+        assert!(parse_command("find label \"\" fill value").is_err());
+        assert!(parse_command("find placeholder Search --name Query").is_err());
+        assert!(parse_command("find testid save --exact").is_err());
+        assert!(parse_command("find first .card --exact").is_err());
+        assert!(parse_command("find nth -1 .card text").is_err());
+        assert!(parse_command("find nth nope .card text").is_err());
     }
 }

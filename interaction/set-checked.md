@@ -6,7 +6,7 @@ Package callers submit `SetElementChecked` with a current interactive reference 
 
 Session-mode callers use `check <ref>` or `uncheck <ref>` after an interactive snapshot.
 
-[Role locator actions](../inspection/query-elements.md) define the snapshot-free checked-state path.
+[Locator actions](../inspection/query-elements.md) define the snapshot-free checked-state path.
 
 The action supports native checkbox inputs. It does not dispatch browser events.
 

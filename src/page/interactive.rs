@@ -1,12 +1,38 @@
 use super::visibility::{VisibilityState, visibility_state};
 use super::{ElementSource, collapse_whitespace, parse_page_source};
+use crate::locator::{Locator, LocatorCandidate, SemanticLocatorCandidate, SourceLocatorCandidate};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PageSemanticSource {
     pub(crate) title: String,
     pub(crate) semantic_elements: Vec<SemanticElementSource>,
+    pub(crate) locator_elements: Vec<LocatorElementSource>,
     pub(crate) interactive_elements: Vec<InteractiveElementSource>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LocatorElementSource {
+    pub(crate) element: String,
+    pub(crate) interactive_index: Option<usize>,
+    pub(crate) parent: Option<usize>,
+    evidence: LocatorEvidence,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LocatorEvidence {
+    role: Option<String>,
+    name: String,
+    text: String,
+    label: Option<String>,
+    placeholder: Option<String>,
+    source: LocatorSourceEvidence,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LocatorSourceEvidence {
+    tag: String,
+    attributes: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -185,6 +211,36 @@ impl SemanticElementSource {
     }
 }
 
+impl LocatorElementSource {
+    pub(crate) fn role(&self) -> Option<&str> {
+        self.evidence.role.as_deref()
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.evidence.name
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.evidence.text
+    }
+
+    pub(crate) fn matches(&self, locator: &Locator) -> bool {
+        locator.matches(LocatorCandidate {
+            semantic: SemanticLocatorCandidate {
+                role: self.role(),
+                name: self.name(),
+                text: self.text(),
+                label: self.evidence.label.as_deref(),
+                placeholder: self.evidence.placeholder.as_deref(),
+            },
+            source: SourceLocatorCandidate {
+                tag: &self.evidence.source.tag,
+                attributes: &self.evidence.source.attributes,
+            },
+        })
+    }
+}
+
 impl SelectState {
     fn value(&self) -> Option<&str> {
         match self {
@@ -238,11 +294,12 @@ pub(crate) fn semantic_elements_from_html(html: &str) -> Vec<SemanticElementSour
 
 pub(crate) fn page_semantics_from_html(html: &str) -> PageSemanticSource {
     let source = parse_page_source(html);
-    let (semantic_elements, interactive_elements) =
+    let (semantic_elements, locator_elements, interactive_elements) =
         element_sources(&source.elements, source.has_stylesheet);
     PageSemanticSource {
         title: collapse_whitespace(&source.title),
         semantic_elements,
+        locator_elements,
         interactive_elements,
     }
 }
@@ -250,20 +307,51 @@ pub(crate) fn page_semantics_from_html(html: &str) -> PageSemanticSource {
 fn element_sources(
     sources: &[ElementSource],
     has_stylesheet: bool,
-) -> (Vec<SemanticElementSource>, Vec<InteractiveElementSource>) {
+) -> (
+    Vec<SemanticElementSource>,
+    Vec<LocatorElementSource>,
+    Vec<InteractiveElementSource>,
+) {
     let mut semantic_elements = Vec::new();
+    let mut locator_elements = Vec::with_capacity(sources.len());
     let mut interactive_elements = Vec::new();
     for (index, source) in sources.iter().enumerate() {
-        if let Some(role) = semantic_role(index, source, sources) {
+        let role = semantic_role(index, source, sources);
+        let interactive_index = role
+            .as_deref()
+            .is_some_and(is_interactive_role)
+            .then_some(interactive_elements.len());
+        let name = role
+            .as_deref()
+            .map(|role| accessible_name(source, sources, role))
+            .unwrap_or_default();
+        let text = locator_text(source);
+        locator_elements.push(LocatorElementSource {
+            element: source.id.clone(),
+            interactive_index,
+            parent: source.parent,
+            evidence: LocatorEvidence {
+                role: role.clone(),
+                name: name.clone(),
+                text: text.clone(),
+                label: locator_label(source, sources),
+                placeholder: locator_placeholder(source),
+                source: LocatorSourceEvidence {
+                    tag: source.tag.clone(),
+                    attributes: source.attributes.clone(),
+                },
+            },
+        });
+        if let Some(role) = role {
             let interactive_index =
                 is_interactive_role(&role).then_some(interactive_elements.len());
             let semantics = SemanticElementSource {
                 element: source.id.clone(),
                 interactive_index,
                 tag: source.tag.clone(),
-                name: accessible_name(source, sources, &role),
+                name,
                 role: role.clone(),
-                text: collapse_whitespace(&source.text),
+                text,
                 attributes: source.attributes.clone(),
             };
             if interactive_index.is_some() {
@@ -280,7 +368,31 @@ fn element_sources(
             semantic_elements.push(semantics);
         }
     }
-    (semantic_elements, interactive_elements)
+    (semantic_elements, locator_elements, interactive_elements)
+}
+
+fn locator_text(source: &ElementSource) -> String {
+    if source.tag == "input" && matches!(input_type(source).as_deref(), Some("button" | "submit")) {
+        return attribute_name(source, "value");
+    }
+    collapse_whitespace(&source.text)
+}
+
+fn locator_label(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
+    if !matches!(
+        source.tag.as_str(),
+        "button" | "input" | "meter" | "output" | "progress" | "select" | "textarea"
+    ) {
+        return None;
+    }
+    author_name(source, sources)
+}
+
+fn locator_placeholder(source: &ElementSource) -> Option<String> {
+    if !matches!(source.tag.as_str(), "input" | "textarea") {
+        return None;
+    }
+    non_empty_attribute(source, "placeholder").map(collapse_whitespace)
 }
 
 fn control_state(

@@ -1,4 +1,4 @@
-# Verification: find an element by role
+# Verification: find elements with locators
 
 Run these checks against a controlled loopback page. Record the fixture and browser.jr commit.
 
@@ -23,6 +23,18 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | QUERY-15 | P1 | pipe | Actions resolve strictly before mutation ([While running](../inspection/query-elements.md#while-running)). | Serve two textboxes with matching names and distinct values. | Fill through the ambiguous locator, then read one current reference. | Fill reports ambiguity. Neither value changes. | partial: package test passed, 2026-08-31 |
 | QUERY-16 | P1 | pipe | Missing or failed actionability evidence blocks mutation ([While running](../inspection/query-elements.md#while-running)). | Serve hidden, disabled, and stylesheet-dependent controls. | Fill each control by exact role and name. | Errors identify visible or editable checks. Values stay unchanged. | partial: package tests passed, 2026-08-31 |
 | QUERY-17 | P1 | pipe | Unsupported hover preserves current references ([While running](../inspection/query-elements.md#while-running)). | Serve one button and capture a snapshot. | Hover by role, then read the old reference. | Hover reports unsupported behavior. The reference remains usable. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-18 | P1 | pipe | Label locators use associated and ARIA label sources ([Begin running](../inspection/query-elements.md#begin-running)). | Serve explicitly labeled, ancestor-labeled, and ARIA-labeled controls. | Resolve each through `FindByLocator`. | Each locator returns its control, role, name, and text. | partial: package tests passed, 2026-08-31 |
+| QUERY-19 | P1 | pipe | Placeholder locators target inputs and textareas ([Begin running](../inspection/query-elements.md#begin-running)). | Serve controls with distinct placeholders. | Resolve exact and substring placeholder queries. | Each query returns one matching control. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-20 | P1 | pipe | Text locators normalize content and prefer a matching descendant ([Begin running](../inspection/query-elements.md#begin-running)). | Serve nested text, a separate exact match, and a submit input. | Resolve exact and substring text queries. | Nested text selects the matching descendant. Submit value supplies its text. Ambiguity stays strict. | partial: package tests passed, 2026-08-31 |
+| QUERY-21 | P1 | pipe | All locator kinds share the action transaction ([While running](../inspection/query-elements.md#while-running)). | Serve labeled and placeholder textboxes plus a labeled checkbox. | Fill and check without a snapshot, then read through current references. | Each mutation commits once. Existing references report the new state. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-22 | P1 | pipe | Text click navigation re-resolves the replacement document ([While running](../inspection/query-elements.md#while-running)). | Serve a text link to a page with a labeled control. | Click through exact text, then fill through the new label. | Navigation installs the second page. The label resolves there. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-23 | P1 | pipe | Generic locator failures preserve current state ([While running](../inspection/query-elements.md#while-running)). | Serve duplicate labels, a hidden placeholder control, and a button. | Attempt ambiguous fill, hidden fill, and hover, then read current references. | Each request reports its typed failure. Values and references remain usable. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-24 | P2 | pipe | Session mode accepts quoted multiword locator values ([Invoke](../inspection/query-elements.md#invoke)). | Open any controlled form. | Parse single-quoted and double-quoted text-backed locator commands. | The parser preserves the locator value and separates its action and exact flag. | partial: parser and compiled-process tests passed, 2026-08-31 |
+| QUERY-25 | P1 | pipe | Alt and title locators use normalized source attributes ([Begin running](../inspection/query-elements.md#begin-running)). | Serve an image with alt text and an element with a title. | Resolve substring and exact queries. | Each query returns the owning element. Exact matching remains case-sensitive. | partial: unit, package, and compiled-process tests passed, 2026-08-31 |
+| QUERY-26 | P1 | pipe | Test ID locators use strict `data-testid` equality ([Begin running](../inspection/query-elements.md#begin-running)). | Serve unique and duplicate test IDs. | Resolve the unique value, then the duplicate value. | The unique target resolves. The duplicate reports ambiguity. | partial: unit and package tests passed, 2026-08-31 |
+| QUERY-27 | P1 | pipe | Compound CSS locators reject unsupported grammar ([Exit immediately](../inspection/query-elements.md#exit-immediately)). | Serve a page and capture a current reference. | Construct supported compounds, then submit a selector with a combinator. | Supported selectors parse. Unsupported grammar reports invalid input and preserves the reference. | partial: unit and compiled-process tests passed, 2026-08-31 |
+| QUERY-28 | P1 | pipe | First, last, and nth select document order ([Begin running](../inspection/query-elements.md#begin-running)). | Serve three elements matching one compound selector. | Resolve first, last, nth zero, and nth one. | Each selection returns its stated document-order element without ambiguity. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-29 | P1 | pipe | An out-of-range nth selection preserves state ([Edge cases](../inspection/query-elements.md#edge-cases)). | Serve three inputs and capture current references. | Resolve nth three, then read an existing reference. | The query reports no match. The existing reference remains usable. | partial: package test passed, 2026-08-31 |
 
 Not checkable yet:
 
@@ -31,4 +43,7 @@ Not checkable yet:
 - Stable-box and receives-events checks do not exist.
 - Pointer dispatch, button activation, and hover state do not exist.
 - Multi-match return values do not exist.
+- Regular-expression locator matching does not exist.
+- Full CSS and XPath locators do not exist.
+- Configurable test ID attributes do not exist.
 - Machine-readable responses do not exist.

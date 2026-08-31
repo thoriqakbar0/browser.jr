@@ -1,30 +1,41 @@
-# Find an element by role
+# Find elements with locators
 
 ## Summary
 
-Package callers create a `RoleLocator`. They submit one typed role request to the current session.
+Package callers create a `Locator` from a semantic, attribute, or positioned CSS query.
 
-`FindByRole` returns semantic data. `ClickByRole`, `FillByRole`, `SetCheckedByRole`, and `HoverByRole` request actions.
+`FindByLocator` returns current element data. Locator action requests share one strict resolution and action path.
+
+The existing role-specific request types remain available for callers that need a guaranteed semantic role.
 
 Session-mode callers use this form:
 
 ```text
 find role <role> [click|fill <text>|check|uncheck|hover|text] [--name <accessible-name>] [--exact]
+find text <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
+find label <label> [click|fill <text>|check|uncheck|hover|text] [--exact]
+find placeholder <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
+find alt <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
+find title <text> [click|fill <text>|check|uncheck|hover|text] [--exact]
+find testid <id> [click|fill <text>|check|uncheck|hover|text]
+find first <selector> [click|fill <text>|check|uncheck|hover|text]
+find last <selector> [click|fill <text>|check|uncheck|hover|text]
+find nth <index> <selector> [click|fill <text>|check|uncheck|hover|text]
 ```
 
 The command defaults to `click`. This matches agent-browser command composition.
 
-Every request resolves the current semantic index. Interactive snapshots remain a separate reference mechanism.
+Every request resolves the current locator index. Interactive snapshots remain a separate reference mechanism.
 
 ## The simple case
 
 The caller opens a page, then sends:
 
 ```text
-find role textbox fill hello --name Email
+find label Email fill hello --exact
 ```
 
-browser.jr resolves one current textbox. It checks supported visibility and editable evidence before changing the value.
+browser.jr resolves one currently labeled control. It checks supported visibility and editable evidence before changing the value.
 
 The caller does not need a snapshot. A later snapshot reports the changed value.
 
@@ -33,9 +44,13 @@ The caller does not need a snapshot. A later snapshot reports the changed value.
 ```mermaid
 stateDiagram-v2
     [*] --> validating
-    validating --> rejected : invalid role, action, or options
+    validating --> rejected : invalid locator, action, or options
     validating --> resolving : valid request and current page
-    resolving --> rejected : zero or multiple matches
+    resolving --> rejected : zero or strict multiple matches
+    resolving --> selecting : positioned CSS matches
+    selecting --> rejected : selected position is absent
+    selecting --> checking : one action target
+    selecting --> reporting : one text target
     resolving --> checking : exactly one action target
     resolving --> reporting : exactly one text target
     checking --> blocked : missing or failed actionability evidence
@@ -52,11 +67,15 @@ stateDiagram-v2
 
 ### Invoke
 
-The package request contains one validated `RoleLocator`.
+The package request contains one validated `Locator` variant.
 
 Each package action has its own reply type. A fill request cannot return a click result.
 
-Session mode accepts one role and optional accessible name. It accepts one action after the role.
+Session mode accepts one locator kind and value. Role locators also accept an optional accessible name.
+
+Non-role values with spaces require matching single or double quotes.
+
+`nth` requires a zero-based unsigned index before its selector.
 
 `fill` requires text before locator options. Other actions have no action value.
 
@@ -64,13 +83,19 @@ Session mode accepts one role and optional accessible name. It accepts one actio
 
 An empty role is invalid. A role token may contain only ASCII letters, digits, or hyphens.
 
-Session mode rejects missing fill text, missing option values, and unsupported syntax.
+Empty text-backed and test ID locator values are invalid.
+
+Empty, malformed, or unsupported CSS selectors are invalid.
+
+Session mode rejects unterminated quotes, missing fill text, missing option values, and unsupported syntax.
 
 Finding or acting before a successful open returns `SessionError::NoPage`.
 
 ### Begin running
 
-browser.jr reads the current document's supported semantic index.
+browser.jr reads the current document's locator index.
+
+The index includes every parsed content element. Each entry records semantic evidence, source attributes, and action identity.
 
 The native subset includes controls, headings, lists, landmarks, common groups, images, and table structure.
 
@@ -82,13 +107,41 @@ Default accessible-name matching uses a case-insensitive substring.
 
 `--exact` requires normalized, case-sensitive accessible-name equality.
 
-Resolution is strict. Zero matches return `RoleLocatorNotFound`.
+Text, label, placeholder, alt, and title queries collapse HTML whitespace before matching.
 
-Multiple matches return `RoleLocatorAmbiguous` with the match count.
+Their default matching uses a case-insensitive substring. `--exact` uses normalized, case-sensitive equality.
+
+Label queries match supported controls through `aria-labelledby`, `aria-label`, explicit labels, or ancestor labels.
+
+Placeholder queries match non-empty `placeholder` attributes on inputs and textareas.
+
+Alt queries match parsed `alt` attributes. Title queries match parsed `title` attributes.
+
+Test ID queries use case-sensitive equality against `data-testid`. They do not accept `--exact`.
+
+Text queries use normalized descendant text. Button and submit inputs use their `value` attribute.
+
+When a matching descendant also matches, a text query removes its matching ancestor.
+
+Positioned CSS queries support `*`, a tag, `#id`, `.class`, `[attribute]`, and `[attribute=value]`.
+
+A compound selector may combine those parts. Attribute values may use matching single or double quotes.
+
+Combinators, selector groups, pseudo-classes, escapes, and other attribute operators are unsupported.
+
+Type and attribute names ignore ASCII case. IDs, classes, and attribute values remain case-sensitive.
+
+`first`, `last`, and `nth` select document order. `nth` uses a zero-based index.
+
+Non-positioned resolution is strict. Generic requests return `LocatorNotFound` for zero matches.
+
+Generic requests return `LocatorAmbiguous` for multiple matches. Role-specific requests keep their role-specific errors.
+
+Positioned CSS queries select one match instead of reporting ambiguity. An absent position returns `LocatorNotFound`.
 
 ### While running
 
-Each action resolves again when its request executes. It does not retain a prior semantic match.
+Each action resolves again when its request executes. It does not retain a prior match.
 
 Resolution does not fetch, capture a snapshot, run scripts, wait, or retry.
 
@@ -118,13 +171,17 @@ Native labels name supported controls. Landmark and list content does not become
 
 ### Finish
 
-`FindByRole` returns `RoleMatch` with `element`, `role`, `name`, and `text`.
+`FindByLocator` returns `LocatorMatch` with `element`, optional `role`, `name`, and `text`.
 
-`FillByRole` returns the match and committed value.
+`FindByRole` returns `RoleMatch` with a required role.
 
-`SetCheckedByRole` returns the match and committed Boolean state.
+`FillByLocator` returns the match and committed value.
 
-`ClickByRole` returns the old match and newly installed page after navigation.
+`SetCheckedByLocator` returns the match and committed Boolean state.
+
+`ClickByLocator` returns the old match and newly installed page after navigation.
+
+Role-specific action requests return the same state through role-specific reply types.
 
 Session text actions print only normalized descendant text.
 
@@ -138,7 +195,7 @@ Session link clicks report target identity, the new URL, and the new interactive
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | The package selects default or exact name matching. | Session mode accepts one action. It accepts `--exact` before `--name` or at the line end. |
+| Flags and options | The package selects one locator kind, match mode, and optional position. | Session mode accepts one action. `nth` uses a zero-based index. |
 | Project configuration | No locator configuration exists. | Nothing reloads. |
 | Target matrix | The current page supplies one document. | Navigation or reload replaces the searchable document. |
 | Output channel | Package requests return typed replies. Session mode uses text. | Session mode flushes stdout or stderr. |
@@ -169,7 +226,7 @@ Blocked actionability, unsupported actions, and missing pages use status three.
 
 **Network and storage.** Only a supported link click may load another page. Locator actions write no retained storage.
 
-**Rendering compatibility.** Locators cover the stated static HTML and ARIA subset.
+**Rendering compatibility.** Locators cover the stated static HTML, ARIA, attribute, and compound CSS subsets.
 
 Actionability covers supported visibility, enabled, and editable evidence only.
 
@@ -177,7 +234,7 @@ Stable-box and receives-events checks remain unavailable.
 
 **Isolation.** Locators and replies belong to one session. They do not identify live targets across processes.
 
-**Accessibility inspection.** Role and name use browser.jr's supported accessibility subset.
+**Accessibility inspection.** Role and label queries use browser.jr's supported accessibility subset.
 
 Locator resolution does not filter hidden elements. Actions apply their supported visibility checks after strict resolution.
 
@@ -185,14 +242,25 @@ Locator resolution does not filter hidden elements. Actions apply their supporte
 
 - A role-only locator must resolve to exactly one element.
 - An empty exact package name can select one unnamed element.
-- Name queries collapse whitespace before matching.
-- Exact name matching remains case-sensitive after whitespace normalization.
+- Text-backed locator constructors reject empty normalized values.
+- Test ID values preserve case and whitespace for exact attribute equality.
+- Name and text-backed queries collapse whitespace before matching.
+- Exact matching remains case-sensitive after whitespace normalization.
+- A text query chooses a matching descendant over its matching ancestor.
+- Button and submit inputs match text through their source value.
 - A successful or failed text query preserves interactive references.
 - Successful fill, check, and uncheck actions preserve interactive references.
 - A successful link click invalidates interactive references.
 - A failed or unsupported action preserves interactive references.
 - Repeated check and uncheck actions are idempotent.
-- Session names can contain spaces without quotes.
+- Role accessible names can contain spaces without quotes.
+- Multiword non-role locator values require quotes.
+- First and last select the first and last document-order CSS match.
+- `nth(0)` selects the first CSS match.
+- An out-of-range `nth` reports no match and preserves current references.
+- Positioned CSS locators intentionally opt out of ambiguity errors.
+- Unsupported CSS grammar fails before resolution and preserves current references.
+- Locator quotes cannot contain an escaped matching quote yet.
 - Session fill values can contain spaces.
 - A fill value containing `--name` or `--exact` as a token is not expressible yet.
 - A name ending in the literal token `--exact` is not expressible yet.
@@ -207,8 +275,10 @@ Locator resolution does not filter hidden elements. Actions apply their supporte
 - Add stable-box and receives-events evidence.
 - Implement pointer dispatch, button activation, and hover state.
 - Define regular-expression name matching.
-- Define ordered multi-match results and explicit first, last, or index selection.
-- Add label, placeholder, text, alt, title, test-id, CSS, and XPath locators.
+- Define ordered multi-match result collections.
+- Expand CSS selector grammar and add XPath locators.
+- Define configurable test ID attributes.
+- Define text matching for replaced and generated content.
 - Define machine-readable locator results.
 
 Drafted from Rust package, parser, and compiled-process tests on 2026-08-31.

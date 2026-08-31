@@ -13,8 +13,8 @@ mod interactive;
 mod visibility;
 
 pub(crate) use interactive::{
-    CheckedState, ControlState, InteractiveAction, InteractiveElementSource, SelectState,
-    SelectValueError, SemanticElementSource, TextValueState, page_semantics_from_html,
+    CheckedState, ControlState, InteractiveAction, InteractiveElementSource, LocatorElementSource,
+    SelectState, SelectValueError, TextValueState, page_semantics_from_html,
 };
 #[cfg(test)]
 pub(crate) use interactive::{interactive_elements_from_html, semantic_elements_from_html};

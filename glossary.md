@@ -52,15 +52,35 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Interactive element reference.** A snapshot-owned target identity such as `@e1`. Another capture or document makes it stale.
 
-**Role locator.** A reusable role and optional accessible-name query. Current resolution searches the supported semantic index.
+**Locator.** A reusable current-document query. Implemented kinds cover semantic text, source attributes, and positioned compound CSS selectors.
 
-**Locator resolution.** Matching a locator against the current document. Current single-target resolution rejects zero or multiple matches.
+**Role locator.** A role and optional accessible-name query over the supported semantic index.
 
-**Role match.** One resolved semantic element's identifier, role, accessible name, and normalized descendant text. It is not an interactive reference.
+**Text locator.** A normalized descendant-text query. A matching descendant takes priority over its matching ancestor.
 
-**Role action.** An action that resolves a role locator when the request executes. Fill, check, uncheck, and supported link clicks are implemented.
+**Label locator.** A query for a supported control through its associated label or ARIA label source.
 
-**Actionability check.** Evidence required before an action mutates state. Current role actions check supported visible, enabled, or editable state.
+**Placeholder locator.** A query for an input or textarea through its non-empty `placeholder` attribute.
+
+**Alt locator.** A normalized text query over a parsed `alt` attribute.
+
+**Title locator.** A normalized text query over a parsed `title` attribute.
+
+**Test ID locator.** An exact, case-sensitive query over the `data-testid` attribute.
+
+**Compound CSS selector.** One supported selector made from a tag, ID, classes, or attribute tests without combinators.
+
+**Positioned CSS locator.** A compound CSS selector that chooses its first, last, or zero-based nth document-order match.
+
+**Locator resolution.** Matching a locator against the current document. Non-positioned resolution rejects zero or multiple matches.
+
+**Locator match.** One resolved element's identifier, optional role, accessible name, and normalized text. It is not an interactive reference.
+
+**Role match.** A locator match whose semantic role is present and required.
+
+**Locator action.** An action that resolves its locator when the request executes. Fill, check, uncheck, and supported link clicks are implemented.
+
+**Actionability check.** Evidence required before an action mutates state. Current locator actions check supported visible, enabled, or editable state.
 
 **Click.** An action request against one current interactive element reference. Only same-context link navigation is implemented.
 

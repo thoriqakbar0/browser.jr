@@ -30,7 +30,7 @@ Options:
 Current implementation:
   Static HTML design lint is available for loopback HTTP pages.
   Interactive snapshots include a stated native HTML and ARIA role subset.
-  Session mode supports role find, snapshots, actions, and observations through stdin.
+  Session mode supports semantic, attribute, and positioned CSS locators through stdin.
   Parent-aware block flow and fixed pixel geometry form the layout subset.
 ";
 
@@ -292,43 +292,16 @@ pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) 
             &format!("browser.jr: stale element reference {reference}"),
             ExitStatus::InvalidInput,
         ),
-        SessionError::RoleLocatorNotFound { locator } => write_line(
-            errors,
-            &format!("browser.jr: no element matches {locator}"),
-            ExitStatus::InvalidInput,
-        ),
-        SessionError::RoleLocatorAmbiguous {
-            locator,
-            match_count,
-        } => write_line(
-            errors,
-            &format!("browser.jr: {match_count} elements match {locator}; locator must be unique"),
-            ExitStatus::InvalidInput,
-        ),
-        SessionError::RoleNavigation { locator, error } => write_line(
-            errors,
-            &format!("browser.jr: cannot click {locator}: navigation failed: {error:?}"),
-            ExitStatus::Unavailable,
-        ),
-        SessionError::RoleActionBlocked {
-            locator,
-            action,
-            check,
-            reason,
-        } => write_line(
-            errors,
-            &format!("browser.jr: cannot {action} {locator}: {check} check blocked: {reason}"),
-            ExitStatus::Unavailable,
-        ),
-        SessionError::UnsupportedRoleAction {
-            locator,
-            action,
-            reason,
-        } => write_line(
-            errors,
-            &format!("browser.jr: cannot {action} {locator}: {reason}"),
-            ExitStatus::Unavailable,
-        ),
+        error @ (SessionError::RoleLocatorNotFound { .. }
+        | SessionError::RoleLocatorAmbiguous { .. }
+        | SessionError::LocatorNotFound { .. }
+        | SessionError::LocatorAmbiguous { .. }
+        | SessionError::RoleNavigation { .. }
+        | SessionError::LocatorNavigation { .. }
+        | SessionError::RoleActionBlocked { .. }
+        | SessionError::LocatorActionBlocked { .. }
+        | SessionError::UnsupportedRoleAction { .. }
+        | SessionError::UnsupportedLocatorAction { .. }) => write_locator_error(errors, error),
         SessionError::UnsupportedClick { reference, reason } => write_line(
             errors,
             &format!("browser.jr: cannot click {reference}: {reason}"),
@@ -389,6 +362,86 @@ pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) 
             &format!("browser.jr: cannot read visibility from {reference}: {reason}"),
             ExitStatus::Unavailable,
         ),
+    }
+}
+
+fn write_locator_error(errors: &mut impl Write, error: SessionError) -> ExitStatus {
+    match error {
+        SessionError::RoleLocatorNotFound { locator } => write_line(
+            errors,
+            &format!("browser.jr: no element matches {locator}"),
+            ExitStatus::InvalidInput,
+        ),
+        SessionError::RoleLocatorAmbiguous {
+            locator,
+            match_count,
+        } => write_line(
+            errors,
+            &format!("browser.jr: {match_count} elements match {locator}; locator must be unique"),
+            ExitStatus::InvalidInput,
+        ),
+        SessionError::LocatorNotFound { locator } => write_line(
+            errors,
+            &format!("browser.jr: no element matches {locator}"),
+            ExitStatus::InvalidInput,
+        ),
+        SessionError::LocatorAmbiguous {
+            locator,
+            match_count,
+        } => write_line(
+            errors,
+            &format!("browser.jr: {match_count} elements match {locator}; locator must be unique"),
+            ExitStatus::InvalidInput,
+        ),
+        SessionError::RoleNavigation { locator, error } => write_line(
+            errors,
+            &format!("browser.jr: cannot click {locator}: navigation failed: {error:?}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::LocatorNavigation { locator, error } => write_line(
+            errors,
+            &format!("browser.jr: cannot click {locator}: navigation failed: {error:?}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::RoleActionBlocked {
+            locator,
+            action,
+            check,
+            reason,
+        } => write_line(
+            errors,
+            &format!("browser.jr: cannot {action} {locator}: {check} check blocked: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::LocatorActionBlocked {
+            locator,
+            action,
+            check,
+            reason,
+        } => write_line(
+            errors,
+            &format!("browser.jr: cannot {action} {locator}: {check} check blocked: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedRoleAction {
+            locator,
+            action,
+            reason,
+        } => write_line(
+            errors,
+            &format!("browser.jr: cannot {action} {locator}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        SessionError::UnsupportedLocatorAction {
+            locator,
+            action,
+            reason,
+        } => write_line(
+            errors,
+            &format!("browser.jr: cannot {action} {locator}: {reason}"),
+            ExitStatus::Unavailable,
+        ),
+        _ => unreachable!("write_locator_error accepts only locator errors"),
     }
 }
 

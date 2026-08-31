@@ -140,7 +140,7 @@ A later interactive snapshot reports the current value. That capture makes the e
 
 - Define multiple selection and its returned value shape.
 - Decide whether later matching options may bypass a disabled duplicate.
-- Add label and index matching only with separate typed request fields.
+- Add locator-based selection and index matching through separate typed request fields.
 - Define event order before adding event dispatch.
 - Define form reset and submission behavior.
 

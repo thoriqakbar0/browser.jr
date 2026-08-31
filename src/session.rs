@@ -2,10 +2,10 @@ use crate::layout::{
     LayoutError, LayoutInput, LayoutKernel, LayoutMutation, LayoutProgram, LayoutSnapshot,
 };
 use crate::loading::{LoadError, load_local_html};
-use crate::locator::{RoleLocator, RoleMatch};
+use crate::locator::{Locator, LocatorMatch, LocatorPosition, RoleLocator, RoleMatch};
 use crate::page::{
-    CheckedState, ControlState, InteractiveAction, InteractiveElementSource, SelectState,
-    SelectValueError, SemanticElementSource, TextValueState, page_semantics_from_html,
+    CheckedState, ControlState, InteractiveAction, InteractiveElementSource, LocatorElementSource,
+    SelectState, SelectValueError, TextValueState, page_semantics_from_html,
 };
 use crate::rules::{
     RuleResult, WidthFinding, evaluate_horizontal_overflow, evaluate_max_element_width,
@@ -43,14 +43,33 @@ struct CurrentPage {
     epoch: u64,
     url: String,
     title: String,
-    semantic_elements: Vec<SemanticElementSource>,
+    locator_elements: Vec<LocatorElementSource>,
     interactive_elements: Vec<InteractiveElementSource>,
 }
 
 #[derive(Debug)]
-struct ResolvedRole {
-    matched: RoleMatch,
+struct ResolvedLocator {
+    matched: LocatorMatch,
     interactive_index: Option<usize>,
+}
+
+#[derive(Debug)]
+enum LocatorOperationError {
+    NoPage,
+    NotFound,
+    Ambiguous {
+        match_count: usize,
+    },
+    Navigation(LoadError),
+    ActionBlocked {
+        action: LocatorAction,
+        check: ActionabilityCheck,
+        reason: String,
+    },
+    UnsupportedAction {
+        action: LocatorAction,
+        reason: String,
+    },
 }
 
 impl Session {
@@ -94,7 +113,7 @@ impl Session {
             epoch,
             url,
             title: semantics.title,
-            semantic_elements: semantics.semantic_elements,
+            locator_elements: semantics.locator_elements,
             interactive_elements: semantics.interactive_elements,
         });
         Ok(reply)
@@ -118,26 +137,49 @@ impl Session {
             .ok_or(SessionError::StaleElementReference { reference })
     }
 
-    fn role_match_for(&self, locator: &RoleLocator) -> Result<ResolvedRole, SessionError> {
-        let page = self.current_page.as_ref().ok_or(SessionError::NoPage)?;
+    fn locator_match_for(
+        &self,
+        locator: &Locator,
+    ) -> Result<ResolvedLocator, LocatorOperationError> {
+        let page = self
+            .current_page
+            .as_ref()
+            .ok_or(LocatorOperationError::NoPage)?;
         let mut matches = page
-            .semantic_elements
+            .locator_elements
             .iter()
-            .filter(|element| locator.matches(element.role(), element.name()));
-        let Some(element) = matches.next() else {
-            return Err(SessionError::RoleLocatorNotFound {
-                locator: locator.clone(),
-            });
-        };
-        let match_count = 1 + matches.count();
-        if match_count > 1 {
-            return Err(SessionError::RoleLocatorAmbiguous {
-                locator: locator.clone(),
-                match_count,
+            .enumerate()
+            .filter_map(|(index, element)| element.matches(locator).then_some(index))
+            .collect::<Vec<_>>();
+        if locator.uses_descendant_text() {
+            let candidates = matches.clone();
+            matches.retain(|candidate| {
+                !candidates.iter().any(|other| {
+                    other != candidate
+                        && locator_element_is_descendant(&page.locator_elements, *other, *candidate)
+                })
             });
         }
-        Ok(ResolvedRole {
-            matched: RoleMatch::new(
+        if let Some(position) = locator.position() {
+            let selected = match position {
+                LocatorPosition::First => matches.first().copied(),
+                LocatorPosition::Last => matches.last().copied(),
+                LocatorPosition::Nth(index) => matches.get(index).copied(),
+            };
+            matches.clear();
+            matches.extend(selected);
+        }
+        let Some(index) = matches.first().copied() else {
+            return Err(LocatorOperationError::NotFound);
+        };
+        if matches.len() > 1 {
+            return Err(LocatorOperationError::Ambiguous {
+                match_count: matches.len(),
+            });
+        }
+        let element = &page.locator_elements[index];
+        Ok(ResolvedLocator {
+            matched: LocatorMatch::new(
                 &element.element,
                 element.role(),
                 element.name(),
@@ -147,23 +189,35 @@ impl Session {
         })
     }
 
-    fn role_interactive_index(
+    fn locator_interactive_index(
         &self,
-        resolved: &ResolvedRole,
-        locator: &RoleLocator,
-        action: RoleAction,
-    ) -> Result<usize, SessionError> {
+        resolved: &ResolvedLocator,
+        action: LocatorAction,
+    ) -> Result<usize, LocatorOperationError> {
         resolved
             .interactive_index
-            .ok_or_else(|| SessionError::UnsupportedRoleAction {
-                locator: locator.clone(),
+            .ok_or_else(|| LocatorOperationError::UnsupportedAction {
                 action,
-                reason: format!(
-                    "role {} has no implemented interactive behavior",
-                    resolved.matched.role
+                reason: resolved.matched.role.as_ref().map_or_else(
+                    || "matched element has no implemented interactive behavior".into(),
+                    |role| format!("role {role} has no implemented interactive behavior"),
                 ),
             })
     }
+}
+
+fn locator_element_is_descendant(
+    elements: &[LocatorElementSource],
+    mut candidate: usize,
+    ancestor: usize,
+) -> bool {
+    while let Some(parent) = elements[candidate].parent {
+        if parent == ancestor {
+            return true;
+        }
+        candidate = parent;
+    }
+    false
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -281,14 +335,16 @@ impl SessionRequest for FindByRole {
     type Reply = RoleMatch;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        session
-            .role_match_for(&self.locator)
-            .map(|resolved| resolved.matched)
+        let locator = Locator::from(self.locator.clone());
+        match session.locator_match_for(&locator) {
+            Ok(resolved) => Ok(resolved.matched.into_role_match()),
+            Err(error) => Err(role_session_error(self.locator, error)),
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RoleAction {
+pub enum LocatorAction {
     Click,
     Fill,
     Check,
@@ -296,7 +352,9 @@ pub enum RoleAction {
     Hover,
 }
 
-impl std::fmt::Display for RoleAction {
+pub type RoleAction = LocatorAction;
+
+impl std::fmt::Display for LocatorAction {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Click => "click",
@@ -326,6 +384,123 @@ impl std::fmt::Display for ActionabilityCheck {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FindByLocator {
+    pub locator: Locator,
+}
+
+impl private::Sealed for FindByLocator {}
+
+impl SessionRequest for FindByLocator {
+    type Reply = LocatorMatch;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match session.locator_match_for(&self.locator) {
+            Ok(resolved) => Ok(resolved.matched),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClickByLocator {
+    pub locator: Locator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClickByLocatorResult {
+    Navigated {
+        matched: LocatorMatch,
+        page: OpenedPage,
+    },
+}
+
+impl private::Sealed for ClickByLocator {}
+
+impl SessionRequest for ClickByLocator {
+    type Reply = ClickByLocatorResult;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_click_by_locator(session, &self.locator) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FillByLocator {
+    pub locator: Locator,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FillByLocatorResult {
+    pub matched: LocatorMatch,
+    pub value: String,
+}
+
+impl private::Sealed for FillByLocator {}
+
+impl SessionRequest for FillByLocator {
+    type Reply = FillByLocatorResult;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_fill_by_locator(session, &self.locator, self.value) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SetCheckedByLocator {
+    pub locator: Locator,
+    pub checked: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SetCheckedByLocatorResult {
+    pub matched: LocatorMatch,
+    pub checked: bool,
+}
+
+impl private::Sealed for SetCheckedByLocator {}
+
+impl SessionRequest for SetCheckedByLocator {
+    type Reply = SetCheckedByLocatorResult;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_set_checked_by_locator(session, &self.locator, self.checked) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HoverByLocator {
+    pub locator: Locator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HoverByLocatorResult {
+    pub matched: LocatorMatch,
+}
+
+impl private::Sealed for HoverByLocator {}
+
+impl SessionRequest for HoverByLocator {
+    type Reply = HoverByLocatorResult;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        match execute_hover_by_locator(session, &self.locator) {
+            Ok(result) => Ok(result),
+            Err(error) => Err(locator_session_error(self.locator, error)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClickByRole {
     pub locator: RoleLocator,
 }
@@ -344,47 +519,15 @@ impl SessionRequest for ClickByRole {
     type Reply = ClickByRoleResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let resolved = session.role_match_for(&self.locator)?;
-        let index = session.role_interactive_index(&resolved, &self.locator, RoleAction::Click)?;
-        let element = &session
-            .current_page
-            .as_ref()
-            .expect("resolved role requires a current page")
-            .interactive_elements[index];
-        require_role_visible(element, &self.locator, RoleAction::Click)?;
-        require_role_enabled(element, &self.locator, RoleAction::Click)?;
-        let action = element.action.clone();
-        match action {
-            InteractiveAction::Navigate { href } => {
-                let current_url = session
-                    .current_page
-                    .as_ref()
-                    .expect("resolved role requires a current page")
-                    .url
-                    .clone();
-                let target = resolve_navigation_url(&current_url, &href).map_err(|error| {
-                    SessionError::RoleNavigation {
-                        locator: self.locator.clone(),
-                        error,
-                    }
-                })?;
-                let page =
-                    session
-                        .open_page(target)
-                        .map_err(|error| SessionError::RoleNavigation {
-                            locator: self.locator.clone(),
-                            error,
-                        })?;
+        let locator = Locator::from(self.locator.clone());
+        match execute_click_by_locator(session, &locator) {
+            Ok(ClickByLocatorResult::Navigated { matched, page }) => {
                 Ok(ClickByRoleResult::Navigated {
-                    matched: resolved.matched,
+                    matched: matched.into_role_match(),
                     page,
                 })
             }
-            InteractiveAction::Unsupported { reason } => Err(SessionError::UnsupportedRoleAction {
-                locator: self.locator,
-                action: RoleAction::Click,
-                reason,
-            }),
+            Err(error) => Err(role_session_error(self.locator, error)),
         }
     }
 }
@@ -407,41 +550,13 @@ impl SessionRequest for FillByRole {
     type Reply = FillByRoleResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let resolved = session.role_match_for(&self.locator)?;
-        let index = session.role_interactive_index(&resolved, &self.locator, RoleAction::Fill)?;
-        let page = session
-            .current_page
-            .as_mut()
-            .expect("resolved role requires a current page");
-        let element = &mut page.interactive_elements[index];
-        require_role_visible(element, &self.locator, RoleAction::Fill)?;
-        match &mut element.control_state {
-            ControlState::Text(TextValueState::Editable { value }) => {
-                *value = self.value;
-                Ok(FillByRoleResult {
-                    matched: resolved.matched,
-                    value: value.clone(),
-                })
-            }
-            ControlState::Text(TextValueState::NonEditable { reason, .. }) => {
-                Err(SessionError::RoleActionBlocked {
-                    locator: self.locator,
-                    action: RoleAction::Fill,
-                    check: ActionabilityCheck::Editable,
-                    reason: reason.clone(),
-                })
-            }
-            ControlState::Text(TextValueState::Unavailable)
-            | ControlState::Checkbox(_)
-            | ControlState::Select(_)
-            | ControlState::Unavailable => Err(SessionError::UnsupportedRoleAction {
-                locator: self.locator,
-                action: RoleAction::Fill,
-                reason: format!(
-                    "fill execution for role {} is not implemented",
-                    element.role()
-                ),
+        let locator = Locator::from(self.locator.clone());
+        match execute_fill_by_locator(session, &locator, self.value) {
+            Ok(result) => Ok(FillByRoleResult {
+                matched: result.matched.into_role_match(),
+                value: result.value,
             }),
+            Err(error) => Err(role_session_error(self.locator, error)),
         }
     }
 }
@@ -464,45 +579,13 @@ impl SessionRequest for SetCheckedByRole {
     type Reply = SetCheckedByRoleResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let action = if self.checked {
-            RoleAction::Check
-        } else {
-            RoleAction::Uncheck
-        };
-        let resolved = session.role_match_for(&self.locator)?;
-        let index = session.role_interactive_index(&resolved, &self.locator, action)?;
-        let page = session
-            .current_page
-            .as_mut()
-            .expect("resolved role requires a current page");
-        let element = &mut page.interactive_elements[index];
-        require_role_visible(element, &self.locator, action)?;
-        match &mut element.control_state {
-            ControlState::Checkbox(CheckedState::Editable { checked }) => {
-                *checked = self.checked;
-                Ok(SetCheckedByRoleResult {
-                    matched: resolved.matched,
-                    checked: *checked,
-                })
-            }
-            ControlState::Checkbox(CheckedState::NonEditable { reason, .. }) => {
-                Err(SessionError::RoleActionBlocked {
-                    locator: self.locator,
-                    action,
-                    check: ActionabilityCheck::Enabled,
-                    reason: reason.clone(),
-                })
-            }
-            ControlState::Text(_) | ControlState::Select(_) | ControlState::Unavailable => {
-                Err(SessionError::UnsupportedRoleAction {
-                    locator: self.locator,
-                    action,
-                    reason: format!(
-                        "checked-state mutation for role {} is not implemented",
-                        element.role()
-                    ),
-                })
-            }
+        let locator = Locator::from(self.locator.clone());
+        match execute_set_checked_by_locator(session, &locator, self.checked) {
+            Ok(result) => Ok(SetCheckedByRoleResult {
+                matched: result.matched.into_role_match(),
+                checked: result.checked,
+            }),
+            Err(error) => Err(role_session_error(self.locator, error)),
         }
     }
 }
@@ -523,13 +606,152 @@ impl SessionRequest for HoverByRole {
     type Reply = HoverByRoleResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        session.role_match_for(&self.locator)?;
-        Err(SessionError::UnsupportedRoleAction {
-            locator: self.locator,
-            action: RoleAction::Hover,
-            reason: "hover state and pointer event dispatch are not implemented".into(),
-        })
+        let locator = Locator::from(self.locator.clone());
+        match execute_hover_by_locator(session, &locator) {
+            Ok(result) => Ok(HoverByRoleResult {
+                matched: result.matched.into_role_match(),
+            }),
+            Err(error) => Err(role_session_error(self.locator, error)),
+        }
     }
+}
+
+fn execute_click_by_locator(
+    session: &mut Session,
+    locator: &Locator,
+) -> Result<ClickByLocatorResult, LocatorOperationError> {
+    let resolved = session.locator_match_for(locator)?;
+    let index = session.locator_interactive_index(&resolved, LocatorAction::Click)?;
+    let element = &session
+        .current_page
+        .as_ref()
+        .expect("resolved locator requires a current page")
+        .interactive_elements[index];
+    require_locator_visible(element, LocatorAction::Click)?;
+    require_locator_enabled(element, LocatorAction::Click)?;
+    let action = element.action.clone();
+    match action {
+        InteractiveAction::Navigate { href } => {
+            let current_url = session
+                .current_page
+                .as_ref()
+                .expect("resolved locator requires a current page")
+                .url
+                .clone();
+            let target = resolve_navigation_url(&current_url, &href)
+                .map_err(LocatorOperationError::Navigation)?;
+            let page = session
+                .open_page(target)
+                .map_err(LocatorOperationError::Navigation)?;
+            Ok(ClickByLocatorResult::Navigated {
+                matched: resolved.matched,
+                page,
+            })
+        }
+        InteractiveAction::Unsupported { reason } => {
+            Err(LocatorOperationError::UnsupportedAction {
+                action: LocatorAction::Click,
+                reason,
+            })
+        }
+    }
+}
+
+fn execute_fill_by_locator(
+    session: &mut Session,
+    locator: &Locator,
+    replacement: String,
+) -> Result<FillByLocatorResult, LocatorOperationError> {
+    let resolved = session.locator_match_for(locator)?;
+    let index = session.locator_interactive_index(&resolved, LocatorAction::Fill)?;
+    let page = session
+        .current_page
+        .as_mut()
+        .expect("resolved locator requires a current page");
+    let element = &mut page.interactive_elements[index];
+    require_locator_visible(element, LocatorAction::Fill)?;
+    match &mut element.control_state {
+        ControlState::Text(TextValueState::Editable { value }) => {
+            *value = replacement;
+            Ok(FillByLocatorResult {
+                matched: resolved.matched,
+                value: value.clone(),
+            })
+        }
+        ControlState::Text(TextValueState::NonEditable { reason, .. }) => {
+            Err(LocatorOperationError::ActionBlocked {
+                action: LocatorAction::Fill,
+                check: ActionabilityCheck::Editable,
+                reason: reason.clone(),
+            })
+        }
+        ControlState::Text(TextValueState::Unavailable)
+        | ControlState::Checkbox(_)
+        | ControlState::Select(_)
+        | ControlState::Unavailable => Err(LocatorOperationError::UnsupportedAction {
+            action: LocatorAction::Fill,
+            reason: format!(
+                "fill execution for role {} is not implemented",
+                element.role()
+            ),
+        }),
+    }
+}
+
+fn execute_set_checked_by_locator(
+    session: &mut Session,
+    locator: &Locator,
+    replacement: bool,
+) -> Result<SetCheckedByLocatorResult, LocatorOperationError> {
+    let action = if replacement {
+        LocatorAction::Check
+    } else {
+        LocatorAction::Uncheck
+    };
+    let resolved = session.locator_match_for(locator)?;
+    let index = session.locator_interactive_index(&resolved, action)?;
+    let page = session
+        .current_page
+        .as_mut()
+        .expect("resolved locator requires a current page");
+    let element = &mut page.interactive_elements[index];
+    require_locator_visible(element, action)?;
+    match &mut element.control_state {
+        ControlState::Checkbox(CheckedState::Editable { checked }) => {
+            *checked = replacement;
+            Ok(SetCheckedByLocatorResult {
+                matched: resolved.matched,
+                checked: *checked,
+            })
+        }
+        ControlState::Checkbox(CheckedState::NonEditable { reason, .. }) => {
+            Err(LocatorOperationError::ActionBlocked {
+                action,
+                check: ActionabilityCheck::Enabled,
+                reason: reason.clone(),
+            })
+        }
+        ControlState::Text(_) | ControlState::Select(_) | ControlState::Unavailable => {
+            Err(LocatorOperationError::UnsupportedAction {
+                action,
+                reason: format!(
+                    "checked-state mutation for role {} is not implemented",
+                    element.role()
+                ),
+            })
+        }
+    }
+}
+
+fn execute_hover_by_locator(
+    session: &mut Session,
+    locator: &Locator,
+) -> Result<HoverByLocatorResult, LocatorOperationError> {
+    session.locator_match_for(locator)?;
+    Err(LocatorOperationError::UnsupportedAction {
+        action: LocatorAction::Hover,
+        reason: "hover state and pointer event dispatch are not implemented".into(),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1158,8 +1380,19 @@ pub enum SessionError {
         locator: RoleLocator,
         match_count: usize,
     },
+    LocatorNotFound {
+        locator: Locator,
+    },
+    LocatorAmbiguous {
+        locator: Locator,
+        match_count: usize,
+    },
     RoleNavigation {
         locator: RoleLocator,
+        error: LoadError,
+    },
+    LocatorNavigation {
+        locator: Locator,
         error: LoadError,
     },
     RoleActionBlocked {
@@ -1168,9 +1401,20 @@ pub enum SessionError {
         check: ActionabilityCheck,
         reason: String,
     },
+    LocatorActionBlocked {
+        locator: Locator,
+        action: LocatorAction,
+        check: ActionabilityCheck,
+        reason: String,
+    },
     UnsupportedRoleAction {
         locator: RoleLocator,
         action: RoleAction,
+        reason: String,
+    },
+    UnsupportedLocatorAction {
+        locator: Locator,
+        action: LocatorAction,
         reason: String,
     },
     UnsupportedClick {
@@ -1222,21 +1466,78 @@ pub enum SessionError {
     },
 }
 
-fn require_role_visible(
+fn locator_session_error(locator: Locator, error: LocatorOperationError) -> SessionError {
+    match error {
+        LocatorOperationError::NoPage => SessionError::NoPage,
+        LocatorOperationError::NotFound => SessionError::LocatorNotFound { locator },
+        LocatorOperationError::Ambiguous { match_count } => SessionError::LocatorAmbiguous {
+            locator,
+            match_count,
+        },
+        LocatorOperationError::Navigation(error) => {
+            SessionError::LocatorNavigation { locator, error }
+        }
+        LocatorOperationError::ActionBlocked {
+            action,
+            check,
+            reason,
+        } => SessionError::LocatorActionBlocked {
+            locator,
+            action,
+            check,
+            reason,
+        },
+        LocatorOperationError::UnsupportedAction { action, reason } => {
+            SessionError::UnsupportedLocatorAction {
+                locator,
+                action,
+                reason,
+            }
+        }
+    }
+}
+
+fn role_session_error(locator: RoleLocator, error: LocatorOperationError) -> SessionError {
+    match error {
+        LocatorOperationError::NoPage => SessionError::NoPage,
+        LocatorOperationError::NotFound => SessionError::RoleLocatorNotFound { locator },
+        LocatorOperationError::Ambiguous { match_count } => SessionError::RoleLocatorAmbiguous {
+            locator,
+            match_count,
+        },
+        LocatorOperationError::Navigation(error) => SessionError::RoleNavigation { locator, error },
+        LocatorOperationError::ActionBlocked {
+            action,
+            check,
+            reason,
+        } => SessionError::RoleActionBlocked {
+            locator,
+            action,
+            check,
+            reason,
+        },
+        LocatorOperationError::UnsupportedAction { action, reason } => {
+            SessionError::UnsupportedRoleAction {
+                locator,
+                action,
+                reason,
+            }
+        }
+    }
+}
+
+fn require_locator_visible(
     element: &InteractiveElementSource,
-    locator: &RoleLocator,
-    action: RoleAction,
-) -> Result<(), SessionError> {
+    action: LocatorAction,
+) -> Result<(), LocatorOperationError> {
     match element.visible() {
         Ok(true) => Ok(()),
-        Ok(false) => Err(SessionError::RoleActionBlocked {
-            locator: locator.clone(),
+        Ok(false) => Err(LocatorOperationError::ActionBlocked {
             action,
             check: ActionabilityCheck::Visible,
             reason: "element is hidden or has an empty box".into(),
         }),
-        Err(reason) => Err(SessionError::RoleActionBlocked {
-            locator: locator.clone(),
+        Err(reason) => Err(LocatorOperationError::ActionBlocked {
             action,
             check: ActionabilityCheck::Visible,
             reason: reason.into(),
@@ -1244,21 +1545,18 @@ fn require_role_visible(
     }
 }
 
-fn require_role_enabled(
+fn require_locator_enabled(
     element: &InteractiveElementSource,
-    locator: &RoleLocator,
-    action: RoleAction,
-) -> Result<(), SessionError> {
+    action: LocatorAction,
+) -> Result<(), LocatorOperationError> {
     match element.enabled() {
         Some(true) => Ok(()),
-        Some(false) => Err(SessionError::RoleActionBlocked {
-            locator: locator.clone(),
+        Some(false) => Err(LocatorOperationError::ActionBlocked {
             action,
             check: ActionabilityCheck::Enabled,
             reason: "element is disabled".into(),
         }),
-        None => Err(SessionError::UnsupportedRoleAction {
-            locator: locator.clone(),
+        None => Err(LocatorOperationError::UnsupportedAction {
             action,
             reason: format!(
                 "enabled-state evidence for role {} is not implemented",

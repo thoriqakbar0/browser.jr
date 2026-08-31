@@ -71,7 +71,7 @@ Failed navigation preserves the current page and latest snapshot reference.
 
 The caller must capture another interactive snapshot before the next reference action.
 
-A [role locator action](../inspection/query-elements.md) resolves the replacement document directly.
+A [locator action](../inspection/query-elements.md) resolves the replacement document directly.
 
 ## Variants
 

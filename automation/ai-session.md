@@ -4,7 +4,7 @@
 
 `browser.jr session` keeps one engine session alive while it reads line commands from stdin.
 
-The implemented commands cover pages, role locators, snapshots, links, text values, selects, checkboxes, visibility, URLs, and titles. They include `help` and `exit`.
+The implemented commands cover pages, locators, snapshots, links, text values, selects, checkboxes, visibility, URLs, and titles. They include `help` and `exit`.
 
 This text protocol lets an AI agent reuse page and snapshot state. It is separate from the planned JavaScript REPL.
 
@@ -60,9 +60,11 @@ Inside session mode, malformed commands report an error. The process then reads 
 
 `snapshot --interactive` captures supported semantic elements from the current page.
 
-`find role` resolves one supported semantic role locator. It composes click, fill, check, uncheck, hover, and text operations.
+`find` supports role, text, label, placeholder, alt, title, test ID, and positioned compound CSS locators.
 
-Role commands default to click. [`inspection/query-elements.md`](../inspection/query-elements.md) owns their matching and action behavior.
+Each locator kind composes click, fill, check, uncheck, hover, and text operations.
+
+Locator commands default to click. [`inspection/query-elements.md`](../inspection/query-elements.md) owns their matching and action behavior.
 
 `click` resolves its label only through the latest reported snapshot.
 
@@ -94,11 +96,11 @@ The adapter owns one `Session`. It keeps the current page and latest reference s
 
 Each successful snapshot replaces the previous reference set. Human labels may repeat, but their typed identities do not.
 
-Role text, fill, check, and uncheck preserve the current reference set. Failed role actions also preserve it.
+Locator text, fill, check, and uncheck preserve the current reference set. Failed locator actions also preserve it.
 
-A successful role link click installs a fresh document and clears the current reference set.
+A successful locator link click installs a fresh document and clears the current reference set.
 
-Each role action resolves the current document when it runs. It does not reuse a prior role match.
+Each locator action resolves the current document when it runs. It does not reuse a prior match.
 
 A successful open, reload, or navigation clears the reference set. The caller must capture before another reference command.
 
@@ -173,7 +175,7 @@ Status three takes priority over status two. Session mode does not run a finding
 
 **Isolation.** Each process owns one session. A displayed reference never crosses process boundaries.
 
-**Accessibility inspection.** Interactive snapshots and role locators expose the current supported role and name subset.
+**Accessibility inspection.** Interactive snapshots, role locators, and label locators expose the current supported role and name subset.
 
 ## Edge cases
 
@@ -183,13 +185,19 @@ Status three takes priority over status two. Session mode does not run a finding
 - `snapshot` before `open` reports an error and keeps the process alive.
 - A snapshot header gives the number of following element lines.
 - An empty snapshot installs an empty reference set.
-- A role action does not require an earlier snapshot.
-- A role command without an action defaults to click.
-- Role text, fill, check, and uncheck preserve the current reference set.
-- Failed or unsupported role actions preserve the current reference set.
-- A successful role link click clears the current reference set.
+- A locator action does not require an earlier snapshot.
+- A locator command without an action defaults to click.
+- Locator text, fill, check, and uncheck preserve the current reference set.
+- Failed or unsupported locator actions preserve the current reference set.
+- A successful locator link click clears the current reference set.
 - `find role <role> text` prints normalized descendant text without a snapshot.
 - Role fill values may contain spaces before locator options.
+- Multiword non-role locator values require matching quotes.
+- Single-token text-backed locator values do not require quotes.
+- Test ID values match `data-testid` exactly and do not accept `--exact`.
+- First and last choose document-order compound CSS matches.
+- Nth uses a zero-based unsigned index.
+- Unsupported compound CSS syntax reports invalid input and preserves current references.
 - Role hover reports unsupported behavior after strict resolution.
 - `@e0`, padded labels, missing labels, and old labels are invalid.
 - Fill text may contain spaces. It cannot contain a line break.
@@ -225,7 +233,8 @@ Status three takes priority over status two. Session mode does not run a finding
 - Define machine-readable output and command identifiers.
 - Define command cancellation without losing a healthy session.
 - Define input length limits and backpressure.
-- Add label, placeholder, text, test-id, CSS, and index locators through typed request fields.
+- Expand CSS selector grammar and add XPath locators through typed request fields.
+- Define configurable test ID attributes.
 - Add auto-waiting, pointer dispatch, and complete actionability evidence.
 
 Drafted from the Rust implementation and compiled-process tests on 2026-08-31.

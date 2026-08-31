@@ -151,6 +151,139 @@ fn session_mode_uses_role_text_and_fill_without_a_prior_snapshot() {
 }
 
 #[test]
+fn session_mode_uses_label_placeholder_and_text_locators() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <label for="email">Email address</label><input id="email" value="old">
+            <input id="search" aria-label="Search" placeholder="Search docs">
+            <button>Save <span>draft</span></button>
+        "#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nfind label \"Email address\" fill new value --exact\nfind placeholder \"Search docs\" fill query --exact\nfind text \"Save draft\" text --exact\nsnapshot -i\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(
+        output.status.success(),
+        "unexpected stdout: {}\nunexpected stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .contains(r#"filled role="textbox" name="Email address" element="email" characters=9"#)
+    );
+    assert!(
+        stdout.contains(r#"filled role="textbox" name="Search" element="search" characters=5"#)
+    );
+    assert!(stdout.contains("\nSave draft\n"));
+    assert!(stdout.contains(r#"- textbox "Email address" [ref=@e1]: "new value""#));
+    assert!(stdout.contains(r#"- textbox "Search" [ref=@e2]: "query""#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn session_mode_clicks_by_text_and_re_resolves_a_label() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"<a href="/next">Next page</a>"#,
+        r#"<label for="note">Note</label><input id="note">"#,
+    ]);
+    let output = run_session_script(&format!(
+        "open {url}\nfind text \"Next page\"\nfind label Note fill arrived --exact\nsnapshot -i\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(&format!(
+        r#"navigated role="link" name="Next page" element="a[1]" url={url}next elements=1"#
+    )));
+    assert!(stdout.contains(r#"filled role="textbox" name="Note" element="note" characters=7"#));
+    assert!(stdout.contains(r#"- textbox "Note" [ref=@e1]: "arrived""#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn failed_label_locator_preserves_current_snapshot_references() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<input aria-label="Email" value="first"><input aria-label="Email" value="second"><button>Save</button>"#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nsnapshot -i\nfind label Email fill changed --exact\nget value @e1\nget text @e3\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#"value ref=@e1 "first""#));
+    assert!(stdout.contains(r#"text ref=@e3 "Save""#));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains(r#"2 elements match exact label "Email"; locator must be unique"#));
+    assert!(!stderr.contains("unknown or stale element reference"));
+}
+
+#[test]
+fn session_mode_supports_alt_title_test_id_and_css_positions() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <img alt="Product image">
+            <span title="Issue count">25 issues</span>
+            <input id="email" data-testid="email-field" value="old">
+            <div class="card" data-kind="item">Alpha</div>
+            <div class="card" data-kind="item">Beta</div>
+            <div class="card" data-kind="item">Gamma</div>
+        "#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nfind alt \"Product image\" text --exact\nfind title \"Issue count\" text --exact\nfind testid email-field fill new\nfind first .card text\nfind last div.card text\nfind nth 1 '[data-kind=item]' text\nsnapshot -i\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(
+        output.status.success(),
+        "unexpected stdout: {}\nunexpected stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\n25 issues\n"));
+    assert!(stdout.contains(r#"filled role="textbox" name="" element="email" characters=3"#));
+    assert!(stdout.contains("\nAlpha\n"));
+    assert!(stdout.contains("\nBeta\n"));
+    assert!(stdout.contains("\nGamma\n"));
+    assert!(stdout.contains(r#"- textbox "" [ref=@e1]: "new""#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn unsupported_css_position_selector_preserves_current_references() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(r#"<input value="old"><div class="card">Card</div>"#);
+    let output = run_session_script(&format!(
+        "open {url}\nsnapshot -i\nfind first \"div .card\" text\nget value @e1\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#"value ref=@e1 "old""#));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("invalid locator: CSS selector uses unsupported syntax"));
+    assert!(!stderr.contains("unknown or stale element reference"));
+}
+
+#[test]
 fn session_mode_checks_and_unchecks_by_role_without_a_snapshot() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<label><input type="checkbox">Terms</label>"#);

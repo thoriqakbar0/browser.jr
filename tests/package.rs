@@ -1,12 +1,14 @@
 use browser_jr::{
-    ActionabilityCheck, ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot,
-    CheckElementWidth, ClickByRole, ClickByRoleResult, ClickElement, ClickResult, Comparison,
-    ElementInput, ElementVisible, FillByRole, FillElement, FillResult, FindByRole,
-    GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementText, GetElementValue,
-    GetElementVisible, GetPageTitle, GetPageUrl, HoverByRole, InteractiveElementState, LayoutInput,
-    LayoutMutation, LintLayout, OpenPage, ReloadPage, RoleAction, RoleLocator, RuleConstraint,
-    RuleResult, SelectElement, SelectResult, Session, SessionError, SetCheckedByRole,
-    SetElementChecked,
+    ActionabilityCheck, AltLocator, ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot,
+    CheckElementWidth, ClickByLocator, ClickByLocatorResult, ClickByRole, ClickByRoleResult,
+    ClickElement, ClickResult, Comparison, CssLocator, ElementInput, ElementVisible, FillByLocator,
+    FillByRole, FillElement, FillResult, FindByLocator, FindByRole, GetElementAttribute,
+    GetElementChecked, GetElementEnabled, GetElementText, GetElementValue, GetElementVisible,
+    GetPageTitle, GetPageUrl, HoverByLocator, HoverByRole, InteractiveElementState, LabelLocator,
+    LayoutInput, LayoutMutation, LintLayout, Locator, LocatorAction, OpenPage, PlaceholderLocator,
+    ReloadPage, RoleAction, RoleLocator, RuleConstraint, RuleResult, SelectElement, SelectResult,
+    Session, SessionError, SetCheckedByLocator, SetCheckedByRole, SetElementChecked, TestIdLocator,
+    TextLocator, TitleLocator,
 };
 use std::io::Write;
 use std::net::TcpListener;
@@ -519,6 +521,347 @@ fn role_actions_block_when_visibility_evidence_is_unavailable() {
             reason: "linked and embedded stylesheet visibility is not implemented".into(),
         })
     );
+}
+
+#[test]
+fn text_label_and_placeholder_locators_follow_user_facing_sources() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <label for="email">Email address</label><input id="email">
+            <input id="username" aria-label="Username">
+            <textarea id="search" placeholder="Search docs"></textarea>
+            <div id="greeting">Hello <span id="world">world</span></div>
+            <div id="hello">Hello</div>
+            <input id="login" type="submit" value="Log in">
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let email = session
+        .execute(FindByLocator {
+            locator: Locator::from(LabelLocator::new("email").unwrap()),
+        })
+        .unwrap();
+    let username = session
+        .execute(FindByLocator {
+            locator: Locator::from(LabelLocator::new("Username").unwrap().exact()),
+        })
+        .unwrap();
+    let search = session
+        .execute(FindByLocator {
+            locator: Locator::from(PlaceholderLocator::new("Search docs").unwrap().exact()),
+        })
+        .unwrap();
+    let world = session
+        .execute(FindByLocator {
+            locator: Locator::from(TextLocator::new("world").unwrap().exact()),
+        })
+        .unwrap();
+    let hello = session
+        .execute(FindByLocator {
+            locator: Locator::from(TextLocator::new("Hello").unwrap().exact()),
+        })
+        .unwrap();
+    let submit = session
+        .execute(FindByLocator {
+            locator: Locator::from(TextLocator::new("Log in").unwrap().exact()),
+        })
+        .unwrap();
+    let ambiguous_locator = Locator::from(TextLocator::new("hello").unwrap());
+    let ambiguous = session.execute(FindByLocator {
+        locator: ambiguous_locator.clone(),
+    });
+    drop(network_guard);
+
+    assert_eq!(email.element, "email");
+    assert_eq!(email.role.as_deref(), Some("textbox"));
+    assert_eq!(username.element, "username");
+    assert_eq!(search.element, "search");
+    assert_eq!(world.element, "world");
+    assert_eq!(world.role, None);
+    assert_eq!(hello.element, "hello");
+    assert_eq!(submit.element, "login");
+    assert_eq!(submit.role.as_deref(), Some("button"));
+    assert_eq!(
+        ambiguous,
+        Err(SessionError::LocatorAmbiguous {
+            locator: ambiguous_locator,
+            match_count: 2,
+        })
+    );
+}
+
+#[test]
+fn locator_actions_fill_check_and_navigate_through_one_pipeline() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"
+            <label for="email">Email address</label><input id="email" value="old">
+            <input id="search" aria-label="Search" placeholder="Search docs">
+            <label><input id="terms" type="checkbox">Accept terms</label>
+            <a id="next" href="/next">Next page</a>
+        "#,
+        r#"<h1>Arrived</h1>"#,
+    ]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let email_ref = snapshot.elements[0].reference;
+    let search_ref = snapshot.elements[1].reference;
+    let terms_ref = snapshot.elements[2].reference;
+
+    let email = session
+        .execute(FillByLocator {
+            locator: Locator::from(LabelLocator::new("Email address").unwrap().exact()),
+            value: "new address".into(),
+        })
+        .unwrap();
+    let search = session
+        .execute(FillByLocator {
+            locator: Locator::from(PlaceholderLocator::new("search").unwrap()),
+            value: "query".into(),
+        })
+        .unwrap();
+    let terms = session
+        .execute(SetCheckedByLocator {
+            locator: Locator::from(LabelLocator::new("Accept terms").unwrap().exact()),
+            checked: true,
+        })
+        .unwrap();
+    let current_email = session.execute(GetElementValue {
+        reference: email_ref,
+    });
+    let current_search = session.execute(GetElementValue {
+        reference: search_ref,
+    });
+    let current_terms = session.execute(GetElementChecked {
+        reference: terms_ref,
+    });
+    let navigation = session
+        .execute(ClickByLocator {
+            locator: Locator::from(TextLocator::new("Next page").unwrap().exact()),
+        })
+        .unwrap();
+    server.join().unwrap();
+    let stale = session.execute(GetElementValue {
+        reference: email_ref,
+    });
+    drop(network_guard);
+
+    assert_eq!(email.value, "new address");
+    assert_eq!(email.matched.element, "email");
+    assert_eq!(search.value, "query");
+    assert!(terms.checked);
+    assert_eq!(current_email.unwrap().value, "new address");
+    assert_eq!(current_search.unwrap().value, "query");
+    assert!(current_terms.unwrap().checked);
+    assert!(matches!(
+        navigation,
+        ClickByLocatorResult::Navigated { matched, page }
+            if matched.element == "next" && page.url == format!("{url}next")
+    ));
+    assert_eq!(
+        stale,
+        Err(SessionError::StaleElementReference {
+            reference: email_ref,
+        })
+    );
+}
+
+#[test]
+fn locator_actions_resolve_strictly_and_preserve_state_on_failure() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <input aria-label="Email" value="first">
+            <input aria-label="Email" value="second">
+            <input aria-label="Hidden" placeholder="Secret" value="old" hidden>
+            <button>Save</button>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let first = snapshot.elements[0].reference;
+    let save = snapshot.elements[3].reference;
+    let ambiguous_locator = Locator::from(LabelLocator::new("Email").unwrap().exact());
+    let hidden_locator = Locator::from(PlaceholderLocator::new("Secret").unwrap().exact());
+    let hover_locator = Locator::from(TextLocator::new("Save").unwrap().exact());
+
+    let ambiguous = session.execute(FillByLocator {
+        locator: ambiguous_locator.clone(),
+        value: "changed".into(),
+    });
+    let hidden = session.execute(FillByLocator {
+        locator: hidden_locator.clone(),
+        value: "changed".into(),
+    });
+    let hover = session.execute(HoverByLocator {
+        locator: hover_locator.clone(),
+    });
+    let preserved = session.execute(GetElementValue { reference: first });
+    let preserved_ref = session.execute(GetElementText { reference: save });
+    drop(network_guard);
+
+    assert_eq!(
+        ambiguous,
+        Err(SessionError::LocatorAmbiguous {
+            locator: ambiguous_locator,
+            match_count: 2,
+        })
+    );
+    assert!(matches!(
+        hidden,
+        Err(SessionError::LocatorActionBlocked {
+            locator,
+            action: LocatorAction::Fill,
+            check: ActionabilityCheck::Visible,
+            ..
+        }) if locator == hidden_locator
+    ));
+    assert!(matches!(
+        hover,
+        Err(SessionError::UnsupportedLocatorAction {
+            locator,
+            action: LocatorAction::Hover,
+            ..
+        }) if locator == hover_locator
+    ));
+    assert_eq!(preserved.unwrap().value, "first");
+    assert_eq!(preserved_ref.unwrap().text, "Save");
+}
+
+#[test]
+fn alt_title_and_test_id_locators_use_static_attributes() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"
+            <img id="hero" alt="Product Image">
+            <span id="count" title="Issue count">25 issues</span>
+            <input id="email" data-testid="email-field" value="old">
+            <div data-testid="duplicate">First</div>
+            <div data-testid="duplicate">Second</div>
+            <a id="next" data-testid="next-link" href="/next">Continue</a>
+        "#,
+        r#"<h1>Arrived</h1>"#,
+    ]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let email_ref = snapshot.elements[0].reference;
+
+    let image = session
+        .execute(FindByLocator {
+            locator: Locator::from(AltLocator::new("product image").unwrap()),
+        })
+        .unwrap();
+    let count = session
+        .execute(FindByLocator {
+            locator: Locator::from(TitleLocator::new("Issue count").unwrap().exact()),
+        })
+        .unwrap();
+    let email = session
+        .execute(FillByLocator {
+            locator: Locator::from(TestIdLocator::new("email-field").unwrap()),
+            value: "new".into(),
+        })
+        .unwrap();
+    let current_email = session.execute(GetElementValue {
+        reference: email_ref,
+    });
+    let duplicate_locator = Locator::from(TestIdLocator::new("duplicate").unwrap());
+    let duplicate = session.execute(FindByLocator {
+        locator: duplicate_locator.clone(),
+    });
+    let navigation = session
+        .execute(ClickByLocator {
+            locator: Locator::from(TestIdLocator::new("next-link").unwrap()),
+        })
+        .unwrap();
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert_eq!(image.element, "hero");
+    assert_eq!(image.role.as_deref(), Some("img"));
+    assert_eq!(count.element, "count");
+    assert_eq!(count.text, "25 issues");
+    assert_eq!(email.matched.element, "email");
+    assert_eq!(current_email.unwrap().value, "new");
+    assert_eq!(
+        duplicate,
+        Err(SessionError::LocatorAmbiguous {
+            locator: duplicate_locator,
+            match_count: 2,
+        })
+    );
+    assert!(matches!(
+        navigation,
+        ClickByLocatorResult::Navigated { matched, page }
+            if matched.element == "next" && page.url == format!("{url}next")
+    ));
+}
+
+#[test]
+fn css_position_locators_select_document_order_without_ambiguity() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <input id="first" class="card field" data-kind="item" value="one">
+            <input id="second" class="card field" data-kind="item" value="two">
+            <input id="third" class="card field" data-kind="item" value="three">
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let first_ref = snapshot.elements[0].reference;
+    let first = session
+        .execute(FindByLocator {
+            locator: Locator::from(CssLocator::first(".card").unwrap()),
+        })
+        .unwrap();
+    let zero = session
+        .execute(FindByLocator {
+            locator: Locator::from(CssLocator::nth(0, ".card").unwrap()),
+        })
+        .unwrap();
+    let last = session
+        .execute(FindByLocator {
+            locator: Locator::from(CssLocator::last("input.card[data-kind=item]").unwrap()),
+        })
+        .unwrap();
+    let second = session
+        .execute(FillByLocator {
+            locator: Locator::from(CssLocator::nth(1, "input.field[data-kind='item']").unwrap()),
+            value: "changed".into(),
+        })
+        .unwrap();
+    let missing_locator = Locator::from(CssLocator::nth(3, ".card").unwrap());
+    let missing = session.execute(FindByLocator {
+        locator: missing_locator.clone(),
+    });
+    let preserved = session.execute(GetElementValue {
+        reference: first_ref,
+    });
+    drop(network_guard);
+
+    assert_eq!(first.element, "first");
+    assert_eq!(zero.element, "first");
+    assert_eq!(last.element, "third");
+    assert_eq!(second.matched.element, "second");
+    assert_eq!(second.value, "changed");
+    assert_eq!(
+        missing,
+        Err(SessionError::LocatorNotFound {
+            locator: missing_locator,
+        })
+    );
+    assert_eq!(preserved.unwrap().value, "one");
 }
 
 #[test]
