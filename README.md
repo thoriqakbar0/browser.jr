@@ -74,6 +74,15 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets
 ```
 
+Run the cross-engine browser-control benchmark separately:
+
+```sh
+cd benchmarks
+pnpm install --frozen-lockfile
+pnpm browsers:install
+pnpm bench
+```
+
 ## Project notes
 
 - [`architecture.md`](architecture.md) describes the proposed engine design.
@@ -81,5 +90,6 @@ cargo test --all-targets
 - [`goal.md`](goal.md) explains how to maintain the product description.
 - [`verification/`](verification/README.md) holds runtime checklists.
 - [`bug-triage.md`](bug-triage.md) records confirmed conflicts.
+- [`benchmarks/README.md`](benchmarks/README.md) defines cross-engine correctness and latency checks.
 
 Evidence date: 31 August 2026.
