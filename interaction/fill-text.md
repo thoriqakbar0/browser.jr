@@ -8,7 +8,7 @@ Session-mode callers send `fill <ref> <text>` after an interactive snapshot in t
 
 [Locator actions](../inspection/query-elements.md) define the snapshot-free fill path.
 
-Fill replaces the complete value. It does not imitate keyboard entry or dispatch browser events.
+Fill replaces the complete value and records one bubbling `input` event. It does not imitate keyboard entry.
 
 ## The simple case
 
@@ -27,7 +27,8 @@ stateDiagram-v2
     checking_reference --> checking_control : current reference
     checking_control --> unsupported : control is not fillable
     checking_control --> replacing : supported text control
-    replacing --> filled
+    replacing --> dispatching_input
+    dispatching_input --> filled
     rejected --> finished
     unsupported --> finished
     filled --> finished
@@ -55,7 +56,9 @@ browser.jr checks the referenced element's fill capability.
 
 Fill replaces the stored value once. It keeps the current reference usable.
 
-The current implementation does not dispatch `beforeinput`, `input`, `change`, focus, or keyboard events.
+The implementation records one bubbling `input` event with the target-to-root element path.
+
+It does not dispatch `beforeinput`, `change`, focus, or keyboard events. It does not invoke event listeners.
 
 It does not run constraint validation, page scripts, or form submission.
 
@@ -117,12 +120,13 @@ A later interactive snapshot reports the current value. That new capture makes t
 - Explicit ARIA roles do not make a non-editable element fillable.
 - A rejected fill preserves the current value and reference.
 - Repeated fill replaces the previous value.
+- Every successful fill records one `input` event, including a repeated value.
 - Fill does not invalidate the current reference. A later snapshot does.
 
 ## Open questions and verification
 
 - Define password input handling without exposing secrets.
-- Define native validation and event order before expanding input types.
+- Define `beforeinput`, focus, and listener behavior before expanding input types.
 - Define maximum value size.
 - Add keyboard entry as a separate action because it has different event behavior.
 

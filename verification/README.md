@@ -54,23 +54,23 @@ CLI output, exit status, and saved machine-readable results can be checked by sc
 
 ## Results so far
 
-Automated tests cover CLI discovery, loopback loading, static HTML geometry, typed requests, transactional `x` and `width` invalidation, and explicit project width limits. DLINT-01 through DLINT-04 and DLINT-12 have partial automated evidence from 2026-08-29. DLINT-11 has partial package and kernel evidence from 2026-08-31.
+Automated tests cover CLI discovery, loopback loading, static HTML geometry, typed requests, transactional `x` and `width` invalidation, and explicit project width limits. DLINT-01 through DLINT-04 and DLINT-12 have partial automated evidence from 2026-08-29. DLINT-11 and DLINT-13 have partial automated evidence from 2026-08-31.
 
 Interactive snapshot tests cover semantics, control state, scopes, references, JSON envelopes, empty pages, and replacement. SNAP-01 through SNAP-16 have partial automated evidence from 2026-08-31.
 
 Navigation tests cover relative links, fresh and stale references, unsupported clicks, and failed-navigation recovery. NAV-01 through NAV-06 have partial automated evidence from 2026-08-31.
 
-Session-mode tests cover persistent actions, observations, scoped snapshots, direct selectors, locator actions, reload, metadata, stale labels, and recovery. AISESSION-01 through AISESSION-28 have partial evidence from 2026-08-31.
+Session-mode tests cover persistent actions, observations, scoped snapshots, direct selectors, locator actions, events, reload, metadata, stale labels, and recovery. AISESSION-01 through AISESSION-29 have partial evidence from 2026-08-31.
 
-Fill tests cover initial values, replacement, snapshot evidence, stale references, and session-mode text. FILL-01 through FILL-05 have partial automated evidence from 2026-08-31.
+Fill tests cover initial values, replacement, event records, snapshot evidence, stale references, and session-mode text. FILL-01 through FILL-06 have partial automated evidence from 2026-08-31.
 
 Value tests cover text and native-select reads, direct selectors, unsupported controls, stale references, and session output. VALUE-01 through VALUE-08 have partial automated evidence from 2026-08-31.
 
-Select tests cover value, label, index, lists, direct selectors, disabled boundaries, atomic failures, and stale references. SELECT-01 through SELECT-13 have partial automated evidence from 2026-08-31.
+Select tests cover value, label, index, lists, direct selectors, disabled boundaries, atomic failures, events, and stale references. SELECT-01 through SELECT-14 have partial automated evidence from 2026-08-31.
 
-Checkbox tests cover reference and selector writes, reads, snapshots, disabled controls, idempotence, and stale references. CHECK-01 through CHECK-07 have partial automated evidence from 2026-08-31.
+Checkbox tests cover reference and selector writes, reads, snapshots, disabled controls, idempotence, events, and stale references. CHECK-01 through CHECK-08 have partial automated evidence from 2026-08-31.
 
-Text tests cover selector and reference reads, descendants, empty text, accessible-name separation, repeated reads, and navigation. TEXT-01 through TEXT-06 have partial automated evidence from 2026-08-31.
+Text tests cover selector and reference reads, descendants, inert raw text, empty text, accessible-name separation, repeated reads, and navigation. TEXT-01 through TEXT-07 have partial automated evidence from 2026-08-31.
 
 Attribute tests cover selector and reference reads for present, missing, normalized, invalid, and sensitive values. ATTR-01 through ATTR-06 have partial automated evidence from 2026-08-31.
 
@@ -78,10 +78,10 @@ HTML tests cover normalized serialization, selector and reference reads, outer-t
 
 Enabled-state tests cover direct selectors, active, disabled, unsupported, and reusable references. ENABLED-01 through ENABLED-05 have partial automated evidence from 2026-08-31.
 
-Visibility tests cover selector and reference reads for static boxes, hidden states, unsupported evidence, and reusable references. VISIBLE-01 through VISIBLE-07 have partial automated evidence from 2026-08-31.
+Visibility tests cover selector and reference reads for static boxes, inline and embedded hidden states, quoted selector values, unsupported evidence, and reusable references. VISIBLE-01 through VISIBLE-09 have partial automated evidence from 2026-08-31.
 
 Reload tests cover replacement, stale references, failed-load recovery, and missing pages. RELOAD-01 through RELOAD-04 have partial automated evidence from 2026-08-31.
 
-Locator tests cover semantic, attribute, CSS, and XPath matching. They also cover direct selector actions and reads, strict and collection resolution, document order, navigation, and reference lifetimes. QUERY-01 through QUERY-36 have partial automated evidence from 2026-08-31.
+Locator tests cover semantic, attribute, CSS, and XPath matching with normalized ancestry. They also cover direct selector actions and reads, strict and collection resolution, document order, navigation, and reference lifetimes. QUERY-01 through QUERY-37 have partial automated evidence from 2026-08-31.
 
 TTY conditions, interactive cancellation, and broader rendering remain unverified.

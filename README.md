@@ -36,8 +36,8 @@ printf 'open http://localhost:3000\nsnapshot --interactive\nget title\nexit\n' \
 ## What works
 
 - bounded loopback HTTP loading
-- static HTML parsing
-- a small inline CSS and horizontal layout subset
+- normalized static HTML ancestry
+- a small inline and embedded CSS cascade with horizontal layout
 - role, text, label, attribute, CSS, and XPath locators
 - direct CSS and XPath targets for implemented session actions, reads, and counts
 - text input, checkbox, native single-select, multiple-select, and same-context link actions
@@ -47,11 +47,12 @@ printf 'open http://localhost:3000\nsnapshot --interactive\nget title\nexit\n' \
 - two deterministic layout checks
 - transactional incremental layout for `x` and `width`
 - validated screenshot regions, paint commands, RGBA output, and lazy raster-process activation
+- recorded native `click`, `input`, and `change` events
 
 ## What does not work
 
 - JavaScript
-- DOM events
+- JavaScript event listeners and a complete DOM event loop
 - a complete DOM, CSS cascade, or layout engine
 - page paint-list construction, screenshot output, or compositing
 - Playwright or `agent-browser` protocol compatibility

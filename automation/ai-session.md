@@ -100,6 +100,8 @@ Quoted values select a non-empty value list: `select @e1 "b" "a"`.
 
 `is visible` reads supported static box and visibility state through a reference or direct selector.
 
+`events` drains recorded native events. It accepts no arguments.
+
 ### While running
 
 The adapter owns one `Session`. It keeps the current page and latest reference set in memory.
@@ -140,6 +142,8 @@ Enabled-state reads preserve the current reference set.
 
 Visibility reads preserve the current reference set, including unsupported reads.
 
+Supported actions append events until `events` drains the queue. A second drain reports zero events.
+
 browser.jr flushes stdout and stderr after each command.
 
 ### Finish
@@ -149,6 +153,10 @@ browser.jr flushes stdout and stderr after each command.
 The process writes `session closed`, flushes output, and exits. All session state then disappears.
 
 Any command error affects the final exit status even when later commands succeed.
+
+`events` first prints `events=<count>`. Each following line reports type, document, target, bubbling, path, and ordinal.
+
+The queue exists only for the current process. Navigation preserves already recorded events until the next drain.
 
 ## Variants
 
@@ -212,9 +220,11 @@ Status three takes priority over status two. Session mode does not run a finding
 - Multiword non-role locator values require matching quotes.
 - Single-token text-backed locator values do not require quotes.
 - Test ID values match `data-testid` exactly and do not accept `--exact`.
-- First and last choose document-order compound CSS matches.
+- First and last choose document-order CSS matches. Combinators traverse normalized HTML ancestry.
+- `events` accepts no arguments and drains the process-owned event queue.
+- Empty event queues report `events=0`.
 - Nth uses a zero-based unsigned index.
-- Unsupported compound CSS syntax reports invalid input and preserves current references.
+- Unsupported CSS syntax reports invalid input and preserves current references.
 - Role hover reports unsupported behavior after strict resolution.
 - `@e0`, padded labels, missing labels, and old labels are invalid.
 - Fill text may contain spaces. It cannot contain a line break.

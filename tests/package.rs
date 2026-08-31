@@ -2,19 +2,19 @@ use browser_jr::{
     ActionabilityCheck, AltLocator, ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot,
     CaptureInteractiveSnapshotWithin, CheckElementWidth, ClickByLocator, ClickByLocatorResult,
     ClickByRole, ClickByRoleResult, ClickElement, ClickResult, Comparison, CountByLocator,
-    CssLocator, ElementInput, ElementVisible, FillByLocator, FillByRole, FillElement, FillResult,
-    FindAllByLocator, FindByLocator, FindByRole, GetAttributeByLocator, GetCheckedByLocator,
-    GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementHtml, GetElementText,
-    GetElementValue, GetElementVisible, GetEnabledByLocator, GetHtmlByLocator, GetPageTitle,
-    GetPageUrl, GetValueByLocator, GetVisibleByLocator, HoverByLocator, HoverByRole,
+    CssLocator, DomEventType, ElementInput, ElementVisible, FillByLocator, FillByRole, FillElement,
+    FillResult, FindAllByLocator, FindByLocator, FindByRole, GetAttributeByLocator,
+    GetCheckedByLocator, GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementHtml,
+    GetElementText, GetElementValue, GetElementVisible, GetEnabledByLocator, GetHtmlByLocator,
+    GetPageTitle, GetPageUrl, GetValueByLocator, GetVisibleByLocator, HoverByLocator, HoverByRole,
     InteractiveElementState, LabelLocator, LayoutInput, LayoutMutation, LintLayout, Locator,
     LocatorAction, LocatorInspection, NonEmpty, OpenPage, PlaceholderLocator, ReloadPage,
     RoleAction, RoleLocator, RuleConstraint, RuleResult, SelectByLocator, SelectElement,
     SelectOptionTarget, SelectOptions, SelectOptionsByLocator, SelectOptionsResult, SelectResult,
-    Session, SessionError, SetCheckedByLocator, SetCheckedByRole, SetElementChecked, TestIdLocator,
-    TextLocator, TitleLocator, XPathLocator,
+    Session, SessionError, SetCheckedByLocator, SetCheckedByRole, SetElementChecked, TakeDomEvents,
+    TestIdLocator, TextLocator, TitleLocator, XPathLocator,
 };
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::{Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -47,6 +47,7 @@ fn serve_pages(bodies: Vec<&'static str>) -> (String, JoinHandle<()>) {
     let handle = thread::spawn(move || {
         for body in bodies {
             let (mut stream, _) = listener.accept().unwrap();
+            read_request_headers(&stream);
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -56,6 +57,16 @@ fn serve_pages(bodies: Vec<&'static str>) -> (String, JoinHandle<()>) {
         }
     });
     (format!("http://{address}/"), handle)
+}
+
+fn read_request_headers(stream: &std::net::TcpStream) {
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+            return;
+        }
+    }
 }
 
 #[test]
@@ -589,7 +600,7 @@ fn failed_role_navigation_preserves_the_page_and_snapshot_references() {
 fn role_actions_block_when_visibility_evidence_is_unavailable() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(
-        r#"<style>input { display:block }</style><input aria-label="Styled" value="old">"#,
+        r#"<link rel="stylesheet" href="/style.css"><input aria-label="Styled" value="old">"#,
     );
     let mut session = Session::new();
     session.execute(OpenPage { url }).unwrap();
@@ -610,7 +621,7 @@ fn role_actions_block_when_visibility_evidence_is_unavailable() {
             locator,
             action: RoleAction::Fill,
             check: ActionabilityCheck::Visible,
-            reason: "linked and embedded stylesheet visibility is not implemented".into(),
+            reason: "linked stylesheet loading is not implemented".into(),
         })
     );
 }
@@ -2381,6 +2392,115 @@ fn project_width_limit_blocks_when_target_geometry_is_unsupported() {
             }),
         }
     );
+}
+
+#[test]
+fn native_actions_record_ordered_dom_events_with_ancestry() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<main id="root"><label>Name<input id="name"></label><label><input id="terms" type="checkbox">Terms</label><select id="size"><option value="s">Small</option><option value="l">Large</option></select></main>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+
+    session
+        .execute(FillElement {
+            reference: snapshot.elements[0].reference,
+            value: "Ada".into(),
+        })
+        .unwrap();
+    session
+        .execute(SetElementChecked {
+            reference: snapshot.elements[1].reference,
+            checked: true,
+        })
+        .unwrap();
+    session
+        .execute(SetElementChecked {
+            reference: snapshot.elements[1].reference,
+            checked: true,
+        })
+        .unwrap();
+    session
+        .execute(SelectElement {
+            reference: snapshot.elements[2].reference,
+            value: "l".into(),
+        })
+        .unwrap();
+    let events = session.execute(TakeDomEvents).unwrap();
+    let empty = session.execute(TakeDomEvents).unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| (event.event_type, event.target.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (DomEventType::Input, "name"),
+            (DomEventType::Input, "terms"),
+            (DomEventType::Change, "terms"),
+            (DomEventType::Input, "size"),
+            (DomEventType::Change, "size"),
+        ]
+    );
+    assert_eq!(events[0].path, vec!["name", "label[2]", "root"]);
+    assert_eq!(events[0].target_ordinal, 3);
+    assert!(events.iter().all(|event| event.bubbles));
+    assert!(empty.is_empty());
+}
+
+#[test]
+fn link_click_event_survives_successful_navigation() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"<main id="root"><a id="next" href="/next">Next</a></main>"#,
+        r#"<main>Arrived</main>"#,
+    ]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    session
+        .execute(ClickElement {
+            reference: snapshot.elements[0].reference,
+        })
+        .unwrap();
+    server.join().unwrap();
+    let events = session.execute(TakeDomEvents).unwrap();
+    drop(network_guard);
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_type, DomEventType::Click);
+    assert_eq!(events[0].target, "next");
+    assert_eq!(events[0].target_ordinal, 2);
+    assert_eq!(events[0].path, vec!["next", "root"]);
+}
+
+#[test]
+fn optional_tags_preserve_native_event_ancestry() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<ul id="list"><li id="first"><input id="one" type="checkbox"><li id="second"><input id="two" type="checkbox"></ul>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    session
+        .execute(SetCheckedByLocator {
+            locator: Locator::from(CssLocator::first("#second > #two").unwrap()),
+            checked: true,
+        })
+        .unwrap();
+    let events = session.execute(TakeDomEvents).unwrap();
+    drop(network_guard);
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].target_ordinal, 5);
+    assert_eq!(events[0].path, vec!["two", "second", "list"]);
+    assert_eq!(events[1].path, events[0].path);
 }
 
 #[test]

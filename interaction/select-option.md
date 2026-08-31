@@ -8,7 +8,7 @@ They use `SelectOptions` or `SelectOptionsByLocator` for a non-empty typed optio
 
 Session mode accepts `select <ref|selector> <value>` for one value. Quoted values form a list.
 
-Select supports native single and multiple controls. It does not dispatch browser events.
+Select supports native single and multiple controls. A changed selection records bubbling `input` and `change` events.
 
 ## The simple case
 
@@ -30,7 +30,8 @@ stateDiagram-v2
     validating --> missing : one exact value is absent
     validating --> disabled : one matched option is disabled
     validating --> storing : every requested value is enabled
-    storing --> reported
+    storing --> dispatching_events
+    dispatching_events --> reported
     rejected --> finished
     unsupported --> finished
     missing --> finished
@@ -90,7 +91,9 @@ Locator selection also requires supported visible evidence before mutation.
 
 The action keeps the current reference usable. It changes no other control.
 
-The implementation dispatches no `input`, `change`, focus, pointer, or keyboard events.
+When selection changes, the implementation records `input`, then `change`. Both events bubble.
+
+Selecting the current value records no event. The implementation does not invoke listeners or dispatch focus, pointer, or keyboard events.
 
 It does not run scripts, constraint validation, form submission, or browser activation algorithms.
 
@@ -181,7 +184,7 @@ An observed agent-browser 0.32.4 run accepted a disabled option. browser.jr keep
 
 - Define empty-list selection and explicit deselection.
 - Define label and index syntax for session mode.
-- Define event order before adding event dispatch.
+- Define focus, listener, and native activation behavior before broadening event dispatch.
 - Define form reset and submission behavior.
 - Define quote escaping for session value lists.
 

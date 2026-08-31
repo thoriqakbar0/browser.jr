@@ -5,7 +5,7 @@ use dom_query::{Document, Matcher, NodeData, NodeId, NodeRef};
 use sxd_document::dom;
 use sxd_xpath::{Context, Factory, Value};
 
-use super::{ElementSource, is_content_element};
+use super::ElementSource;
 
 #[derive(Clone)]
 pub(crate) struct SelectorIndex {
@@ -30,16 +30,16 @@ impl SelectorIndex {
         let candidates = document
             .root()
             .descendants_it()
-            .filter(|node| {
-                node.node_name()
-                    .is_some_and(|name| is_content_element(name.as_ref()))
-            })
+            .filter(|node| node.node_name().is_some())
             .collect::<Vec<_>>();
         let mut locator_by_node = BTreeMap::new();
         let mut next_candidate = 0;
         let mut mapping_error = None;
 
         for (source_index, source) in sources.iter().enumerate() {
+            if source.content_ordinal.is_none() {
+                continue;
+            }
             let matched = candidates[next_candidate..]
                 .iter()
                 .position(|node| node_matches_source(*node, source))
@@ -294,12 +294,22 @@ mod tests {
         "#;
         let source = parse_page_source(html);
         let selectors = SelectorIndex::new(html, &source.elements);
+        let first = source
+            .elements
+            .iter()
+            .position(|element| element.id == "first")
+            .unwrap();
+        let second = source
+            .elements
+            .iter()
+            .position(|element| element.id == "second")
+            .unwrap();
 
         assert_eq!(
             selectors
                 .css_matches("main > section.cards:nth-child(2) button, #first")
                 .unwrap(),
-            vec![2, 4]
+            vec![first, second]
         );
     }
 
@@ -313,12 +323,17 @@ mod tests {
         "#;
         let source = parse_page_source(html);
         let selectors = SelectorIndex::new(html, &source.elements);
+        let second = source
+            .elements
+            .iter()
+            .position(|element| element.id == "second")
+            .unwrap();
 
         assert_eq!(
             selectors
                 .xpath_matches("//section[@data-kind='cards']/button[2]")
                 .unwrap(),
-            vec![2]
+            vec![second]
         );
     }
 
@@ -339,9 +354,14 @@ mod tests {
         let html = r#"<section id="card"><span data-x="a&amp;b">Hello &amp; <b>world</b></span><!-- note --></section>"#;
         let source = parse_page_source(html);
         let selectors = SelectorIndex::new(html, &source.elements);
+        let card = source
+            .elements
+            .iter()
+            .position(|element| element.id == "card")
+            .unwrap();
 
         assert_eq!(
-            selectors.inner_html(0).unwrap(),
+            selectors.inner_html(card).unwrap(),
             r#"<span data-x="a&amp;b">Hello &amp; <b>world</b></span><!-- note -->"#
         );
     }
@@ -351,9 +371,32 @@ mod tests {
         let html = r#"<div id="safe"></div><div id="secret"><input type="PASSWORD" value="private"></div>"#;
         let source = parse_page_source(html);
         let selectors = SelectorIndex::new(html, &source.elements);
+        let safe = source
+            .elements
+            .iter()
+            .position(|element| element.id == "safe")
+            .unwrap();
+        let secret = source
+            .elements
+            .iter()
+            .position(|element| element.id == "secret")
+            .unwrap();
+        let input = source
+            .elements
+            .iter()
+            .position(|element| element.tag == "input")
+            .unwrap();
 
-        assert!(!selectors.inner_html_contains_sensitive_value(0).unwrap());
-        assert!(selectors.inner_html_contains_sensitive_value(1).unwrap());
-        assert!(!selectors.inner_html_contains_sensitive_value(2).unwrap());
+        assert!(!selectors.inner_html_contains_sensitive_value(safe).unwrap());
+        assert!(
+            selectors
+                .inner_html_contains_sensitive_value(secret)
+                .unwrap()
+        );
+        assert!(
+            !selectors
+                .inner_html_contains_sensitive_value(input)
+                .unwrap()
+        );
     }
 }

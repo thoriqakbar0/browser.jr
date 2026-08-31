@@ -2,7 +2,7 @@
 
 Status: proposed internal architecture, 28 August 2026. Implementation evidence updated 31 August 2026.
 
-The current source loads loopback HTML and computes a horizontal layout subset. It evaluates two rules and supports transactional `x` and `width` mutation batches. A session retains one static page and its URL and title. It reloads that page and navigates same-context links. It resolves semantic, attribute, CSS, and XPath locators at each action. It inspects supported static visibility. It changes text, native checkbox, and native single-select or multiple-select state. The CLI session adapter keeps that state across stdin commands. Many Rust types below remain design sketches. They do not define the package API.
+The current source loads loopback HTML and computes a horizontal layout subset. It applies supported inline and embedded CSS declarations. It evaluates two rules and supports transactional `x` and `width` mutation batches. A session retains one static page and its URL and title. It reloads that page and navigates same-context links. It resolves semantic, attribute, CSS, and XPath locators at each action. Descendant and child selectors traverse normalized HTML ancestry. It inspects supported static visibility. It changes text, native checkbox, and native single-select or multiple-select state. Supported actions record native DOM events and their target-to-root paths. The CLI session adapter keeps that state across stdin commands. Many Rust types below remain design sketches. They do not define the package API.
 
 This document owns internal responsibilities and data flow. The [product description](README.md) owns user-visible scope. The [research note](research/browser-engine-and-design-lint-papers.md) records external evidence.
 
@@ -77,7 +77,13 @@ Supported link clicks install a new document only after loading succeeds. Failed
 
 The implemented `page::interactive` module owns title normalization, semantic and source-attribute locator evidence, snapshots, actions, and controls.
 
-The implemented `page::visibility` module owns supported static visibility evidence. `page` keeps tokenization and layout extraction.
+The implemented `page::visibility` module owns supported static visibility evidence.
+
+`page::dom` lets html5ever construct normalized HTML ancestry. `page` projects content, metadata, style text, and layout evidence from that tree.
+
+The implemented `page::style` module parses embedded rules and applies source order, selector specificity, and inline precedence. Linked stylesheets and unsupported CSS syntax block dependent evidence.
+
+`Session` records supported native DOM events. `TakeDomEvents` drains them through the package API. Session mode exposes the same queue with `events`.
 
 ## System shape
 

@@ -8,7 +8,7 @@ Session-mode callers use `check <ref|selector>` or `uncheck <ref|selector>`. Dir
 
 [Locator actions](../inspection/query-elements.md) define the snapshot-free checked-state path.
 
-The action supports native checkbox inputs. It does not dispatch browser events.
+The action supports native checkbox inputs. A changed state records bubbling `input` and `change` events.
 
 ## The simple case
 
@@ -27,7 +27,8 @@ stateDiagram-v2
     resolving_target --> checking_control : current reference or strict locator
     checking_control --> unsupported : not a mutable native checkbox
     checking_control --> storing : mutable checkbox
-    storing --> reported
+    storing --> dispatching_events
+    dispatching_events --> reported
     rejected --> finished
     unsupported --> finished
     reported --> finished
@@ -55,7 +56,9 @@ Disabled checkboxes reject changes. Explicit ARIA checkbox roles do not create m
 
 The engine replaces the stored Boolean state. The current reference remains usable.
 
-The action does not dispatch `input`, `change`, click, focus, or pointer events.
+When state changes, the action records `input`, then `change`. Both events bubble.
+
+An idempotent write records no event. The action does not invoke listeners or dispatch click, focus, or pointer events.
 
 ### Finish
 
@@ -118,7 +121,7 @@ A later snapshot reports the current state and invalidates earlier references.
 
 ## Open questions and verification
 
-- Define checkbox event order before adding event dispatch.
+- Define click activation, focus, and listener behavior before broadening event dispatch.
 - Define radio-group behavior before supporting radio changes.
 - Define ARIA state observation separately from native checkbox state.
 - Add form submission after scripts and activation behavior exist.

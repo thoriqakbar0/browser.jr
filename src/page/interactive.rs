@@ -1,5 +1,7 @@
 use super::visibility::{VisibilityState, visibility_state};
-use super::{ElementSource, SelectorIndex, collapse_whitespace, parse_page_source};
+use super::{
+    ElementSource, SelectorIndex, collapse_whitespace, page_computed_styles, parse_page_source,
+};
 use crate::locator::{Locator, LocatorCandidate, SemanticLocatorCandidate, SourceLocatorCandidate};
 use crate::non_empty::NonEmpty;
 use crate::selection::SelectOptionTarget;
@@ -20,6 +22,7 @@ pub(crate) struct LocatorElementSource {
     pub(crate) element: String,
     pub(crate) interactive_index: Option<usize>,
     pub(crate) parent: Option<usize>,
+    pub(crate) content_ordinal: Option<usize>,
     evidence: LocatorEvidence,
 }
 
@@ -54,6 +57,8 @@ pub(crate) struct SemanticElementSource {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InteractiveElementSource {
     semantics: SemanticElementSource,
+    pub(crate) source_index: usize,
+    pub(crate) content_ordinal: usize,
     pub(crate) action: InteractiveAction,
     pub(crate) control_state: ControlState,
     visibility: VisibilityState,
@@ -289,6 +294,9 @@ impl LocatorElementSource {
     }
 
     pub(crate) fn matches(&self, locator: &Locator) -> bool {
+        if self.content_ordinal.is_none() {
+            return false;
+        }
         locator.matches(LocatorCandidate {
             semantic: SemanticLocatorCandidate {
                 role: self.role(),
@@ -423,8 +431,9 @@ pub(crate) fn semantic_elements_from_html(html: &str) -> Vec<SemanticElementSour
 pub(crate) fn page_semantics_from_html(html: &str) -> PageSemanticSource {
     let source = parse_page_source(html);
     let selector_index = SelectorIndex::new(html, &source.elements);
+    let styles = page_computed_styles(&source.elements, &source.styles);
     let (semantic_elements, locator_elements, interactive_elements) =
-        element_sources(&source.elements, source.has_stylesheet);
+        element_sources(&source.elements, styles.as_deref().map_err(String::as_str));
     PageSemanticSource {
         title: collapse_whitespace(&source.title),
         semantic_elements,
@@ -436,7 +445,7 @@ pub(crate) fn page_semantics_from_html(html: &str) -> PageSemanticSource {
 
 fn element_sources(
     sources: &[ElementSource],
-    has_stylesheet: bool,
+    styles: Result<&[BTreeMap<String, String>], &str>,
 ) -> (
     Vec<SemanticElementSource>,
     Vec<LocatorElementSource>,
@@ -446,8 +455,15 @@ fn element_sources(
     let mut locator_elements = Vec::with_capacity(sources.len());
     let mut interactive_elements = Vec::new();
     for (index, source) in sources.iter().enumerate() {
-        let role = semantic_role(index, source, sources);
-        let visibility = visibility_state(index, source, sources, has_stylesheet);
+        let role = source
+            .content_ordinal
+            .and_then(|_| semantic_role(index, source, sources));
+        let visibility = match styles {
+            Ok(styles) => visibility_state(index, source, sources, styles),
+            Err(reason) => VisibilityState::Unsupported {
+                reason: reason.into(),
+            },
+        };
         let interactive_index = role
             .as_deref()
             .is_some_and(is_interactive_role)
@@ -461,6 +477,7 @@ fn element_sources(
             element: source.id.clone(),
             interactive_index,
             parent: source.parent,
+            content_ordinal: source.content_ordinal,
             evidence: LocatorEvidence {
                 role: role.clone(),
                 name: name.clone(),
@@ -491,6 +508,10 @@ fn element_sources(
                 let control_state = control_state(index, source, sources);
                 interactive_elements.push(InteractiveElementSource {
                     semantics: semantics.clone(),
+                    source_index: index,
+                    content_ordinal: source
+                        .content_ordinal
+                        .expect("interactive elements are retained content"),
                     action,
                     control_state,
                     visibility,

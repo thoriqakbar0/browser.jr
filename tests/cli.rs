@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, MutexGuard};
@@ -22,6 +22,7 @@ fn serve_pages(bodies: Vec<&'static str>) -> (String, JoinHandle<()>) {
     let handle = thread::spawn(move || {
         for body in bodies {
             let (mut stream, _) = listener.accept().unwrap();
+            read_request_headers(&stream);
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -31,6 +32,16 @@ fn serve_pages(bodies: Vec<&'static str>) -> (String, JoinHandle<()>) {
         }
     });
     (format!("http://{address}/"), handle)
+}
+
+fn read_request_headers(stream: &std::net::TcpStream) {
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+            return;
+        }
+    }
 }
 
 fn run_session_script(script: &str) -> Output {
@@ -1049,4 +1060,24 @@ fn project_width_limit_reports_observed_width() {
     assert!(stdout.contains("expectation=width<=720 observed=width:880"));
     assert!(stdout.contains("evidence=snapshot:1#content"));
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn session_mode_reports_dom_events_with_normalized_ancestry() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<main id="app"><input id="direct"><section><input id="deep"></section></main>"#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nfind first \"html body main > input\" fill direct value\nevents\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success());
+    assert!(stdout.contains("events=1"));
+    assert!(stdout.contains(
+        r#"event type=input document=1 target="direct" bubbles=true path="direct > app""#
+    ));
 }

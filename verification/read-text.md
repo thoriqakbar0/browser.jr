@@ -12,6 +12,7 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | TEXT-04 | P1 | pipe | Session mode reads text before and after navigation ([Finish](../inspection/read-text.md#finish)). | Serve linked pages with textual controls. | Snapshot and read each current reference. | Each result reports the installed document's element text. | partial: compiled-process test passed, 2026-08-31 |
 | TEXT-05 | P1 | pipe | Text reads preserve current references ([While running](../inspection/read-text.md#while-running)). | Serve one button. | Read its text twice through one reference. | Both typed results match. | partial: package boundary test passed, 2026-08-31 |
 | TEXT-06 | P1 | pipe | Direct selectors read non-interactive text without a snapshot ([Finish](../inspection/read-text.md#finish)). | Serve a non-interactive second button-like card. | Read its text through CSS and XPath. | Both strict selectors return normalized text. | partial: package, compiled-process, and controlled browser comparisons passed, 2026-08-31 |
+| TEXT-07 | P1 | pipe | Raw style text stays outside element text ([The simple case](../inspection/read-text.md#the-simple-case)). | Place a style element inside a named interactive container. | Read the container text and visibility. | Text is empty. The raw stylesheet remains available to CSS. | partial: unit test passed, 2026-08-31 |
 
 Not checkable yet:
 

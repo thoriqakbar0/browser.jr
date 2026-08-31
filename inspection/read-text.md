@@ -6,7 +6,9 @@ Package callers submit `GetElementText` with a reference or read `LocatorMatch::
 
 Session-mode callers send `get text <ref|selector>`. Direct selectors need no snapshot.
 
-The result contains normalized descendant text from the loaded static HTML.
+The result contains normalized, non-inert descendant text from the loaded static HTML.
+
+Raw `style`, `script`, `title`, `noscript`, and `template` text does not enter element text.
 
 ## The simple case
 
