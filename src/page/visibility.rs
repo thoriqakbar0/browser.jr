@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::{ElementSource, collapse_whitespace, parse_style};
+use super::{ElementSource, collapse_whitespace};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum VisibilityState {
@@ -13,14 +13,8 @@ pub(super) fn visibility_state(
     source_index: usize,
     source: &ElementSource,
     sources: &[ElementSource],
-    has_stylesheet: bool,
+    styles: &[BTreeMap<String, String>],
 ) -> VisibilityState {
-    if has_stylesheet {
-        return VisibilityState::Unsupported {
-            reason: "linked and embedded stylesheet visibility is not implemented".into(),
-        };
-    }
-
     let mut ancestry = vec![source_index];
     let mut parent = source.parent;
     while let Some(index) = parent {
@@ -31,7 +25,7 @@ pub(super) fn visibility_state(
 
     let mut evidence = VisibilityEvidence::default();
     for index in ancestry {
-        if inspect_visibility_candidate(&sources[index], &mut evidence) {
+        if inspect_visibility_candidate(&sources[index], &styles[index], &mut evidence) {
             return VisibilityState::Hidden;
         }
     }
@@ -53,22 +47,16 @@ struct VisibilityEvidence {
 
 fn inspect_visibility_candidate(
     candidate: &ElementSource,
+    properties: &BTreeMap<String, String>,
     evidence: &mut VisibilityEvidence,
 ) -> bool {
-    let properties = parse_style(
-        candidate
-            .attributes
-            .get("style")
-            .map(String::as_str)
-            .unwrap_or_default(),
-    );
-    if candidate_is_definitely_hidden(candidate, &properties) {
+    if candidate_is_definitely_hidden(candidate, properties) {
         return true;
     }
     if evidence.unsupported.is_none() {
-        evidence.unsupported = unsupported_visibility_reason(candidate, &properties);
+        evidence.unsupported = unsupported_visibility_reason(candidate, properties);
     }
-    apply_inherited_visibility(&properties, evidence);
+    apply_inherited_visibility(properties, evidence);
     false
 }
 

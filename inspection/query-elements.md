@@ -151,6 +151,10 @@ CSS locators query the normalized HTML5 document. They support selector groups, 
 
 XPath locators evaluate XPath 1.0 expressions against a namespace-free mirror of the same normalized document.
 
+Descendant and child combinators traverse normalized HTML ancestry. Implied structural elements participate but cannot become locator targets.
+
+XPath locators evaluate XPath 1.0 expressions against a namespace-free mirror of the same normalized document.
+
 XPath results must contain only elements. Scalar, attribute, text, comment, and processing-instruction results block resolution.
 
 > Technical note: CSS uses `dom_query` 0.28.0. XPath evaluation uses `sxd-xpath` 0.4.2.
@@ -194,6 +198,12 @@ A descendant password source value blocks HTML serialization.
 `check` and `uncheck` require supported visible evidence. The target must be an enabled native checkbox.
 
 `click` requires supported visible and enabled evidence. Only same-context link navigation is implemented.
+
+Successful link clicks record one bubbling `click` event before navigation.
+
+Successful fills record one bubbling `input` event.
+
+Changed checkbox state records bubbling `input` and `change` events. Idempotent writes record none.
 
 `hover` resolves strictly, then returns an unsupported-action error. Hover state and pointer events are not implemented.
 
@@ -332,6 +342,8 @@ Locator resolution does not filter hidden elements. Actions apply their supporte
 - Direct selectors accept CSS by default and auto-detect leading `//` or `..` as XPath.
 - Direct selectors work across implemented click, fill, select, check, uncheck, HTML, text, value, attribute, state, and count commands.
 - Quoted direct selectors can contain combinators and XPath predicates with spaces.
+- Optional end tags and implied structural elements follow normalized HTML ancestry.
+- Raw style text does not participate in text locator matching.
 - Locator quotes cannot contain an escaped matching quote yet.
 - Session fill values can contain spaces.
 - A fill value containing `--name` or `--exact` as a token is not expressible yet.

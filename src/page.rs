@@ -1,17 +1,23 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
+use html5ever::parse_document;
 use html5ever::tendril::StrTendril;
+use html5ever::tendril::TendrilSink;
 use html5ever::tokenizer::{
-    BufferQueue, CharacterTokens, EndTag, ParseError, StartTag, TagToken, Token, TokenSink,
-    TokenSinkResult, Tokenizer,
+    BufferQueue, StartTag, TagToken, Token, TokenSink, TokenSinkResult, Tokenizer,
 };
 
+use crate::locator::css::CssNode;
 use crate::{ElementInput, LayoutInput};
 
+mod dom;
 mod interactive;
 mod selectors;
+mod style;
 mod visibility;
+
+use style::computed_styles;
 
 pub(crate) use interactive::{
     CheckedState, ControlState, InteractiveAction, InteractiveElementSource, LocatorElementSource,
@@ -28,13 +34,7 @@ struct ElementSource {
     attributes: BTreeMap<String, String>,
     parent: Option<usize>,
     text: String,
-}
-
-#[derive(Debug)]
-struct OpenElement {
-    tag: String,
-    content_index: Option<usize>,
-    captures_title: bool,
+    content_ordinal: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -51,198 +51,298 @@ struct ResolvedBox {
     content_width: u64,
 }
 
-#[derive(Default)]
-struct PageSink {
-    elements: RefCell<Vec<ElementSource>>,
-    stack: RefCell<Vec<OpenElement>>,
-    next_ordinal: Cell<usize>,
-    metadata: PageMetadataSink,
+#[derive(Debug, Default)]
+struct PageStyles {
+    has_linked_stylesheet: bool,
+    stylesheets: Vec<String>,
+    stylesheet_error: Option<String>,
 }
 
 #[derive(Debug, Default)]
-struct PageMetadataSink {
-    has_stylesheet: Cell<bool>,
-    title_seen: Cell<bool>,
-    title: RefCell<String>,
-    parse_error: RefCell<Option<String>>,
+struct PageMetadata {
+    styles: PageStyles,
+    title_seen: bool,
+    title: String,
+    next_content_ordinal: usize,
+}
+
+struct PageSourceCollector<'a> {
+    elements: &'a mut Vec<ElementSource>,
+    content_ancestors: &'a mut Vec<usize>,
+    metadata: &'a mut PageMetadata,
+    explicit_body: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TraversalContext {
+    parent: Option<usize>,
+    stylesheet: Option<usize>,
+    captures_title: bool,
+    inert: bool,
 }
 
 struct ParsedPageSource {
     elements: Vec<ElementSource>,
-    has_stylesheet: bool,
+    styles: PageStyles,
     title: String,
     parse_error: Option<String>,
 }
 
-impl TokenSink for PageSink {
+#[derive(Default)]
+struct ExplicitBodySink {
+    found: Cell<bool>,
+}
+
+impl TokenSink for ExplicitBodySink {
     type Handle = ();
 
     fn process_token(&self, token: Token, _line_number: u64) -> TokenSinkResult<Self::Handle> {
-        match token {
-            TagToken(tag) if tag.kind == StartTag => self.start_tag(tag),
-            TagToken(tag) if tag.kind == EndTag => self.end_tag(tag.name.as_ref()),
-            CharacterTokens(text) => self.append_text(text.as_ref()),
-            ParseError(error) => {
-                let mut first_error = self.metadata.parse_error.borrow_mut();
-                if first_error.is_none() {
-                    *first_error = Some(error.to_string());
-                }
-            }
-            _ => {}
+        if let TagToken(tag) = token
+            && tag.kind == StartTag
+            && tag.name.as_ref() == "body"
+        {
+            self.found.set(true);
         }
         TokenSinkResult::Continue
     }
 }
 
-impl PageSink {
-    fn start_tag(&self, tag: html5ever::tokenizer::Tag) {
-        let tag_name = tag.name.to_string();
-        if separates_text(&tag_name) {
-            self.append_text(" ");
-        }
-        let attributes = tag
-            .attrs
-            .iter()
-            .map(|attribute| {
-                (
-                    attribute.name.local.to_string(),
-                    attribute.value.to_string(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-
-        if tag_name == "style"
-            || (tag_name == "link"
-                && attributes.get("rel").is_some_and(|value| {
-                    value
-                        .split_ascii_whitespace()
-                        .any(|part| part.eq_ignore_ascii_case("stylesheet"))
-                }))
-        {
-            self.metadata.has_stylesheet.set(true);
-        }
-
-        let content_index = if is_content_element(&tag_name) {
-            let ordinal = self.next_ordinal.get() + 1;
-            self.next_ordinal.set(ordinal);
-            let id = attributes
-                .get("id")
-                .cloned()
-                .unwrap_or_else(|| format!("{tag_name}[{ordinal}]"));
-            let parent = self
-                .stack
-                .borrow()
-                .iter()
-                .rev()
-                .find_map(|open| open.content_index);
-            let mut elements = self.elements.borrow_mut();
-            let index = elements.len();
-            elements.push(ElementSource {
-                id,
-                tag: tag_name.clone(),
-                attributes: attributes.clone(),
-                parent,
-                text: String::new(),
-            });
-            Some(index)
-        } else {
-            None
+fn parse_page_source(html: &str) -> ParsedPageSource {
+    let explicit_body = has_explicit_body(html);
+    let dom = parse_document(dom::Dom::default(), Default::default()).one(StrTendril::from(html));
+    let mut elements = Vec::new();
+    let mut content_ancestors = Vec::new();
+    let mut metadata = PageMetadata::default();
+    {
+        let mut collector = PageSourceCollector {
+            elements: &mut elements,
+            content_ancestors: &mut content_ancestors,
+            metadata: &mut metadata,
+            explicit_body,
         };
+        for child in dom.document.children.borrow().iter() {
+            collector.collect(child, TraversalContext::default());
+        }
+    }
 
-        let captures_title = tag_name == "title" && !self.metadata.title_seen.replace(true);
-        if !is_void_element(&tag_name) && !tag.self_closing {
-            self.stack.borrow_mut().push(OpenElement {
-                tag: tag_name,
-                content_index,
-                captures_title,
+    ParsedPageSource {
+        elements,
+        styles: metadata.styles,
+        title: metadata.title,
+        parse_error: None,
+    }
+}
+
+fn has_explicit_body(html: &str) -> bool {
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from(html));
+    let tokenizer = Tokenizer::new(ExplicitBodySink::default(), Default::default());
+    let _ = tokenizer.feed(&input);
+    tokenizer.end();
+    tokenizer.sink.found.get()
+}
+
+impl PageSourceCollector<'_> {
+    fn collect(&mut self, node: &dom::Handle, context: TraversalContext) {
+        match &node.data {
+            dom::NodeData::Element {
+                name, attributes, ..
+            } => {
+                let tag = name.local.to_string();
+                let attributes = attributes
+                    .borrow()
+                    .iter()
+                    .map(|attribute| {
+                        (
+                            attribute.name.local.to_string(),
+                            attribute.value.to_string(),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                self.collect_element(node, tag, attributes, context);
+            }
+            dom::NodeData::Text(text) => self.collect_text(text.borrow().as_ref(), context),
+            dom::NodeData::Document | dom::NodeData::Other => {}
+        }
+    }
+
+    fn collect_element(
+        &mut self,
+        node: &dom::Handle,
+        tag: String,
+        attributes: BTreeMap<String, String>,
+        context: TraversalContext,
+    ) {
+        let stylesheet = self.record_styles(&tag, &attributes, context.stylesheet);
+        let (index, retained) = self.push_element(tag.clone(), attributes, context.parent);
+        self.separate_text(&tag);
+        if retained {
+            self.content_ancestors.push(index);
+        }
+        let child_context = TraversalContext {
+            parent: Some(index),
+            stylesheet,
+            captures_title: self.capture_title(&tag),
+            inert: context.inert || is_inert_text_element(&tag),
+        };
+        for child in node.children.borrow().iter() {
+            self.collect(child, child_context);
+        }
+        if retained {
+            self.content_ancestors.pop();
+        }
+        self.separate_text(&tag);
+    }
+
+    fn push_element(
+        &mut self,
+        tag: String,
+        attributes: BTreeMap<String, String>,
+        parent: Option<usize>,
+    ) -> (usize, bool) {
+        let content_ordinal = (is_content_element(&tag) || (tag == "body" && self.explicit_body))
+            .then(|| {
+                self.metadata.next_content_ordinal += 1;
+                self.metadata.next_content_ordinal
             });
+        let id = attributes.get("id").cloned().unwrap_or_else(|| {
+            content_ordinal.map_or_else(|| tag.clone(), |ordinal| format!("{tag}[{ordinal}]"))
+        });
+        let index = self.elements.len();
+        self.elements.push(ElementSource {
+            id,
+            tag,
+            attributes,
+            parent,
+            text: String::new(),
+            content_ordinal,
+        });
+        (index, content_ordinal.is_some())
+    }
+
+    fn record_styles(
+        &mut self,
+        tag: &str,
+        attributes: &BTreeMap<String, String>,
+        inherited: Option<usize>,
+    ) -> Option<usize> {
+        if tag == "link" && is_stylesheet_link(attributes) {
+            self.metadata.styles.has_linked_stylesheet = true;
+        }
+        if tag != "style" {
+            return inherited;
+        }
+        record_style_support(attributes, &mut self.metadata.styles);
+        let index = self.metadata.styles.stylesheets.len();
+        self.metadata.styles.stylesheets.push(String::new());
+        Some(index)
+    }
+
+    fn capture_title(&mut self, tag: &str) -> bool {
+        if tag != "title" || self.metadata.title_seen {
+            return false;
+        }
+        self.metadata.title_seen = true;
+        true
+    }
+
+    fn collect_text(&mut self, text: &str, context: TraversalContext) {
+        if context.captures_title {
+            self.metadata.title.push_str(text);
+        }
+        if let Some(index) = context.stylesheet {
+            self.metadata.styles.stylesheets[index].push_str(text);
+        }
+        if !context.inert {
+            append_rendered_text(self.elements, self.content_ancestors, text);
         }
     }
 
-    fn end_tag(&self, tag_name: &str) {
-        let mut stack = self.stack.borrow_mut();
-        if let Some(index) = stack.iter().rposition(|open| open.tag == tag_name) {
-            stack.truncate(index);
-        }
-        drop(stack);
-        if separates_text(tag_name) {
-            self.append_text(" ");
-        }
-    }
-
-    fn append_text(&self, text: &str) {
-        let stack = self.stack.borrow();
-        let captures_title = stack.last().is_some_and(|open| open.captures_title);
-        let content_indices = stack
-            .iter()
-            .filter_map(|open| open.content_index)
-            .collect::<Vec<_>>();
-        drop(stack);
-        if captures_title {
-            self.metadata.title.borrow_mut().push_str(text);
-        }
-        let mut elements = self.elements.borrow_mut();
-        for index in content_indices {
-            elements[index].text.push_str(text);
+    fn separate_text(&mut self, tag: &str) {
+        if separates_text(tag) {
+            append_rendered_text(self.elements, self.content_ancestors, " ");
         }
     }
 }
 
-fn parse_page_source(html: &str) -> ParsedPageSource {
-    let input = BufferQueue::default();
-    input.push_back(StrTendril::from(html));
-    let tokenizer = Tokenizer::new(PageSink::default(), Default::default());
-    let _ = tokenizer.feed(&input);
-    tokenizer.end();
+fn is_stylesheet_link(attributes: &BTreeMap<String, String>) -> bool {
+    attributes.get("rel").is_some_and(|value| {
+        value
+            .split_ascii_whitespace()
+            .any(|part| part.eq_ignore_ascii_case("stylesheet"))
+    })
+}
 
-    ParsedPageSource {
-        elements: tokenizer.sink.elements.into_inner(),
-        has_stylesheet: tokenizer.sink.metadata.has_stylesheet.get(),
-        title: tokenizer.sink.metadata.title.into_inner(),
-        parse_error: tokenizer.sink.metadata.parse_error.into_inner(),
+fn append_rendered_text(elements: &mut [ElementSource], ancestors: &[usize], text: &str) {
+    for index in ancestors {
+        elements[*index].text.push_str(text);
+    }
+}
+
+fn record_style_support(attributes: &BTreeMap<String, String>, styles: &mut PageStyles) {
+    let unsupported_media = attributes.get("media").is_some_and(|media| {
+        !media.is_empty()
+            && !media.eq_ignore_ascii_case("all")
+            && !media.eq_ignore_ascii_case("screen")
+    });
+    let unsupported_type = attributes
+        .get("type")
+        .is_some_and(|value| !value.is_empty() && !value.eq_ignore_ascii_case("text/css"));
+    if styles.stylesheet_error.is_none() && unsupported_media {
+        styles.stylesheet_error = Some("style media conditions are not implemented".into());
+    } else if styles.stylesheet_error.is_none() && unsupported_type {
+        styles.stylesheet_error = Some("non-CSS style elements are not implemented".into());
+    }
+}
+
+fn page_computed_styles(
+    elements: &[ElementSource],
+    styles: &PageStyles,
+) -> Result<Vec<BTreeMap<String, String>>, String> {
+    if styles.has_linked_stylesheet {
+        Err("linked stylesheet loading is not implemented".into())
+    } else if let Some(error) = &styles.stylesheet_error {
+        Err(error.clone())
+    } else {
+        computed_styles(elements, &styles.stylesheets)
     }
 }
 
 pub(crate) fn layout_input_from_html(html: &str, viewport_width: u64) -> LayoutInput {
     let ParsedPageSource {
         elements: sources,
-        has_stylesheet,
+        styles,
         parse_error,
         ..
     } = parse_page_source(html);
-    let mut resolved = Vec::<Result<ResolvedBox, String>>::with_capacity(sources.len());
+    let computed = page_computed_styles(&sources, &styles);
+    let mut resolved = Vec::<Result<Option<ResolvedBox>, String>>::with_capacity(sources.len());
     let mut elements = Vec::with_capacity(sources.len() + usize::from(parse_error.is_some()));
 
-    for source in sources {
-        let parent = source
-            .parent
-            .map(|index| resolved[index].as_ref().copied().map_err(Clone::clone))
-            .transpose()
-            .map(|parent| {
-                parent.map_or(
-                    ContainingBlock {
-                        x: 0,
-                        width: viewport_width,
-                    },
-                    |parent| ContainingBlock {
-                        x: parent.content_x,
-                        width: parent.content_width,
-                    },
-                )
-            });
-        let layout = if has_stylesheet {
-            Err("linked and embedded stylesheets are not implemented".into())
-        } else {
-            parent.and_then(|parent| resolve_horizontal_box(&source, parent, viewport_width))
-        };
+    for (index, source) in sources.iter().enumerate() {
+        let layout = containing_block(source.parent, &sources, &resolved, viewport_width).and_then(
+            |parent| {
+                if source.content_ordinal.is_none() {
+                    return Ok(None);
+                }
+                computed.as_ref().map_err(Clone::clone).and_then(|styles| {
+                    resolve_horizontal_box(source, &styles[index], parent, viewport_width).map(Some)
+                })
+            },
+        );
 
-        match &layout {
-            Ok(layout) => elements.push(ElementInput::supported(
-                source.id,
-                layout.border_x,
-                layout.border_width,
-            )),
-            Err(reason) => elements.push(ElementInput::unsupported(source.id, reason.clone())),
+        if source.content_ordinal.is_some() {
+            match &layout {
+                Ok(Some(layout)) => elements.push(ElementInput::supported(
+                    source.id.clone(),
+                    layout.border_x,
+                    layout.border_width,
+                )),
+                Ok(None) => unreachable!("content elements resolve a layout result"),
+                Err(reason) => {
+                    elements.push(ElementInput::unsupported(source.id.clone(), reason.clone()))
+                }
+            }
         }
         resolved.push(layout);
     }
@@ -266,24 +366,56 @@ pub(crate) fn layout_input_from_html(html: &str, viewport_width: u64) -> LayoutI
     }
 }
 
+fn containing_block(
+    mut parent: Option<usize>,
+    sources: &[ElementSource],
+    resolved: &[Result<Option<ResolvedBox>, String>],
+    viewport_width: u64,
+) -> Result<ContainingBlock, String> {
+    while let Some(index) = parent {
+        match &resolved[index] {
+            Ok(Some(parent)) => {
+                return Ok(ContainingBlock {
+                    x: parent.content_x,
+                    width: parent.content_width,
+                });
+            }
+            Ok(None) => parent = sources[index].parent,
+            Err(reason) => return Err(reason.clone()),
+        }
+    }
+    Ok(ContainingBlock {
+        x: 0,
+        width: viewport_width,
+    })
+}
+
 fn resolve_horizontal_box(
     source: &ElementSource,
+    properties: &BTreeMap<String, String>,
     parent: ContainingBlock,
     viewport_width: u64,
 ) -> Result<ResolvedBox, String> {
-    let properties = parse_style(
-        source
-            .attributes
-            .get("style")
-            .map(String::as_str)
-            .unwrap_or_default(),
-    );
-    reject_unsupported_geometry(&properties)?;
+    reject_unsupported_geometry(properties)?;
 
     match properties.get("position").map(String::as_str) {
-        Some("fixed") => resolve_fixed_box(source, &properties, viewport_width),
-        None | Some("static") => resolve_normal_box(source, &properties, parent),
+        Some("fixed") => resolve_fixed_box(source, properties, viewport_width),
+        None | Some("static") => resolve_normal_box(source, properties, parent),
         Some(value) => Err(format!("position:{value} layout is not implemented")),
+    }
+}
+
+impl CssNode for ElementSource {
+    fn css_tag(&self) -> &str {
+        &self.tag
+    }
+
+    fn css_attributes(&self) -> &BTreeMap<String, String> {
+        &self.attributes
+    }
+
+    fn css_parent(&self) -> Option<usize> {
+        self.parent
     }
 }
 
@@ -407,19 +539,6 @@ fn checked_add_i64_u64(left: i64, right: u64, id: &str) -> Result<i64, String> {
     .ok_or_else(|| format!("horizontal coordinates overflow for {id}"))
 }
 
-fn parse_style(style: &str) -> BTreeMap<String, String> {
-    style
-        .split(';')
-        .filter_map(|declaration| declaration.split_once(':'))
-        .map(|(name, value)| {
-            (
-                name.trim().to_ascii_lowercase(),
-                value.trim().to_ascii_lowercase(),
-            )
-        })
-        .collect()
-}
-
 fn collapse_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -527,6 +646,7 @@ fn is_content_element(tag_name: &str) -> bool {
         tag_name,
         "html"
             | "head"
+            | "body"
             | "base"
             | "link"
             | "meta"
@@ -555,6 +675,13 @@ fn is_block_element(tag_name: &str) -> bool {
             | "main"
             | "nav"
             | "section"
+    )
+}
+
+fn is_inert_text_element(tag_name: &str) -> bool {
+    matches!(
+        tag_name,
+        "head" | "title" | "style" | "script" | "noscript" | "template"
     )
 }
 
@@ -604,33 +731,14 @@ fn separates_text(tag_name: &str) -> bool {
     )
 }
 
-fn is_void_element(tag_name: &str) -> bool {
-    matches!(
-        tag_name,
-        "area"
-            | "base"
-            | "br"
-            | "col"
-            | "embed"
-            | "hr"
-            | "img"
-            | "input"
-            | "link"
-            | "meta"
-            | "param"
-            | "source"
-            | "track"
-            | "wbr"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         CheckedState, ControlState, InteractiveAction, TextValueState,
         interactive_elements_from_html, layout_input_from_html, page_semantics_from_html,
-        semantic_elements_from_html,
+        parse_page_source, semantic_elements_from_html,
     };
+    use crate::locator::css::CssSelector;
     use crate::{Comparison, LintLayout, RuleConstraint, RuleResult, Session};
 
     fn lint(html: &str) -> RuleResult {
@@ -739,9 +847,88 @@ mod tests {
     }
 
     #[test]
-    fn stylesheets_block_inline_geometry() {
+    fn embedded_stylesheets_apply_specificity_and_geometry() {
         let result = lint(
-            r#"<style>#hero { width: 20px }</style><div id="hero" style="position:fixed;left:0;width:20px"></div>"#,
+            r#"<style>div { position:fixed; left:0; width:400px } #hero { width:20px }</style><div id="hero"></div>"#,
+        );
+
+        assert!(matches!(
+            result,
+            RuleResult::Compared {
+                comparison: Comparison::Pass,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parsed_page_uses_html_tree_ancestry() {
+        let source = parse_page_source(
+            r#"<ul id="list"><li id="first"><button>A</button><li id="second"><button id="target">B</button></ul>"#,
+        );
+        let target = source
+            .elements
+            .iter()
+            .position(|element| {
+                element
+                    .attributes
+                    .get("id")
+                    .is_some_and(|id| id == "target")
+            })
+            .unwrap();
+
+        assert!(
+            !CssSelector::parse("#first #target")
+                .unwrap()
+                .matches(target, &source.elements)
+        );
+        assert!(
+            CssSelector::parse("html body #target")
+                .unwrap()
+                .matches(target, &source.elements)
+        );
+    }
+
+    #[test]
+    fn parsed_page_applies_implied_table_and_paragraph_structure() {
+        let table = parse_page_source("<table><tr><td id=cell>Cell</td></tr></table>");
+        let cell = table
+            .elements
+            .iter()
+            .position(|element| element.attributes.get("id").is_some_and(|id| id == "cell"))
+            .unwrap();
+        assert!(
+            CssSelector::parse("table > tbody > tr > #cell")
+                .unwrap()
+                .matches(cell, &table.elements)
+        );
+
+        let paragraph = parse_page_source("<p id=copy>Text<div id=block>Block</div>");
+        let block = paragraph
+            .elements
+            .iter()
+            .position(|element| element.attributes.get("id").is_some_and(|id| id == "block"))
+            .unwrap();
+        assert!(
+            !CssSelector::parse("#copy > #block")
+                .unwrap()
+                .matches(block, &paragraph.elements)
+        );
+    }
+
+    #[test]
+    fn unsupported_stylesheet_syntax_blocks_layout() {
+        let result = lint(
+            r#"<style>@media (width > 1px) { #hero { width:20px } }</style><div id="hero"></div>"#,
+        );
+
+        assert!(matches!(result, RuleResult::Blocked { .. }));
+    }
+
+    #[test]
+    fn unsupported_style_media_blocks_layout() {
+        let result = lint(
+            r#"<style media="print">#hero { position:fixed; left:0; width:20px }</style><div id="hero"></div>"#,
         );
 
         assert!(matches!(result, RuleResult::Blocked { .. }));
@@ -937,9 +1124,20 @@ mod tests {
         assert_eq!(elements[8].visible(), Ok(true));
 
         let styled = interactive_elements_from_html(
-            r#"<style>button { display: block }</style><button>Styled</button>"#,
+            r#"<style>main > button { display: none }</style><main><button>Styled</button></main>"#,
         );
-        assert!(styled[0].visible().is_err());
+        assert_eq!(styled[0].visible(), Ok(false));
+
+        let inert_style = interactive_elements_from_html(
+            r#"<div role="button" aria-label="Empty"><style>.hidden { display:none }</style></div>"#,
+        );
+        assert_eq!(inert_style[0].text(), "");
+        assert_eq!(inert_style[0].visible(), Ok(false));
+
+        let quoted_comment = interactive_elements_from_html(
+            r#"<style>[data-x="/*"] { display:none }</style><button data-x="/*">Hidden</button>"#,
+        );
+        assert_eq!(quoted_comment[0].visible(), Ok(false));
 
         let until_found =
             interactive_elements_from_html(r#"<button hidden="until-found">Found later</button>"#);

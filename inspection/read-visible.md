@@ -56,9 +56,11 @@ browser.jr resolves the reference through the latest interactive snapshot or the
 
 The visibility definition needs a non-empty box and a supported computed `visibility` value.
 
-The implementation reads static HTML and supported inline style evidence.
+The implementation reads static HTML and supported inline and embedded style evidence.
 
-Linked and embedded stylesheets make visibility unsupported for that document.
+CSS comment markers inside quoted selector values remain literal selector text.
+
+Linked stylesheets and unsupported embedded CSS make visibility unsupported for that document.
 
 ### While running
 
@@ -68,9 +70,9 @@ Those states also hide supported descendants.
 
 Inherited `visibility:hidden` and `visibility:collapse` return false.
 
-An inline `visibility:visible` descendant overrides inherited hidden visibility.
+A supported `visibility:visible` descendant overrides inherited hidden visibility.
 
-Inline `display` can override the ordinary `hidden` presentation within this subset.
+Supported `display` can override the ordinary `hidden` presentation within this subset.
 
 Native buttons, inputs, selects, and textareas have supported default non-empty boxes.
 
@@ -78,7 +80,7 @@ Text-bearing interactive elements have supported default non-empty boxes.
 
 An empty non-replaced interactive element has a supported empty box and returns false.
 
-Inline geometry declarations block box proof. Intrinsic replaced-element geometry also remains unsupported.
+Geometry declarations block box proof. Intrinsic replaced-element geometry also remains unsupported.
 
 `opacity:0` does not make a supported element invisible.
 
@@ -136,14 +138,14 @@ The reference remains current after a successful or unsupported read.
 ## Edge cases
 
 - A target with an ordinary `hidden` attribute returns false.
-- An inline displayed value can override that ordinary hidden presentation.
+- A supported displayed value can override that ordinary hidden presentation.
 - A target under `display:none` returns false.
 - A target under inherited hidden visibility returns false.
-- A later inline visible value can override inherited hidden visibility.
+- A later supported visible value can override inherited hidden visibility.
 - An empty ARIA control without box geometry returns false.
 - `display:contents` remains unsupported.
-- Inline size, border, padding, font, transform, scale, or zoom declarations remain unsupported.
-- Linked or embedded stylesheets make every visibility read unsupported.
+- Size, border, padding, font, transform, scale, or zoom declarations remain unsupported.
+- Linked stylesheets and unsupported embedded CSS make every visibility read unsupported.
 - Intrinsic media and replaced-element geometry remain unsupported.
 - Definite hidden evidence takes priority over uncertain inline geometry.
 - Zero opacity still returns true when the box is otherwise supported.
@@ -156,7 +158,7 @@ The reference remains current after a successful or unsupported read.
 - Implement vertical geometry before accepting inline box dimensions.
 - Define `display:contents` through visible descendant boxes.
 - Define closed details, dialog, popover, and hidden-until-found behavior.
-- Apply parsed stylesheets before accepting their visibility evidence.
+- Load bounded loopback stylesheets before accepting their visibility evidence.
 - Add waiting as a separate request with time and cancellation limits.
 - Keep visibility separate from complete actionability.
 

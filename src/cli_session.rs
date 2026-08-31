@@ -11,8 +11,8 @@ use crate::{
     InteractiveElementRef, InteractiveElementState, InteractiveSnapshot, LabelLocator, Locator,
     NonEmpty, OpenPage, PlaceholderLocator, ReloadPage, RoleLocator, SelectOptionTarget,
     SelectOptions, SelectOptionsByLocator, SelectOptionsByLocatorResult, SelectOptionsResult,
-    Session, SetCheckedByLocator, SetElementChecked, TestIdLocator, TextLocator, TitleLocator,
-    XPathLocator,
+    Session, SetCheckedByLocator, SetElementChecked, TakeDomEvents, TestIdLocator, TextLocator,
+    TitleLocator, XPathLocator,
 };
 
 const SESSION_HELP: &str = "session commands:
@@ -47,6 +47,7 @@ const SESSION_HELP: &str = "session commands:
   get value <ref|selector>
   get url
   get title
+  events
   help
   exit
 ";
@@ -74,6 +75,7 @@ impl CliSession {
         match command {
             SessionCommand::Page(command) => self.run_page_command(command, output, errors),
             SessionCommand::Element(command) => self.run_element_command(command, output, errors),
+            SessionCommand::Events => self.events(output),
             SessionCommand::Help => {
                 let status = if output.write_all(SESSION_HELP.as_bytes()).is_ok() {
                     ExitStatus::Success
@@ -85,6 +87,37 @@ impl CliSession {
             SessionCommand::Exit => SessionStep::Exit,
             SessionCommand::Empty => SessionStep::Continue(ExitStatus::Success),
         }
+    }
+
+    fn events(&mut self, output: &mut impl Write) -> SessionStep {
+        let events = self
+            .engine
+            .execute(TakeDomEvents)
+            .expect("taking DOM events has no failure path");
+        let mut status = write_line(
+            output,
+            &format!("events={}", events.len()),
+            ExitStatus::Success,
+        );
+        for event in events {
+            status = combine_status(
+                status,
+                write_line(
+                    output,
+                    &format!(
+                        "event type={} document={} target={:?} bubbles={} path={:?} ordinal={}",
+                        event.event_type,
+                        event.document_epoch,
+                        event.target,
+                        event.bubbles,
+                        event.path.join(" > "),
+                        event.target_ordinal
+                    ),
+                    ExitStatus::Success,
+                ),
+            );
+        }
+        SessionStep::Continue(status)
     }
 
     fn run_page_command(
@@ -877,6 +910,7 @@ fn unknown_reference(errors: &mut impl Write, reference_name: &str) -> SessionSt
 enum SessionCommand<'a> {
     Page(PageCommand<'a>),
     Element(ElementCommand<'a>),
+    Events,
     Help,
     Exit,
     Empty,
@@ -1094,7 +1128,7 @@ fn parse_command(line: &str) -> Result<SessionCommand<'_>, &'static str> {
         None if arguments == (None, None, None) => Ok(SessionCommand::Empty),
         Some(command @ ("open" | "reload")) => parse_page_command(command, arguments),
         Some("get") => parse_get_command(arguments),
-        Some(command @ ("help" | "exit")) => parse_lifecycle_command(command, arguments),
+        Some(command @ ("events" | "help" | "exit")) => parse_lifecycle_command(command, arguments),
         _ => Err("browser.jr: invalid session command; enter help"),
     }
 }
@@ -1445,6 +1479,7 @@ fn parse_lifecycle_command<'a>(
 ) -> Result<SessionCommand<'a>, &'static str> {
     match (command, arguments) {
         ("help", (None, None, None)) => Ok(SessionCommand::Help),
+        ("events", (None, None, None)) => Ok(SessionCommand::Events),
         ("exit", (None, None, None)) => Ok(SessionCommand::Exit),
         _ => Err("browser.jr: invalid session command; enter help"),
     }

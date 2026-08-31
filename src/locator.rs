@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+pub(crate) mod css;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RoleLocator {
     role: String,
@@ -100,6 +102,7 @@ pub enum LocatorValueError {
 pub enum CssLocatorError {
     EmptySelector,
     InvalidSelector,
+    UnsupportedSelector,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -501,6 +504,7 @@ impl std::fmt::Display for CssLocatorError {
         formatter.write_str(match self {
             Self::EmptySelector => "CSS selector must not be empty",
             Self::InvalidSelector => "CSS selector is invalid",
+            Self::UnsupportedSelector => "CSS selector is not supported for style matching",
         })
     }
 }

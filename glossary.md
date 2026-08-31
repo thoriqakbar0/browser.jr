@@ -28,6 +28,8 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Document.** The current parsed and rendered content of a page. Navigation may replace it.
 
+**Normalized HTML ancestry.** The parser-built element tree after implied elements, optional end tags, and other HTML repairs.
+
 **Navigation.** A request that may replace a page's current document. Package and session-mode link clicks implement one bounded subset.
 
 **Reload.** A navigation that fetches the current URL again. Success installs a fresh document epoch.
@@ -90,15 +92,17 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Click.** An action request against one current interactive element reference. Only same-context link navigation is implemented.
 
-**Fill.** An action that replaces a supported text control's current value. Fill does not dispatch browser events yet.
+**Fill.** An action that replaces a supported text control's current value and records one bubbling `input` event.
 
-**Select.** An exact value, label, or index action on one native select. Select does not dispatch browser events yet.
+**Select.** An exact value, label, or index action on one native select. A changed selection records bubbling `input` and `change` events.
+
+**Native DOM event.** A supported `click`, `input`, or `change` record with its document, target, retained-content position, bubbling flag, and target-to-root path. browser.jr does not invoke JavaScript listeners yet.
 
 **Value inspection.** A read of one current text-control or native-select value through a snapshot or typed request. Multiple selects report their first selected value.
 
 **Checked state.** The current Boolean state of a supported native checkbox. Snapshots and typed requests expose it.
 
-**Element text.** Normalized descendant text from a loaded static element. It stays distinct from the accessible name.
+**Element text.** Normalized non-inert descendant text from a loaded static element. It excludes raw style, script, and metadata text.
 
 **Element HTML.** Normalized static child markup for one element. It excludes the selected element's outer tags.
 

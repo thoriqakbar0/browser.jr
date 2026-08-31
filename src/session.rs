@@ -32,6 +32,7 @@ pub struct Session {
     last_snapshot: Option<Snapshot>,
     latest_interactive_snapshot: Option<LatestInteractiveSnapshot>,
     current_page: Option<CurrentPage>,
+    dom_events: Vec<DomEvent>,
 }
 
 #[derive(Debug)]
@@ -109,6 +110,7 @@ impl Session {
             last_snapshot: None,
             latest_interactive_snapshot: None,
             current_page: None,
+            dom_events: Vec::new(),
         }
     }
 
@@ -253,6 +255,86 @@ impl Session {
                 ),
             })
     }
+}
+
+/// One supported native DOM event type emitted by a browser.jr action.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DomEventType {
+    /// A supported link activated before navigation.
+    Click,
+    /// A supported control value or checked state was set.
+    Input,
+    /// A supported select or checkbox committed a changed state.
+    Change,
+}
+
+impl std::fmt::Display for DomEventType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Click => "click",
+            Self::Input => "input",
+            Self::Change => "change",
+        })
+    }
+}
+
+/// One recorded native DOM event and its target-to-root element path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DomEvent {
+    pub event_type: DomEventType,
+    /// The document generation that owned the target.
+    pub document_epoch: u64,
+    /// The target's current element identifier.
+    pub target: String,
+    /// The target's one-based retained content-element position.
+    pub target_ordinal: usize,
+    /// Element identifiers from the target through its retained ancestors.
+    pub path: Vec<String>,
+    /// Whether this event type bubbles under the supported native subset.
+    pub bubbles: bool,
+}
+
+/// Drains the supported native DOM events recorded since the prior drain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TakeDomEvents;
+
+impl private::Sealed for TakeDomEvents {}
+
+impl SessionRequest for TakeDomEvents {
+    type Reply = Vec<DomEvent>;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        Ok(std::mem::take(&mut session.dom_events))
+    }
+}
+
+fn record_dom_events(session: &mut Session, interactive_index: usize, types: &[DomEventType]) {
+    let page = session
+        .current_page
+        .as_ref()
+        .expect("recorded DOM events require a current page");
+    let source_index = page.interactive_elements[interactive_index].source_index;
+    let target_ordinal = page.interactive_elements[interactive_index].content_ordinal;
+    let mut path = Vec::new();
+    let mut current = Some(source_index);
+    while let Some(index) = current {
+        if page.locator_elements[index].content_ordinal.is_some() {
+            path.push(page.locator_elements[index].element.clone());
+        }
+        current = page.locator_elements[index].parent;
+    }
+    let target = path[0].clone();
+    let epoch = page.epoch;
+    session
+        .dom_events
+        .extend(types.iter().map(|event_type| DomEvent {
+            event_type: *event_type,
+            document_epoch: epoch,
+            target: target.clone(),
+            target_ordinal,
+            path: path.clone(),
+            bubbles: true,
+        }));
 }
 
 fn locator_element_is_descendant(
@@ -1182,6 +1264,7 @@ fn execute_click_by_locator(
     let action = element.action.clone();
     match action {
         InteractiveAction::Navigate { href } => {
+            record_dom_events(session, index, &[DomEventType::Click]);
             let current_url = session
                 .current_page
                 .as_ref()
@@ -1214,38 +1297,42 @@ fn execute_fill_by_locator(
 ) -> Result<FillByLocatorResult, LocatorOperationError> {
     let resolved = session.locator_match_for(locator)?;
     let index = session.locator_interactive_index(&resolved, LocatorAction::Fill)?;
-    let page = session
-        .current_page
-        .as_mut()
-        .expect("resolved locator requires a current page");
-    let element = &mut page.interactive_elements[index];
-    require_locator_visible(element, LocatorAction::Fill)?;
-    match &mut element.control_state {
-        ControlState::Text(TextValueState::Editable { value }) => {
-            *value = replacement;
-            Ok(FillByLocatorResult {
-                matched: resolved.matched,
-                value: value.clone(),
-            })
-        }
-        ControlState::Text(TextValueState::NonEditable { reason, .. }) => {
-            Err(LocatorOperationError::ActionBlocked {
+    let result = {
+        let page = session
+            .current_page
+            .as_mut()
+            .expect("resolved locator requires a current page");
+        let element = &mut page.interactive_elements[index];
+        require_locator_visible(element, LocatorAction::Fill)?;
+        match &mut element.control_state {
+            ControlState::Text(TextValueState::Editable { value }) => {
+                *value = replacement;
+                Ok(FillByLocatorResult {
+                    matched: resolved.matched,
+                    value: value.clone(),
+                })
+            }
+            ControlState::Text(TextValueState::NonEditable { reason, .. }) => {
+                Err(LocatorOperationError::ActionBlocked {
+                    action: LocatorAction::Fill,
+                    check: ActionabilityCheck::Editable,
+                    reason: reason.clone(),
+                })
+            }
+            ControlState::Text(TextValueState::Unavailable)
+            | ControlState::Checkbox(_)
+            | ControlState::Select(_)
+            | ControlState::Unavailable => Err(LocatorOperationError::UnsupportedAction {
                 action: LocatorAction::Fill,
-                check: ActionabilityCheck::Editable,
-                reason: reason.clone(),
-            })
+                reason: format!(
+                    "fill execution for role {} is not implemented",
+                    element.role()
+                ),
+            }),
         }
-        ControlState::Text(TextValueState::Unavailable)
-        | ControlState::Checkbox(_)
-        | ControlState::Select(_)
-        | ControlState::Unavailable => Err(LocatorOperationError::UnsupportedAction {
-            action: LocatorAction::Fill,
-            reason: format!(
-                "fill execution for role {} is not implemented",
-                element.role()
-            ),
-        }),
-    }
+    }?;
+    record_dom_events(session, index, &[DomEventType::Input]);
+    Ok(result)
 }
 
 fn execute_select_by_locator(
@@ -1314,37 +1401,47 @@ fn execute_set_checked_by_locator(
     };
     let resolved = session.locator_match_for(locator)?;
     let index = session.locator_interactive_index(&resolved, action)?;
-    let page = session
-        .current_page
-        .as_mut()
-        .expect("resolved locator requires a current page");
-    let element = &mut page.interactive_elements[index];
-    require_locator_visible(element, action)?;
-    match &mut element.control_state {
-        ControlState::Checkbox(CheckedState::Editable { checked }) => {
-            *checked = replacement;
-            Ok(SetCheckedByLocatorResult {
-                matched: resolved.matched,
-                checked: *checked,
-            })
+    let (result, changed) = {
+        let page = session
+            .current_page
+            .as_mut()
+            .expect("resolved locator requires a current page");
+        let element = &mut page.interactive_elements[index];
+        require_locator_visible(element, action)?;
+        match &mut element.control_state {
+            ControlState::Checkbox(CheckedState::Editable { checked }) => {
+                let changed = *checked != replacement;
+                *checked = replacement;
+                Ok((
+                    SetCheckedByLocatorResult {
+                        matched: resolved.matched,
+                        checked: *checked,
+                    },
+                    changed,
+                ))
+            }
+            ControlState::Checkbox(CheckedState::NonEditable { reason, .. }) => {
+                Err(LocatorOperationError::ActionBlocked {
+                    action,
+                    check: ActionabilityCheck::Enabled,
+                    reason: reason.clone(),
+                })
+            }
+            ControlState::Text(_) | ControlState::Select(_) | ControlState::Unavailable => {
+                Err(LocatorOperationError::UnsupportedAction {
+                    action,
+                    reason: format!(
+                        "checked-state mutation for role {} is not implemented",
+                        element.role()
+                    ),
+                })
+            }
         }
-        ControlState::Checkbox(CheckedState::NonEditable { reason, .. }) => {
-            Err(LocatorOperationError::ActionBlocked {
-                action,
-                check: ActionabilityCheck::Enabled,
-                reason: reason.clone(),
-            })
-        }
-        ControlState::Text(_) | ControlState::Select(_) | ControlState::Unavailable => {
-            Err(LocatorOperationError::UnsupportedAction {
-                action,
-                reason: format!(
-                    "checked-state mutation for role {} is not implemented",
-                    element.role()
-                ),
-            })
-        }
+    }?;
+    if changed {
+        record_dom_events(session, index, &[DomEventType::Input, DomEventType::Change]);
     }
+    Ok(result)
 }
 
 fn execute_hover_by_locator(
@@ -1387,6 +1484,7 @@ impl SessionRequest for ClickElement {
             .clone();
         match action {
             InteractiveAction::Navigate { href } => {
+                record_dom_events(session, index, &[DomEventType::Click]);
                 let current_url = session
                     .current_page
                     .as_ref()
@@ -1437,36 +1535,40 @@ impl SessionRequest for FillElement {
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
         let index = session.element_index_for(self.reference)?;
-        let page = session
-            .current_page
-            .as_mut()
-            .expect("validated reference requires a current page");
-        let element = &mut page.interactive_elements[index];
-        match &mut element.control_state {
-            ControlState::Text(TextValueState::Editable { value }) => {
-                *value = self.value;
-                Ok(FillResult {
+        let result = {
+            let page = session
+                .current_page
+                .as_mut()
+                .expect("validated reference requires a current page");
+            let element = &mut page.interactive_elements[index];
+            match &mut element.control_state {
+                ControlState::Text(TextValueState::Editable { value }) => {
+                    *value = self.value;
+                    Ok(FillResult {
+                        reference: self.reference,
+                        value: value.clone(),
+                    })
+                }
+                ControlState::Text(TextValueState::NonEditable { reason, .. }) => {
+                    Err(SessionError::UnsupportedFill {
+                        reference: self.reference,
+                        reason: reason.clone(),
+                    })
+                }
+                ControlState::Text(TextValueState::Unavailable)
+                | ControlState::Checkbox(_)
+                | ControlState::Select(_)
+                | ControlState::Unavailable => Err(SessionError::UnsupportedFill {
                     reference: self.reference,
-                    value: value.clone(),
-                })
+                    reason: format!(
+                        "fill execution for role {} is not implemented",
+                        element.role()
+                    ),
+                }),
             }
-            ControlState::Text(TextValueState::NonEditable { reason, .. }) => {
-                Err(SessionError::UnsupportedFill {
-                    reference: self.reference,
-                    reason: reason.clone(),
-                })
-            }
-            ControlState::Text(TextValueState::Unavailable)
-            | ControlState::Checkbox(_)
-            | ControlState::Select(_)
-            | ControlState::Unavailable => Err(SessionError::UnsupportedFill {
-                reference: self.reference,
-                reason: format!(
-                    "fill execution for role {} is not implemented",
-                    element.role()
-                ),
-            }),
-        }
+        }?;
+        record_dom_events(session, index, &[DomEventType::Input]);
+        Ok(result)
     }
 }
 
@@ -1501,29 +1603,39 @@ impl SessionRequest for SelectElement {
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
         let index = session.element_index_for(self.reference)?;
-        let element = &mut session
-            .current_page
-            .as_mut()
-            .expect("validated reference requires a current page")
-            .interactive_elements[index];
-        match element.select_value(&self.value) {
-            Ok(value) => Ok(SelectResult {
-                reference: self.reference,
-                value: value.into(),
-            }),
-            Err(
-                SelectValueError::Blocked { reason } | SelectValueError::Unsupported { reason },
-            ) => Err(SessionError::UnsupportedSelect {
-                reference: self.reference,
-                reason,
-            }),
-            Err(SelectValueError::OptionNotFound { target }) => {
-                Err(reference_option_not_found(self.reference, target))
+        let result = {
+            let element = &mut session
+                .current_page
+                .as_mut()
+                .expect("validated reference requires a current page")
+                .interactive_elements[index];
+            let previous = element.value().map(str::to_owned);
+            match element.select_value(&self.value) {
+                Ok(value) => Ok((
+                    SelectResult {
+                        reference: self.reference,
+                        value: value.into(),
+                    },
+                    previous.as_deref() != Some(value),
+                )),
+                Err(
+                    SelectValueError::Blocked { reason } | SelectValueError::Unsupported { reason },
+                ) => Err(SessionError::UnsupportedSelect {
+                    reference: self.reference,
+                    reason,
+                }),
+                Err(SelectValueError::OptionNotFound { target }) => {
+                    Err(reference_option_not_found(self.reference, target))
+                }
+                Err(SelectValueError::OptionDisabled { target }) => {
+                    Err(reference_option_disabled(self.reference, target))
+                }
             }
-            Err(SelectValueError::OptionDisabled { target }) => {
-                Err(reference_option_disabled(self.reference, target))
-            }
+        }?;
+        if result.1 {
+            record_dom_events(session, index, &[DomEventType::Input, DomEventType::Change]);
         }
+        Ok(result.0)
     }
 }
 
@@ -1845,35 +1957,45 @@ impl SessionRequest for SetElementChecked {
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
         let index = session.element_index_for(self.reference)?;
-        let element = &mut session
-            .current_page
-            .as_mut()
-            .expect("validated reference requires a current page")
-            .interactive_elements[index];
-        match &mut element.control_state {
-            ControlState::Checkbox(CheckedState::Editable { checked }) => {
-                *checked = self.checked;
-                Ok(SetCheckedResult {
-                    reference: self.reference,
-                    checked: *checked,
-                })
+        let result = {
+            let element = &mut session
+                .current_page
+                .as_mut()
+                .expect("validated reference requires a current page")
+                .interactive_elements[index];
+            match &mut element.control_state {
+                ControlState::Checkbox(CheckedState::Editable { checked }) => {
+                    let changed = *checked != self.checked;
+                    *checked = self.checked;
+                    Ok((
+                        SetCheckedResult {
+                            reference: self.reference,
+                            checked: *checked,
+                        },
+                        changed,
+                    ))
+                }
+                ControlState::Checkbox(CheckedState::NonEditable { reason, .. }) => {
+                    Err(SessionError::UnsupportedCheck {
+                        reference: self.reference,
+                        reason: reason.clone(),
+                    })
+                }
+                ControlState::Text(_) | ControlState::Select(_) | ControlState::Unavailable => {
+                    Err(SessionError::UnsupportedCheck {
+                        reference: self.reference,
+                        reason: format!(
+                            "checked-state mutation for role {} is not implemented",
+                            element.role()
+                        ),
+                    })
+                }
             }
-            ControlState::Checkbox(CheckedState::NonEditable { reason, .. }) => {
-                Err(SessionError::UnsupportedCheck {
-                    reference: self.reference,
-                    reason: reason.clone(),
-                })
-            }
-            ControlState::Text(_) | ControlState::Select(_) | ControlState::Unavailable => {
-                Err(SessionError::UnsupportedCheck {
-                    reference: self.reference,
-                    reason: format!(
-                        "checked-state mutation for role {} is not implemented",
-                        element.role()
-                    ),
-                })
-            }
+        }?;
+        if result.1 {
+            record_dom_events(session, index, &[DomEventType::Input, DomEventType::Change]);
         }
+        Ok(result.0)
     }
 }
 

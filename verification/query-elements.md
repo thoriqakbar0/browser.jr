@@ -42,13 +42,14 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | QUERY-34 | P1 | pipe | Session mode counts direct CSS and XPath matches ([Finish](../inspection/query-elements.md#finish)). | Serve two cards in one section. | Count quoted CSS, leading `//` XPath, and a missing selector. | Output is `2`, `2`, and `0`. The command needs no snapshot. | partial: parser, compiled-process, and controlled agent-browser comparison passed, 2026-08-31 |
 | QUERY-35 | P1 | pipe | Direct selectors share current state across reads and form actions ([While running](../inspection/query-elements.md#while-running)). | Serve a text input, checkbox, select, disabled button, hidden card, and source attribute. | Read value and attributes, inspect states, check, select, then read state again. | Every command resolves the current document. Mutations affect later reads without a snapshot. | partial: package, parser, compiled-process, and controlled agent-browser comparison passed, 2026-08-31 |
 | QUERY-36 | P1 | pipe | Direct selectors serialize normalized child markup ([While running](../inspection/query-elements.md#while-running)). | Serve nested markup in one container. | Read through strict CSS and XPath. | Both commands return identical inner HTML without a snapshot. | partial: package, parser, compiled-process, and controlled agent-browser comparison passed, 2026-08-31 |
+| QUERY-37 | P1 | pipe | CSS traversal follows normalized HTML ancestry ([Begin running](../inspection/query-elements.md#begin-running)). | Serve omitted roots, optional `li` endings, and an implicit `tbody`. | Resolve structural, descendant, and child selectors. | Each selector follows the parser-built tree without exposing implied roots as targets. | partial: unit, package, and compiled-process tests passed, 2026-08-31 |
 
 Not checkable yet:
 
 - Full ARIA role and accessible-name computation does not exist.
 - Auto-waiting and action timeouts do not exist.
 - Stable-box and receives-events checks do not exist.
-- Pointer dispatch, button activation, and hover state do not exist.
+- Pointer dispatch, button activation, listener invocation, and hover state do not exist.
 - Regular-expression locator matching does not exist.
 - Complete CSS and XPath conformance coverage does not exist.
 - Namespace-aware XPath does not exist.
