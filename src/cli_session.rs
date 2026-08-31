@@ -2,16 +2,18 @@ use std::io::{BufRead, Write};
 
 use crate::cli::{ExitStatus, combine_status, write_line, write_session_error};
 use crate::{
-    CaptureInteractiveSnapshot, ClickElement, ClickResult, FillElement, GetElementAttribute,
-    GetElementChecked, GetElementEnabled, GetElementText, GetElementValue, GetElementVisible,
-    GetPageTitle, GetPageUrl, InteractiveElementRef, InteractiveElementState, InteractiveSnapshot,
-    OpenPage, ReloadPage, SelectElement, Session, SetElementChecked,
+    CaptureInteractiveSnapshot, ClickByRole, ClickByRoleResult, ClickElement, ClickResult,
+    FillByRole, FillElement, FindByRole, GetElementAttribute, GetElementChecked, GetElementEnabled,
+    GetElementText, GetElementValue, GetElementVisible, GetPageTitle, GetPageUrl, HoverByRole,
+    HoverByRoleResult, InteractiveElementRef, InteractiveElementState, InteractiveSnapshot,
+    OpenPage, ReloadPage, RoleLocator, SelectElement, Session, SetCheckedByRole, SetElementChecked,
 };
 
 const SESSION_HELP: &str = "session commands:
   open <url>
   reload
   snapshot --interactive
+  find role <role> [click|fill <text>|check|uncheck|hover|text] [--name <accessible-name>] [--exact]
   click <ref>
   fill <ref> <text>
   select <ref> <value>
@@ -88,6 +90,12 @@ impl CliSession {
     ) -> SessionStep {
         match command {
             ElementCommand::Click(reference) => self.click(reference, output, errors),
+            ElementCommand::FindRole {
+                role,
+                name,
+                exact,
+                action,
+            } => self.find_role(role, name, exact, action, output, errors),
             ElementCommand::Fill(reference, value) => self.fill(reference, value, output, errors),
             ElementCommand::Select(reference, value) => {
                 self.select(reference, value, output, errors)
@@ -152,6 +160,102 @@ impl CliSession {
                 SessionStep::Continue(write_interactive_snapshot(output, &snapshot))
             }
             Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+        }
+    }
+
+    fn find_role(
+        &mut self,
+        role: &str,
+        name: Option<&str>,
+        exact: bool,
+        action: FindRoleAction<'_>,
+        output: &mut impl Write,
+        errors: &mut impl Write,
+    ) -> SessionStep {
+        let locator = match RoleLocator::new(role) {
+            Ok(locator) => match name {
+                Some(name) if exact => locator.with_exact_name(name),
+                Some(name) => locator.with_name(name),
+                None => locator,
+            },
+            Err(error) => {
+                return SessionStep::Continue(write_line(
+                    errors,
+                    &format!("browser.jr: invalid role locator: {error}"),
+                    ExitStatus::InvalidInput,
+                ));
+            }
+        };
+        match action {
+            FindRoleAction::Click => match self.engine.execute(ClickByRole { locator }) {
+                Ok(ClickByRoleResult::Navigated { matched, page }) => {
+                    self.current_references.clear();
+                    SessionStep::Continue(write_line(
+                        output,
+                        &format!(
+                            "navigated role={:?} name={:?} element={:?} url={} elements={}",
+                            matched.role,
+                            matched.name,
+                            matched.element,
+                            page.url,
+                            page.interactive_element_count
+                        ),
+                        ExitStatus::Success,
+                    ))
+                }
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            },
+            FindRoleAction::Fill(value) => match self.engine.execute(FillByRole {
+                locator,
+                value: value.into(),
+            }) {
+                Ok(result) => SessionStep::Continue(write_line(
+                    output,
+                    &format!(
+                        "filled role={:?} name={:?} element={:?} characters={}",
+                        result.matched.role,
+                        result.matched.name,
+                        result.matched.element,
+                        result.value.chars().count()
+                    ),
+                    ExitStatus::Success,
+                )),
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            },
+            FindRoleAction::Check | FindRoleAction::Uncheck => {
+                let checked = action == FindRoleAction::Check;
+                match self.engine.execute(SetCheckedByRole { locator, checked }) {
+                    Ok(result) => SessionStep::Continue(write_line(
+                        output,
+                        &format!(
+                            "checked role={:?} name={:?} element={:?} checked={}",
+                            result.matched.role,
+                            result.matched.name,
+                            result.matched.element,
+                            result.checked
+                        ),
+                        ExitStatus::Success,
+                    )),
+                    Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+                }
+            }
+            FindRoleAction::Hover => match self.engine.execute(HoverByRole { locator }) {
+                Ok(HoverByRoleResult { matched }) => SessionStep::Continue(write_line(
+                    output,
+                    &format!(
+                        "hovered role={:?} name={:?} element={:?}",
+                        matched.role, matched.name, matched.element
+                    ),
+                    ExitStatus::Success,
+                )),
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            },
+            FindRoleAction::Text => match self.engine.execute(FindByRole { locator }) {
+                Ok(element) => {
+                    SessionStep::Continue(write_line(output, &element.text, ExitStatus::Success))
+                }
+                Err(error) => SessionStep::Continue(write_session_error(errors, error)),
+            },
         }
     }
 
@@ -451,6 +555,12 @@ enum PageCommand<'a> {
 }
 
 enum ElementCommand<'a> {
+    FindRole {
+        role: &'a str,
+        name: Option<&'a str>,
+        exact: bool,
+        action: FindRoleAction<'a>,
+    },
     Click(&'a str),
     Fill(&'a str, &'a str),
     Select(&'a str, &'a str),
@@ -462,6 +572,16 @@ enum ElementCommand<'a> {
     GetAttribute(&'a str, &'a str),
     GetText(&'a str),
     GetValue(&'a str),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FindRoleAction<'a> {
+    Click,
+    Fill(&'a str),
+    Check,
+    Uncheck,
+    Hover,
+    Text,
 }
 
 enum SessionStep {
@@ -558,6 +678,11 @@ pub(crate) fn write_interactive_snapshot(
 
 fn parse_command(line: &str) -> Result<SessionCommand<'_>, &'static str> {
     let line = line.strip_suffix('\r').unwrap_or(line);
+    if let Some(rest) = line.strip_prefix("find")
+        && (rest.is_empty() || rest.as_bytes()[0].is_ascii_whitespace())
+    {
+        return parse_find_command(rest);
+    }
     if let Some(rest) = line.strip_prefix("fill")
         && (rest.is_empty() || rest.as_bytes()[0].is_ascii_whitespace())
     {
@@ -581,6 +706,122 @@ fn parse_command(line: &str) -> Result<SessionCommand<'_>, &'static str> {
         Some(command @ ("help" | "exit")) => parse_lifecycle_command(command, arguments),
         _ => Err("browser.jr: invalid session command; enter help"),
     }
+}
+
+fn parse_find_command(rest: &str) -> Result<SessionCommand<'_>, &'static str> {
+    const ERROR: &str = "browser.jr: find requires role <role> [click|fill <text>|check|uncheck|hover|text] [--name <accessible-name>] [--exact]";
+    let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
+    let rest = strip_option(rest, "role").ok_or(ERROR)?;
+    let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
+    let (role, rest) = split_first_token(rest).ok_or(ERROR)?;
+    let (action, options) = parse_find_action(rest).ok_or(ERROR)?;
+    let (name, exact) = parse_find_options(options).ok_or(ERROR)?;
+    Ok(SessionCommand::Element(ElementCommand::FindRole {
+        role,
+        name,
+        exact,
+        action,
+    }))
+}
+
+fn parse_find_action(rest: &str) -> Option<(FindRoleAction<'_>, &str)> {
+    let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
+    let Some((token, remaining)) = split_first_token(rest) else {
+        return Some((FindRoleAction::Click, rest));
+    };
+    match token {
+        "click" => Some((FindRoleAction::Click, remaining)),
+        "check" => Some((FindRoleAction::Check, remaining)),
+        "uncheck" => Some((FindRoleAction::Uncheck, remaining)),
+        "hover" => Some((FindRoleAction::Hover, remaining)),
+        "text" => Some((FindRoleAction::Text, remaining)),
+        "fill" => {
+            let input = remaining.trim_start_matches(|value: char| value.is_ascii_whitespace());
+            let (value, options) = split_find_fill_options(input);
+            (!value.is_empty()).then_some((FindRoleAction::Fill(value), options))
+        }
+        _ => Some((FindRoleAction::Click, rest)),
+    }
+}
+
+fn split_find_fill_options(input: &str) -> (&str, &str) {
+    let boundary = [find_token(input, "--name"), find_token(input, "--exact")]
+        .into_iter()
+        .flatten()
+        .min();
+    match boundary {
+        Some(boundary) => (input[..boundary].trim_end(), &input[boundary..]),
+        None => (input, ""),
+    }
+}
+
+fn find_token(value: &str, token: &str) -> Option<usize> {
+    value.match_indices(token).find_map(|(index, _)| {
+        let before = index == 0 || value.as_bytes()[index - 1].is_ascii_whitespace();
+        let after_index = index + token.len();
+        let after =
+            after_index == value.len() || value.as_bytes()[after_index].is_ascii_whitespace();
+        (before && after).then_some(index)
+    })
+}
+
+fn parse_find_options(options: &str) -> Option<(Option<&str>, bool)> {
+    let options = options.trim_start_matches(|value: char| value.is_ascii_whitespace());
+    if options.is_empty() {
+        return Some((None, false));
+    }
+    if let Some(rest) = strip_option(options, "--exact") {
+        let rest = rest.trim_start_matches(|value: char| value.is_ascii_whitespace());
+        return Some((Some(parse_name_option(rest)?), true));
+    }
+    let name = parse_name_option(options)?;
+    let (name, exact) = strip_trailing_exact(name);
+    (!name.is_empty()).then_some((Some(name), exact))
+}
+
+fn strip_trailing_exact(name: &str) -> (&str, bool) {
+    let name = name.trim_end_matches(|value: char| value.is_ascii_whitespace());
+    let Some(prefix) = name.strip_suffix("--exact") else {
+        return (name, false);
+    };
+    if prefix.is_empty() {
+        return ("", true);
+    }
+    if !prefix
+        .chars()
+        .next_back()
+        .is_some_and(|value| value.is_ascii_whitespace())
+    {
+        return (name, false);
+    }
+    (
+        prefix.trim_end_matches(|value: char| value.is_ascii_whitespace()),
+        true,
+    )
+}
+
+fn split_first_token(value: &str) -> Option<(&str, &str)> {
+    if value.is_empty() {
+        return None;
+    }
+    match value.find(|character: char| character.is_ascii_whitespace()) {
+        Some(boundary) => Some((&value[..boundary], &value[boundary..])),
+        None => Some((value, "")),
+    }
+}
+
+fn strip_option<'a>(value: &'a str, option: &str) -> Option<&'a str> {
+    let rest = value.strip_prefix(option)?;
+    (rest.is_empty() || rest.as_bytes()[0].is_ascii_whitespace()).then_some(rest)
+}
+
+fn parse_name_option(value: &str) -> Option<&str> {
+    let rest = strip_option(value, "--name")?;
+    if rest.is_empty() {
+        return None;
+    }
+    let name = rest.trim_start_matches(|character: char| character.is_ascii_whitespace());
+    (!name.is_empty()).then_some(name)
 }
 
 type CommandArguments<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>);
@@ -684,7 +925,8 @@ fn flush_streams(output: &mut impl Write, errors: &mut impl Write) -> std::io::R
 #[cfg(test)]
 mod tests {
     use super::{
-        ElementCommand, ExitStatus, PageCommand, SessionCommand, parse_command, run_session,
+        ElementCommand, ExitStatus, FindRoleAction, PageCommand, SessionCommand, parse_command,
+        run_session,
     };
     use std::io::Cursor;
 
@@ -700,6 +942,7 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("session ready"));
         assert!(output.contains("session commands:"));
+        assert!(output.contains("find role <role>"));
         assert!(output.contains("session closed"));
         assert_eq!(
             String::from_utf8(errors).unwrap(),
@@ -796,5 +1039,96 @@ mod tests {
             Ok(SessionCommand::Element(ElementCommand::IsVisible("@e1")))
         ));
         assert!(parse_command("get value @e1 extra").is_err());
+    }
+
+    #[test]
+    fn find_role_parses_name_and_exact_variants() {
+        assert!(matches!(
+            parse_command("find role button"),
+            Ok(SessionCommand::Element(ElementCommand::FindRole {
+                role: "button",
+                name: None,
+                exact: false,
+                action: FindRoleAction::Click,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find role button --name Save changes"),
+            Ok(SessionCommand::Element(ElementCommand::FindRole {
+                role: "button",
+                name: Some("Save changes"),
+                exact: false,
+                action: FindRoleAction::Click,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find role button --name Save changes --exact"),
+            Ok(SessionCommand::Element(ElementCommand::FindRole {
+                role: "button",
+                name: Some("Save changes"),
+                exact: true,
+                action: FindRoleAction::Click,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find role button --exact --name Save changes"),
+            Ok(SessionCommand::Element(ElementCommand::FindRole {
+                role: "button",
+                name: Some("Save changes"),
+                exact: true,
+                action: FindRoleAction::Click,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find role heading text --name Skills"),
+            Ok(SessionCommand::Element(ElementCommand::FindRole {
+                role: "heading",
+                name: Some("Skills"),
+                exact: false,
+                action: FindRoleAction::Text,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find role textbox fill hello world --name Email address --exact"),
+            Ok(SessionCommand::Element(ElementCommand::FindRole {
+                role: "textbox",
+                name: Some("Email address"),
+                exact: true,
+                action: FindRoleAction::Fill("hello world"),
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find role checkbox check --name Terms"),
+            Ok(SessionCommand::Element(ElementCommand::FindRole {
+                role: "checkbox",
+                name: Some("Terms"),
+                exact: false,
+                action: FindRoleAction::Check,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find role checkbox uncheck --name Terms"),
+            Ok(SessionCommand::Element(ElementCommand::FindRole {
+                role: "checkbox",
+                name: Some("Terms"),
+                exact: false,
+                action: FindRoleAction::Uncheck,
+            }))
+        ));
+        assert!(matches!(
+            parse_command("find role button hover --name Menu"),
+            Ok(SessionCommand::Element(ElementCommand::FindRole {
+                role: "button",
+                name: Some("Menu"),
+                exact: false,
+                action: FindRoleAction::Hover,
+            }))
+        ));
+        assert!(parse_command("find role").is_err());
+        assert!(parse_command("find role button --name").is_err());
+        assert!(parse_command("find role button --name --exact").is_err());
+        assert!(parse_command("find role button --exact").is_err());
+        assert!(parse_command("find role textbox fill --name Email").is_err());
+        assert!(parse_command("find text Save").is_err());
     }
 }

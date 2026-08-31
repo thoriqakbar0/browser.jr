@@ -122,6 +122,141 @@ fn session_mode_keeps_snapshot_refs_for_link_navigation() {
 }
 
 #[test]
+fn session_mode_uses_role_text_and_fill_without_a_prior_snapshot() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<button>Save Draft</button><button>Publish</button><label>Email address<input value="old"></label>"#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nfind role BUTTON text --name draft\nfind role textbox fill new value --exact --name Email address\nsnapshot -i\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(
+        output.status.success(),
+        "unexpected stdout: {}\nunexpected stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\nSave Draft\n"));
+    assert!(
+        stdout.contains(
+            r#"filled role="textbox" name="Email address" element="input[4]" characters=9"#
+        )
+    );
+    assert!(stdout.contains(r#"- textbox "Email address" [ref=@e3]: "new value""#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn session_mode_checks_and_unchecks_by_role_without_a_snapshot() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(r#"<label><input type="checkbox">Terms</label>"#);
+    let output = run_session_script(&format!(
+        "open {url}\nfind role checkbox check --name Terms\nfind role checkbox uncheck --name Terms\nsnapshot -i\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(r#"checked role="checkbox" name="Terms" element="input[2]" checked=true"#)
+    );
+    assert!(
+        stdout.contains(r#"checked role="checkbox" name="Terms" element="input[2]" checked=false"#)
+    );
+    assert!(stdout.contains(r#"- checkbox "Terms" [ref=@e1] [checked=false]"#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn session_mode_clicks_a_link_by_role_and_re_resolves_the_new_document() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![r#"<a href="/next">Next</a>"#, r#"<h1>Arrived</h1>"#]);
+    let output = run_session_script(&format!(
+        "open {url}\nfind role link --exact --name Next\nfind role heading text --exact --name Arrived\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(&format!(
+        r#"navigated role="link" name="Next" element="a[1]" url={url}next elements=0"#
+    )));
+    assert!(stdout.contains("\nArrived\n"));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn unsupported_role_hover_preserves_snapshot_references() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(r#"<button>Save</button>"#);
+    let output = run_session_script(&format!(
+        "open {url}\nsnapshot -i\nfind role button hover --name Save\nget text @e1\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#"text ref=@e1 "Save""#));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains(
+        r#"cannot hover role "button" with accessible name containing "Save": hover state and pointer event dispatch are not implemented"#
+    ));
+}
+
+#[test]
+fn session_mode_finds_structural_role_text() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<header aria-label="Site header"><h1>Home</h1></header><main><h2>Skills</h2><ul><li>Rust</li><li>Go</li></ul><button>Save</button></main>"#,
+    );
+    let output = run_session_script(&format!(
+        "open {url}\nsnapshot -i\nfind role heading text --exact --name Skills\nfind role list text\nfind role banner text --exact --name Site header\nget text @e1\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\nSkills\n"));
+    assert!(stdout.contains("\nRust Go\n"));
+    assert!(stdout.contains("\nHome\n"));
+    assert!(stdout.contains(r#"text ref=@e1 "Save""#));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn failed_role_find_preserves_the_current_reference() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(r#"<button>Save</button><button>Save Changes</button>"#);
+    let output = run_session_script(&format!(
+        "open {url}\nsnapshot -i\nfind role button --name missing\nget text @e1\nfind role button --name save\nget text @e1\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#"text ref=@e1 "Save""#));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            r#"no element matches role "button" with accessible name containing "missing""#
+        )
+    );
+    assert!(
+        stderr.contains(r#"2 elements match role "button" with accessible name containing "save""#)
+    );
+    assert!(!stderr.contains("unknown or stale element reference"));
+}
+
+#[test]
 fn session_mode_rejects_refs_after_navigation_until_a_new_snapshot() {
     let network_guard = network_test_guard();
     let (url, server) = serve_pages(vec![

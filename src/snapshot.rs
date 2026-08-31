@@ -99,7 +99,7 @@ impl InteractiveSnapshot {
                     id,
                     u64::try_from(index + 1).expect("interactive element count exceeds u64"),
                 ),
-                element: source.element.clone(),
+                element: source.element().into(),
                 role: source.role().into(),
                 name: source.name().into(),
                 state: source

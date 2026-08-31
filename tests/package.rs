@@ -1,10 +1,12 @@
 use browser_jr::{
-    ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot, CheckElementWidth, ClickElement,
-    ClickResult, Comparison, ElementInput, ElementVisible, FillElement, FillResult,
+    ActionabilityCheck, ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot,
+    CheckElementWidth, ClickByRole, ClickByRoleResult, ClickElement, ClickResult, Comparison,
+    ElementInput, ElementVisible, FillByRole, FillElement, FillResult, FindByRole,
     GetElementAttribute, GetElementChecked, GetElementEnabled, GetElementText, GetElementValue,
-    GetElementVisible, GetPageTitle, GetPageUrl, InteractiveElementState, LayoutInput,
-    LayoutMutation, LintLayout, OpenPage, ReloadPage, RuleConstraint, RuleResult, SelectElement,
-    SelectResult, Session, SessionError, SetElementChecked,
+    GetElementVisible, GetPageTitle, GetPageUrl, HoverByRole, InteractiveElementState, LayoutInput,
+    LayoutMutation, LintLayout, OpenPage, ReloadPage, RoleAction, RoleLocator, RuleConstraint,
+    RuleResult, SelectElement, SelectResult, Session, SessionError, SetCheckedByRole,
+    SetElementChecked,
 };
 use std::io::Write;
 use std::net::TcpListener;
@@ -92,6 +94,431 @@ fn package_session_assigns_fresh_refs_to_each_interactive_snapshot() {
     assert_eq!(first.elements[1].reference.to_string(), "@e2");
     assert_eq!(first.elements[1].role, "button");
     assert_eq!(first.elements[1].name, "Save");
+}
+
+#[test]
+fn role_locators_resolve_without_a_prior_snapshot() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<button>Save Draft</button><button>Publish</button><input aria-label="Email address">"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let found = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("BUTTON").unwrap().with_name("draft"),
+        })
+        .unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    drop(network_guard);
+
+    assert_eq!(snapshot.id.get(), 1);
+    assert_eq!(found.element, "button[1]");
+    assert_eq!(found.role, "button");
+    assert_eq!(found.name, "Save Draft");
+    assert_eq!(found.text, "Save Draft");
+}
+
+#[test]
+fn role_locator_resolution_is_strict_and_transactional() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<button>Save Draft</button><button>Save Changes</button><input aria-label="Email address">"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let current = snapshot.elements[2].reference;
+
+    let ambiguous_locator = RoleLocator::new("button").unwrap().with_name("save");
+    let ambiguous = session.execute(FindByRole {
+        locator: ambiguous_locator.clone(),
+    });
+    let missing_locator = RoleLocator::new("button")
+        .unwrap()
+        .with_exact_name("save draft");
+    let missing = session.execute(FindByRole {
+        locator: missing_locator.clone(),
+    });
+    let preserved = session.execute(GetElementValue { reference: current });
+    drop(network_guard);
+
+    assert_eq!(
+        ambiguous,
+        Err(SessionError::RoleLocatorAmbiguous {
+            locator: ambiguous_locator,
+            match_count: 2,
+        })
+    );
+    assert_eq!(
+        missing,
+        Err(SessionError::RoleLocatorNotFound {
+            locator: missing_locator,
+        })
+    );
+    assert_eq!(preserved.unwrap().value, "");
+}
+
+#[test]
+fn successful_role_resolution_preserves_snapshot_references() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(r#"<button>Save</button><button>Publish</button>"#);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let old_reference = snapshot.elements[0].reference;
+
+    let found = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("button")
+                .unwrap()
+                .with_exact_name("Publish"),
+        })
+        .unwrap();
+    let preserved = session.execute(GetElementText {
+        reference: old_reference,
+    });
+    drop(network_guard);
+
+    assert_eq!(found.element, "button[2]");
+    assert_eq!(found.text, "Publish");
+    assert_eq!(preserved.unwrap().text, "Save");
+}
+
+#[test]
+fn role_locators_resolve_structural_roles_and_role_specific_names() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <header aria-label="Site header"><h1>Home</h1></header>
+            <main>
+                <nav aria-labelledby="nav-name"><span id="nav-name">Primary</span><a href="/docs">Docs</a></nav>
+                <h2>Skills</h2>
+                <ul><li>Rust</li><li>Go</li></ul>
+            </main>
+            <footer aria-label="Site footer">Legal</footer>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let heading = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("heading")
+                .unwrap()
+                .with_exact_name("Skills"),
+        })
+        .unwrap();
+    let navigation = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("navigation")
+                .unwrap()
+                .with_exact_name("Primary"),
+        })
+        .unwrap();
+    let list = session
+        .execute(FindByRole {
+            locator: RoleLocator::new("list").unwrap(),
+        })
+        .unwrap();
+    let banner_named_from_contents = session.execute(FindByRole {
+        locator: RoleLocator::new("banner").unwrap().with_exact_name("Home"),
+    });
+    drop(network_guard);
+
+    assert_eq!(heading.text, "Skills");
+    assert_eq!(navigation.text, "PrimaryDocs");
+    assert_eq!(list.name, "");
+    assert_eq!(list.text, "Rust Go");
+    assert!(matches!(
+        banner_named_from_contents,
+        Err(SessionError::RoleLocatorNotFound { .. })
+    ));
+}
+
+#[test]
+fn role_actions_fill_and_check_without_capturing_a_snapshot() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<label>Email<input value="old"></label><label><input type="checkbox">Terms</label>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let before = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let textbox_reference = before.elements[0].reference;
+    let checkbox_reference = before.elements[1].reference;
+
+    let filled = session
+        .execute(FillByRole {
+            locator: RoleLocator::new("textbox")
+                .unwrap()
+                .with_exact_name("Email"),
+            value: "new value".into(),
+        })
+        .unwrap();
+    let checked = session
+        .execute(SetCheckedByRole {
+            locator: RoleLocator::new("checkbox")
+                .unwrap()
+                .with_exact_name("Terms"),
+            checked: true,
+        })
+        .unwrap();
+    let checked_again = session
+        .execute(SetCheckedByRole {
+            locator: RoleLocator::new("checkbox")
+                .unwrap()
+                .with_exact_name("Terms"),
+            checked: true,
+        })
+        .unwrap();
+    let unchecked = session
+        .execute(SetCheckedByRole {
+            locator: RoleLocator::new("checkbox")
+                .unwrap()
+                .with_exact_name("Terms"),
+            checked: false,
+        })
+        .unwrap();
+    let unchecked_again = session
+        .execute(SetCheckedByRole {
+            locator: RoleLocator::new("checkbox")
+                .unwrap()
+                .with_exact_name("Terms"),
+            checked: false,
+        })
+        .unwrap();
+    let current_value = session
+        .execute(GetElementValue {
+            reference: textbox_reference,
+        })
+        .unwrap();
+    let current_checked = session
+        .execute(GetElementChecked {
+            reference: checkbox_reference,
+        })
+        .unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    drop(network_guard);
+
+    assert_eq!(filled.matched.element, "input[2]");
+    assert_eq!(filled.value, "new value");
+    assert_eq!(checked.matched.element, "input[4]");
+    assert!(checked.checked);
+    assert!(checked_again.checked);
+    assert!(!unchecked.checked);
+    assert!(!unchecked_again.checked);
+    assert_eq!(current_value.value, "new value");
+    assert!(!current_checked.checked);
+    assert_eq!(before.id.get(), 1);
+    assert_eq!(snapshot.id.get(), 2);
+    assert_eq!(
+        snapshot.elements[0].state,
+        InteractiveElementState::Value("new value".into())
+    );
+    assert_eq!(
+        snapshot.elements[1].state,
+        InteractiveElementState::Checked(false)
+    );
+}
+
+#[test]
+fn role_actions_resolve_strictly_before_mutation() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<input aria-label="Email" value="first"><input aria-label="Email address" value="second">"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let first = snapshot.elements[0].reference;
+    let locator = RoleLocator::new("textbox").unwrap().with_name("email");
+
+    let result = session.execute(FillByRole {
+        locator: locator.clone(),
+        value: "changed".into(),
+    });
+    let preserved = session.execute(GetElementValue { reference: first });
+    drop(network_guard);
+
+    assert_eq!(
+        result,
+        Err(SessionError::RoleLocatorAmbiguous {
+            locator,
+            match_count: 2,
+        })
+    );
+    assert_eq!(preserved.unwrap().value, "first");
+}
+
+#[test]
+fn role_actions_report_actionability_and_unsupported_behavior() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<input aria-label="Hidden" hidden><input aria-label="Disabled" disabled><button>Save</button><h1>Title</h1>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let hidden_locator = RoleLocator::new("textbox")
+        .unwrap()
+        .with_exact_name("Hidden");
+    let hidden = session.execute(FillByRole {
+        locator: hidden_locator.clone(),
+        value: "no".into(),
+    });
+    let disabled_locator = RoleLocator::new("textbox")
+        .unwrap()
+        .with_exact_name("Disabled");
+    let disabled = session.execute(FillByRole {
+        locator: disabled_locator.clone(),
+        value: "no".into(),
+    });
+    let heading_locator = RoleLocator::new("heading")
+        .unwrap()
+        .with_exact_name("Title");
+    let heading = session.execute(ClickByRole {
+        locator: heading_locator.clone(),
+    });
+    let hover_locator = RoleLocator::new("button").unwrap().with_exact_name("Save");
+    let hover = session.execute(HoverByRole {
+        locator: hover_locator.clone(),
+    });
+    drop(network_guard);
+
+    assert!(matches!(
+        hidden,
+        Err(SessionError::RoleActionBlocked {
+            locator,
+            action: RoleAction::Fill,
+            check: ActionabilityCheck::Visible,
+            ..
+        }) if locator == hidden_locator
+    ));
+    assert!(matches!(
+        disabled,
+        Err(SessionError::RoleActionBlocked {
+            locator,
+            action: RoleAction::Fill,
+            check: ActionabilityCheck::Editable,
+            ..
+        }) if locator == disabled_locator
+    ));
+    assert!(matches!(
+        heading,
+        Err(SessionError::UnsupportedRoleAction {
+            locator,
+            action: RoleAction::Click,
+            ..
+        }) if locator == heading_locator
+    ));
+    assert_eq!(
+        hover,
+        Err(SessionError::UnsupportedRoleAction {
+            locator: hover_locator,
+            action: RoleAction::Hover,
+            reason: "hover state and pointer event dispatch are not implemented".into(),
+        })
+    );
+}
+
+#[test]
+fn clicking_by_role_navigates_and_invalidates_snapshot_references() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![r#"<a href="/next">Next</a>"#, r#"<h1>Arrived</h1>"#]);
+    let mut session = Session::new();
+    session.execute(OpenPage { url: url.clone() }).unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let old_reference = snapshot.elements[0].reference;
+    let locator = RoleLocator::new("link").unwrap().with_exact_name("Next");
+
+    let result = session
+        .execute(ClickByRole {
+            locator: locator.clone(),
+        })
+        .unwrap();
+    server.join().unwrap();
+    let stale = session.execute(GetElementText {
+        reference: old_reference,
+    });
+    drop(network_guard);
+
+    assert!(matches!(
+        result,
+        ClickByRoleResult::Navigated { matched, page }
+            if matched.name == "Next" && page.url == format!("{url}next")
+    ));
+    assert_eq!(
+        stale,
+        Err(SessionError::StaleElementReference {
+            reference: old_reference,
+        })
+    );
+}
+
+#[test]
+fn failed_role_navigation_preserves_the_page_and_snapshot_references() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(r#"<a href="http://example.com/away">Away</a>"#);
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let reference = snapshot.elements[0].reference;
+    let locator = RoleLocator::new("link").unwrap().with_exact_name("Away");
+
+    let result = session.execute(ClickByRole {
+        locator: locator.clone(),
+    });
+    let preserved = session.execute(GetElementText { reference });
+    drop(network_guard);
+
+    assert!(matches!(
+        result,
+        Err(SessionError::RoleNavigation {
+            locator: failed_locator,
+            ..
+        }) if failed_locator == locator
+    ));
+    assert_eq!(preserved.unwrap().text, "Away");
+}
+
+#[test]
+fn role_actions_block_when_visibility_evidence_is_unavailable() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<style>input { display:block }</style><input aria-label="Styled" value="old">"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let locator = RoleLocator::new("textbox")
+        .unwrap()
+        .with_exact_name("Styled");
+
+    let result = session.execute(FillByRole {
+        locator: locator.clone(),
+        value: "changed".into(),
+    });
+    drop(network_guard);
+
+    assert_eq!(
+        result,
+        Err(SessionError::RoleActionBlocked {
+            locator,
+            action: RoleAction::Fill,
+            check: ActionabilityCheck::Visible,
+            reason: "linked and embedded stylesheet visibility is not implemented".into(),
+        })
+    );
 }
 
 #[test]

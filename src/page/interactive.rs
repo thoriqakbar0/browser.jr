@@ -5,25 +5,27 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PageSemanticSource {
     pub(crate) title: String,
+    pub(crate) semantic_elements: Vec<SemanticElementSource>,
     pub(crate) interactive_elements: Vec<InteractiveElementSource>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct InteractiveElementSource {
+pub(crate) struct SemanticElementSource {
     pub(crate) element: String,
-    semantics: InteractiveSemantics,
-    pub(crate) action: InteractiveAction,
-    pub(crate) control_state: ControlState,
-    visibility: VisibilityState,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct InteractiveSemantics {
+    pub(crate) interactive_index: Option<usize>,
     tag: String,
     role: String,
     name: String,
     text: String,
     attributes: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InteractiveElementSource {
+    semantics: SemanticElementSource,
+    pub(crate) action: InteractiveAction,
+    pub(crate) control_state: ControlState,
+    visibility: VisibilityState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -85,16 +87,20 @@ pub(crate) enum ControlState {
 }
 
 impl InteractiveElementSource {
+    pub(crate) fn element(&self) -> &str {
+        &self.semantics.element
+    }
+
     pub(crate) fn role(&self) -> &str {
-        &self.semantics.role
+        self.semantics.role()
     }
 
     pub(crate) fn name(&self) -> &str {
-        &self.semantics.name
+        self.semantics.name()
     }
 
     pub(crate) fn text(&self) -> &str {
-        &self.semantics.text
+        self.semantics.text()
     }
 
     pub(crate) fn attribute(&self, name: &str) -> Option<&str> {
@@ -165,6 +171,20 @@ impl InteractiveElementSource {
     }
 }
 
+impl SemanticElementSource {
+    pub(crate) fn role(&self) -> &str {
+        &self.role
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+}
+
 impl SelectState {
     fn value(&self) -> Option<&str> {
         match self {
@@ -211,44 +231,56 @@ pub(crate) fn interactive_elements_from_html(html: &str) -> Vec<InteractiveEleme
     page_semantics_from_html(html).interactive_elements
 }
 
+#[cfg(test)]
+pub(crate) fn semantic_elements_from_html(html: &str) -> Vec<SemanticElementSource> {
+    page_semantics_from_html(html).semantic_elements
+}
+
 pub(crate) fn page_semantics_from_html(html: &str) -> PageSemanticSource {
     let source = parse_page_source(html);
+    let (semantic_elements, interactive_elements) =
+        element_sources(&source.elements, source.has_stylesheet);
     PageSemanticSource {
         title: collapse_whitespace(&source.title),
-        interactive_elements: interactive_elements_from_sources(
-            &source.elements,
-            source.has_stylesheet,
-        ),
+        semantic_elements,
+        interactive_elements,
     }
 }
 
-fn interactive_elements_from_sources(
+fn element_sources(
     sources: &[ElementSource],
     has_stylesheet: bool,
-) -> Vec<InteractiveElementSource> {
-    sources
-        .iter()
-        .enumerate()
-        .filter_map(|(index, source)| {
-            let role = interactive_role(source)?;
-            let action = interactive_action(source, &role);
-            let control_state = control_state(index, source, sources);
-            let visibility = visibility_state(index, source, sources, has_stylesheet);
-            Some(InteractiveElementSource {
+) -> (Vec<SemanticElementSource>, Vec<InteractiveElementSource>) {
+    let mut semantic_elements = Vec::new();
+    let mut interactive_elements = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        if let Some(role) = semantic_role(index, source, sources) {
+            let interactive_index =
+                is_interactive_role(&role).then_some(interactive_elements.len());
+            let semantics = SemanticElementSource {
                 element: source.id.clone(),
-                semantics: InteractiveSemantics {
-                    tag: source.tag.clone(),
-                    role,
-                    name: accessible_name(source, sources),
-                    text: collapse_whitespace(&source.text),
-                    attributes: source.attributes.clone(),
-                },
-                action,
-                control_state,
-                visibility,
-            })
-        })
-        .collect()
+                interactive_index,
+                tag: source.tag.clone(),
+                name: accessible_name(source, sources, &role),
+                role: role.clone(),
+                text: collapse_whitespace(&source.text),
+                attributes: source.attributes.clone(),
+            };
+            if interactive_index.is_some() {
+                let action = interactive_action(source, &role);
+                let control_state = control_state(index, source, sources);
+                let visibility = visibility_state(index, source, sources, has_stylesheet);
+                interactive_elements.push(InteractiveElementSource {
+                    semantics: semantics.clone(),
+                    action,
+                    control_state,
+                    visibility,
+                });
+            }
+            semantic_elements.push(semantics);
+        }
+    }
+    (semantic_elements, interactive_elements)
 }
 
 fn control_state(
@@ -415,16 +447,22 @@ fn interactive_action(source: &ElementSource, role: &str) -> InteractiveAction {
     InteractiveAction::Navigate { href: href.clone() }
 }
 
-fn interactive_role(source: &ElementSource) -> Option<String> {
-    explicit_interactive_role(source).or_else(|| native_interactive_role(source))
+fn semantic_role(
+    source_index: usize,
+    source: &ElementSource,
+    sources: &[ElementSource],
+) -> Option<String> {
+    explicit_semantic_role(source)
+        .or_else(|| native_interactive_role(source))
+        .or_else(|| native_structural_role(source_index, source, sources))
 }
 
-fn explicit_interactive_role(source: &ElementSource) -> Option<String> {
+fn explicit_semantic_role(source: &ElementSource) -> Option<String> {
     source.attributes.get("role").and_then(|roles| {
         roles
             .split_ascii_whitespace()
             .map(str::to_ascii_lowercase)
-            .find(|role| is_interactive_role(role))
+            .find(|role| is_supported_role(role))
     })
 }
 
@@ -442,6 +480,71 @@ fn native_interactive_role(source: &ElementSource) -> Option<String> {
         "input" => input_role(input_type(source)),
         _ => None,
     }
+}
+
+fn native_structural_role(
+    source_index: usize,
+    source: &ElementSource,
+    sources: &[ElementSource],
+) -> Option<String> {
+    let role = match source.tag.as_str() {
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "heading",
+        "ul" | "ol" | "menu" => "list",
+        "li" => "listitem",
+        "nav" => "navigation",
+        "main" => "main",
+        "aside" => "complementary",
+        "header" if !has_sectioning_ancestor(source_index, sources) => "banner",
+        "footer" if !has_sectioning_ancestor(source_index, sources) => "contentinfo",
+        "section" if author_name(source, sources).is_some() => "region",
+        "form" if author_name(source, sources).is_some() => "form",
+        "article" => "article",
+        "blockquote" => "blockquote",
+        "dialog" => "dialog",
+        "fieldset" | "details" => "group",
+        "figure" => "figure",
+        "hr" => "separator",
+        "progress" => "progressbar",
+        "output" => "status",
+        "table" => "table",
+        "thead" | "tbody" | "tfoot" => "rowgroup",
+        "tr" => "row",
+        "td" => "cell",
+        "th" if source.attributes.get("scope").is_some_and(|scope| {
+            scope.eq_ignore_ascii_case("row") || scope.eq_ignore_ascii_case("rowgroup")
+        }) =>
+        {
+            "rowheader"
+        }
+        "th" => "columnheader",
+        "img"
+            if source
+                .attributes
+                .get("alt")
+                .is_some_and(|alt| alt.trim().is_empty()) =>
+        {
+            return None;
+        }
+        "img" => "img",
+        "p" => "paragraph",
+        _ => return None,
+    };
+    Some(role.into())
+}
+
+fn has_sectioning_ancestor(source_index: usize, sources: &[ElementSource]) -> bool {
+    let mut parent = sources[source_index].parent;
+    while let Some(index) = parent {
+        let ancestor = &sources[index];
+        if matches!(
+            ancestor.tag.as_str(),
+            "article" | "aside" | "main" | "nav" | "section"
+        ) {
+            return true;
+        }
+        parent = ancestor.parent;
+    }
+    false
 }
 
 fn input_role(input_type: Option<String>) -> Option<String> {
@@ -478,8 +581,42 @@ fn is_interactive_role(role: &str) -> bool {
     )
 }
 
-fn accessible_name(source: &ElementSource, sources: &[ElementSource]) -> String {
-    if let Some(name) = labelled_name(source, sources) {
+fn is_supported_role(role: &str) -> bool {
+    is_interactive_role(role)
+        || matches!(
+            role,
+            "alert"
+                | "article"
+                | "banner"
+                | "blockquote"
+                | "cell"
+                | "columnheader"
+                | "complementary"
+                | "contentinfo"
+                | "dialog"
+                | "figure"
+                | "form"
+                | "group"
+                | "heading"
+                | "img"
+                | "list"
+                | "listitem"
+                | "main"
+                | "navigation"
+                | "paragraph"
+                | "progressbar"
+                | "region"
+                | "row"
+                | "rowgroup"
+                | "rowheader"
+                | "separator"
+                | "status"
+                | "table"
+        )
+}
+
+fn accessible_name(source: &ElementSource, sources: &[ElementSource], role: &str) -> String {
+    if let Some(name) = author_name(source, sources) {
         return name;
     }
 
@@ -490,18 +627,72 @@ fn accessible_name(source: &ElementSource, sources: &[ElementSource]) -> String 
         return title_name(source);
     }
 
-    let text = collapse_whitespace(&source.text);
-    if !text.is_empty() {
-        return text;
+    if source.tag == "img" {
+        return attribute_name(source, "alt");
+    }
+    if name_from_content(role) {
+        let text = collapse_whitespace(&source.text);
+        if !text.is_empty() {
+            return text;
+        }
     }
     title_name(source)
 }
 
-fn labelled_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
-    non_empty_attribute(source, "aria-label")
-        .map(collapse_whitespace)
-        .or_else(|| explicit_label_name(source, sources))
-        .or_else(|| ancestor_label_name(source, sources))
+fn author_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
+    aria_labelled_name(source, sources)
+        .or_else(|| non_empty_attribute(source, "aria-label").map(collapse_whitespace))
+        .or_else(|| html_label_name(source, sources))
+}
+
+fn aria_labelled_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
+    let references = non_empty_attribute(source, "aria-labelledby")?;
+    let name = references
+        .split_ascii_whitespace()
+        .filter_map(|reference| {
+            sources.iter().find(|candidate| {
+                candidate
+                    .attributes
+                    .get("id")
+                    .is_some_and(|id| id == reference)
+            })
+        })
+        .map(|candidate| collapse_whitespace(&candidate.text))
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!name.is_empty()).then_some(name)
+}
+
+fn html_label_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {
+    if !matches!(
+        source.tag.as_str(),
+        "button" | "input" | "meter" | "output" | "progress" | "select" | "textarea"
+    ) {
+        return None;
+    }
+    explicit_label_name(source, sources).or_else(|| ancestor_label_name(source, sources))
+}
+
+fn name_from_content(role: &str) -> bool {
+    matches!(
+        role,
+        "button"
+            | "cell"
+            | "checkbox"
+            | "columnheader"
+            | "heading"
+            | "link"
+            | "listitem"
+            | "menuitem"
+            | "option"
+            | "radio"
+            | "row"
+            | "rowheader"
+            | "switch"
+            | "tab"
+            | "treeitem"
+    )
 }
 
 fn explicit_label_name(source: &ElementSource, sources: &[ElementSource]) -> Option<String> {

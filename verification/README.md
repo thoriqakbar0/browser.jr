@@ -16,6 +16,7 @@ This directory checks product claims against the running browser.jr CLI. Feature
 | --- | --- |
 | [design-lint.md](design-lint.md) | `verification-features/design-lint.md` |
 | [capture-snapshot.md](capture-snapshot.md) | `inspection/capture-snapshot.md` |
+| [query-elements.md](query-elements.md) | `inspection/query-elements.md` |
 | [navigation.md](navigation.md) | `loading/navigation.md` |
 | [ai-session.md](ai-session.md) | `automation/ai-session.md` |
 | [fill-text.md](fill-text.md) | `interaction/fill-text.md` |
@@ -58,7 +59,7 @@ Interactive snapshot tests cover semantics, control state, references, empty pag
 
 Navigation tests cover relative links, fresh and stale references, unsupported clicks, and failed-navigation recovery. NAV-01 through NAV-06 have partial automated evidence from 2026-08-31.
 
-Session-mode tests cover persistent actions, observations, reload, metadata, stale labels, and recovery. AISESSION-01 through AISESSION-15 have partial evidence from 2026-08-31.
+Session-mode tests cover persistent actions, observations, role actions, reload, metadata, stale labels, and recovery. AISESSION-01 through AISESSION-19 have partial evidence from 2026-08-31.
 
 Fill tests cover initial values, replacement, snapshot evidence, stale references, and session-mode text. FILL-01 through FILL-05 have partial automated evidence from 2026-08-31.
 
@@ -77,5 +78,7 @@ Enabled-state tests cover active, disabled, unsupported, and reusable references
 Visibility tests cover static boxes, hidden states, unsupported evidence, and reusable references. VISIBLE-01 through VISIBLE-06 have partial automated evidence from 2026-08-31.
 
 Reload tests cover replacement, stale references, failed-load recovery, and missing pages. RELOAD-01 through RELOAD-04 have partial automated evidence from 2026-08-31.
+
+Role-locator tests cover semantic matching, direct actions, actionability, strict resolution, navigation, and reference lifetimes. QUERY-01 through QUERY-17 have partial automated evidence from 2026-08-31.
 
 TTY conditions, interactive cancellation, and broader rendering remain unverified.

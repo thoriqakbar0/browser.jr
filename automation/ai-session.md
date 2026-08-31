@@ -4,7 +4,7 @@
 
 `browser.jr session` keeps one engine session alive while it reads line commands from stdin.
 
-The implemented commands cover pages, snapshots, links, text values, selects, checkboxes, visibility, URLs, and titles. They include `help` and `exit`.
+The implemented commands cover pages, role locators, snapshots, links, text values, selects, checkboxes, visibility, URLs, and titles. They include `help` and `exit`.
 
 This text protocol lets an AI agent reuse page and snapshot state. It is separate from the planned JavaScript REPL.
 
@@ -60,6 +60,10 @@ Inside session mode, malformed commands report an error. The process then reads 
 
 `snapshot --interactive` captures supported semantic elements from the current page.
 
+`find role` resolves one supported semantic role locator. It composes click, fill, check, uncheck, hover, and text operations.
+
+Role commands default to click. [`inspection/query-elements.md`](../inspection/query-elements.md) owns their matching and action behavior.
+
 `click` resolves its label only through the latest reported snapshot.
 
 `fill` resolves the same label and replaces a supported text-control value.
@@ -89,6 +93,12 @@ Inside session mode, malformed commands report an error. The process then reads 
 The adapter owns one `Session`. It keeps the current page and latest reference set in memory.
 
 Each successful snapshot replaces the previous reference set. Human labels may repeat, but their typed identities do not.
+
+Role text, fill, check, and uncheck preserve the current reference set. Failed role actions also preserve it.
+
+A successful role link click installs a fresh document and clears the current reference set.
+
+Each role action resolves the current document when it runs. It does not reuse a prior role match.
 
 A successful open, reload, or navigation clears the reference set. The caller must capture before another reference command.
 
@@ -128,7 +138,7 @@ Any command error affects the final exit status even when later commands succeed
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | `session` accepts no flags. | `snapshot -i` equals `snapshot --interactive`. Fill and select take the rest of their lines. |
+| Flags and options | `session` accepts no flags. | `snapshot -i` equals `snapshot --interactive`. Find, fill, and select parse their documented remaining text. |
 | Project configuration | No session configuration exists. | Commands cannot reload configuration. |
 | Target matrix | The first successful `open` selects one page. | Another successful `open` or link click replaces its document. |
 | Output channel | Results use stdout. Errors use stderr. | Both streams flush after each command. |
@@ -163,7 +173,7 @@ Status three takes priority over status two. Session mode does not run a finding
 
 **Isolation.** Each process owns one session. A displayed reference never crosses process boundaries.
 
-**Accessibility inspection.** Interactive snapshots expose the current supported role and name subset.
+**Accessibility inspection.** Interactive snapshots and role locators expose the current supported role and name subset.
 
 ## Edge cases
 
@@ -173,6 +183,14 @@ Status three takes priority over status two. Session mode does not run a finding
 - `snapshot` before `open` reports an error and keeps the process alive.
 - A snapshot header gives the number of following element lines.
 - An empty snapshot installs an empty reference set.
+- A role action does not require an earlier snapshot.
+- A role command without an action defaults to click.
+- Role text, fill, check, and uncheck preserve the current reference set.
+- Failed or unsupported role actions preserve the current reference set.
+- A successful role link click clears the current reference set.
+- `find role <role> text` prints normalized descendant text without a snapshot.
+- Role fill values may contain spaces before locator options.
+- Role hover reports unsupported behavior after strict resolution.
 - `@e0`, padded labels, missing labels, and old labels are invalid.
 - Fill text may contain spaces. It cannot contain a line break.
 - Fill trims delimiter whitespace before the value. It preserves trailing whitespace.
@@ -207,7 +225,7 @@ Status three takes priority over status two. Session mode does not run a finding
 - Define machine-readable output and command identifiers.
 - Define command cancellation without losing a healthy session.
 - Define input length limits and backpressure.
-- Add each action command only after its package request has a typed result.
-- Define label, index, and multiple selection through typed request fields.
+- Add label, placeholder, text, test-id, CSS, and index locators through typed request fields.
+- Add auto-waiting, pointer dispatch, and complete actionability evidence.
 
 Drafted from the Rust implementation and compiled-process tests on 2026-08-31.

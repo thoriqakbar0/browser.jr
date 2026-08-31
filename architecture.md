@@ -2,7 +2,7 @@
 
 Status: proposed internal architecture, 28 August 2026. Implementation evidence updated 31 August 2026.
 
-The current source loads loopback HTML and computes a horizontal layout subset. It evaluates two rules and supports transactional `x` and `width` mutation batches. A session retains one static page and its URL and title. It reloads that page and navigates same-context links. It captures interactive semantics and inspects supported static visibility. It changes text, native checkbox, and native single-select state. The CLI session adapter keeps that state across stdin commands. Many Rust types below remain design sketches. They do not define the package API.
+The current source loads loopback HTML and computes a horizontal layout subset. It evaluates two rules and supports transactional `x` and `width` mutation batches. A session retains one static page and its URL and title. It reloads that page and navigates same-context links. It captures interactive semantics and resolves strict role locators at each action. It inspects supported static visibility. It changes text, native checkbox, and native single-select state. The CLI session adapter keeps that state across stdin commands. Many Rust types below remain design sketches. They do not define the package API.
 
 This document owns internal responsibilities and data flow. The [product description](README.md) owns user-visible scope. The [research note](research/browser-engine-and-design-lint-papers.md) records external evidence.
 
@@ -55,9 +55,15 @@ let observation: Observation = session.execute(observe_request).await?;
 
 Transport adapters may decode a closed wire command. They must convert it into a typed core request before execution. Wire types never enter the engine model.
 
-The implemented `cli_session` adapter stores the typed references from the latest interactive snapshot. It resolves a displayed `@eN` only from that set. A successful open, navigation, or newer snapshot replaces the set.
+The implemented `cli_session` adapter stores typed references from the latest interactive snapshot. It resolves a displayed `@eN` only from that set. A successful open or navigation clears the set. A new snapshot replaces it.
 
-The implemented `page::interactive` module owns title normalization, semantics, descendant text, actions, and controls.
+The implemented `locator` module validates role tokens and owns accessible-name match modes. `FindByRole` resolves one strict `RoleMatch` from the current semantic index.
+
+Each typed role action resolves again when it executes. Fill and checked-state requests mutate only after supported actionability checks pass.
+
+Supported link clicks install a new document only after loading succeeds. Failed actions preserve the current document and snapshot references.
+
+The implemented `page::interactive` module owns title normalization, the semantic index, interactive snapshot sources, descendant text, actions, and controls.
 
 The implemented `page::visibility` module owns supported static visibility evidence. `page` keeps tokenization and layout extraction.
 
@@ -556,3 +562,5 @@ A staged service pipeline lost because it would repeat one document representati
 The clean-layout, typed overflow, field store, dirty index, priority queue, and transactional `x` and `width` batch now exist.
 
 The next Spineless Traversal layer needs generational layout identities and ordered insertion or removal. A live mutation adapter can follow after those invariants have differential tests.
+
+The next locator layer needs auto-waiting, pointer dispatch, more locator types, and broader accessibility computation.

@@ -16,6 +16,16 @@ Package layout requests can apply `x` and `width` changes as one transactional b
 
 `snapshot <url> --interactive` reports a stated native HTML and ARIA role subset. It assigns ordered references for agent use.
 
+Package and session callers can resolve one supported semantic role locator without an earlier snapshot. The current subset includes interactive controls, headings, lists, landmarks, and common document structure. Resolution supports optional accessible-name matching and rejects ambiguous targets.
+
+Role resolution returns the semantic identifier, role, accessible name, and normalized descendant text. It does not capture a snapshot or change interactive references.
+
+Session and package callers can compose role locators with click, fill, check, uncheck, hover, and text operations. Role commands default to click.
+
+Direct fill and checked-state actions mutate supported controls without a snapshot. Direct link clicks navigate after supported visibility and enabled checks.
+
+Hover and unsupported click targets return typed errors. Missing visibility evidence blocks the action instead of reporting success.
+
 Package sessions can click a current link reference. Same-context links navigate through the loopback loader and stale old references.
 
 Package sessions can fill supported text inputs and textareas. Callers can read the current value directly or through a later snapshot.
@@ -36,7 +46,7 @@ Package sessions can inspect supported static visibility. Missing style or box e
 
 Package sessions can reload the current URL. Success installs a fresh document and stale references.
 
-`session` reads page, snapshot, link, text, select, checkbox, visibility, URL, and title commands from stdin. It preserves typed identity behind each `@eN` label.
+`session` reads page, role-locator, snapshot, link, text, select, checkbox, visibility, URL, and title commands from stdin. It preserves typed identity behind each `@eN` label.
 
 Grid inspection, user-agent comparison, watch mode, JavaScript execution, machine-readable output, and the REPL remain unimplemented. Numeric budgets remain open.
 
@@ -66,6 +76,18 @@ Keep the page and references alive across commands:
 
 ```sh
 printf 'open http://localhost:3000\nget url\nget title\nsnapshot --interactive\nfill @e1 hello\nget value @e1\nexit\n' | ./browser.jr session
+```
+
+Read one supported role without capturing first:
+
+```sh
+printf 'open http://localhost:3000\nfind role heading text --name settings\nexit\n' | ./browser.jr session
+```
+
+Act through the same current-document locator:
+
+```sh
+printf 'open http://localhost:3000\nfind role textbox fill hello --name Email\nfind role checkbox check --name Terms\nexit\n' | ./browser.jr session
 ```
 
 The element argument is a semantic element identifier. An HTML `id` supplies that identifier when present.
@@ -228,6 +250,7 @@ src/
   page/visibility.rs                   supported static visibility evidence
   session.rs                           typed page, action, snapshot, and rule requests
   layout.rs                            field program, clean layout, and transactional invalidation
+  locator.rs                           typed role and accessible-name matching
   non_empty.rs                         non-empty evidence and result collections
   snapshot.rs                          immutable layout and interactive evidence
   rules.rs                             built-in overflow and project width evaluation
@@ -240,6 +263,7 @@ verification/
   README.md                            hand-verification protocol
   design-lint.md                       checks for the primary lint workflow
   capture-snapshot.md                  checks for interactive semantic snapshots
+  query-elements.md                    checks for semantic role locator resolution
   navigation.md                        checks for package link navigation
   ai-session.md                        checks for persistent CLI action state
   fill-text.md                         checks for package and CLI fill behavior
@@ -326,6 +350,7 @@ Status is one of `not started`, `drafted`, or `verified`.
 | `verification/README.md` | drafted |
 | `verification/design-lint.md` | drafted |
 | `verification/capture-snapshot.md` | drafted |
+| `verification/query-elements.md` | drafted |
 | `verification/navigation.md` | drafted |
 | `verification/ai-session.md` | drafted |
 | `verification/fill-text.md` | drafted |
@@ -355,7 +380,7 @@ Status is one of `not started`, `drafted`, or `verified`.
 | `interaction/fill-text.md` | drafted |
 | `interaction/select-option.md` | drafted |
 | `interaction/set-checked.md` | drafted |
-| `inspection/query-elements.md` | not started |
+| `inspection/query-elements.md` | drafted |
 | `inspection/read-value.md` | drafted |
 | `inspection/read-checked.md` | drafted |
 | `inspection/read-text.md` | drafted |

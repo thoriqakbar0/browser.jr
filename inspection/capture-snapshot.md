@@ -153,6 +153,6 @@ A successful empty snapshot exits zero. Load or output failures exit three.
 - Define stylesheet-aware snapshot filtering before visibility changes snapshot membership.
 - Define password handling before password fields expose or accept values.
 - Define machine-readable snapshot output.
-- Define complete actionability before actions depend on visibility, stability, or pointer targeting.
+- Define stable-box and pointer-target evidence before actions claim complete actionability.
 
 Drafted from Rust implementation and automated boundary tests on 2026-08-31.

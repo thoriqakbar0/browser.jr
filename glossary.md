@@ -52,6 +52,16 @@ The vocabulary used across these documents. Each definition states intended mean
 
 **Interactive element reference.** A snapshot-owned target identity such as `@e1`. Another capture or document makes it stale.
 
+**Role locator.** A reusable role and optional accessible-name query. Current resolution searches the supported semantic index.
+
+**Locator resolution.** Matching a locator against the current document. Current single-target resolution rejects zero or multiple matches.
+
+**Role match.** One resolved semantic element's identifier, role, accessible name, and normalized descendant text. It is not an interactive reference.
+
+**Role action.** An action that resolves a role locator when the request executes. Fill, check, uncheck, and supported link clicks are implemented.
+
+**Actionability check.** Evidence required before an action mutates state. Current role actions check supported visible, enabled, or editable state.
+
 **Click.** An action request against one current interactive element reference. Only same-context link navigation is implemented.
 
 **Fill.** An action that replaces a supported text control's current value. Fill does not dispatch browser events yet.

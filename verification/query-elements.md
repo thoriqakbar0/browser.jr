@@ -1,0 +1,34 @@
+# Verification: find an element by role
+
+Run these checks against a controlled loopback page. Record the fixture and browser.jr commit.
+
+## inspection/query-elements.md
+
+| ID | P | Device | Claim | Setup | Steps | Expected | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| QUERY-01 | P1 | pipe | A role locator works without a prior snapshot ([The simple case](../inspection/query-elements.md#the-simple-case)). | Serve one named heading. | Open and request heading text. | Text returns without a snapshot. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-02 | P1 | pipe | Role and default name matching ignore case ([Begin running](../inspection/query-elements.md#begin-running)). | Serve one mixed-case button name. | Find an uppercase role with a lowercase name substring. | The button resolves. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-03 | P1 | pipe | Exact names use normalized, case-sensitive equality ([Begin running](../inspection/query-elements.md#begin-running)). | Serve one button named `Save Draft`. | Find the normalized exact name, then try lowercase. | The first resolves and the second reports no match. | partial: package test passed, 2026-08-31 |
+| QUERY-04 | P1 | pipe | Single-target resolution is strict ([Begin running](../inspection/query-elements.md#begin-running)). | Serve two buttons containing `Save`. | Find by role and shared name substring. | The error reports two matches. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-05 | P1 | pipe | Failed resolution preserves current references ([While running](../inspection/query-elements.md#while-running)). | Serve two buttons and capture a snapshot. | Run missing and ambiguous finds, then read an old reference. | Both finds fail and the old reference remains usable. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-06 | P1 | pipe | Successful text resolution preserves current references ([While running](../inspection/query-elements.md#while-running)). | Serve two buttons and capture a snapshot. | Resolve unique button text, then read an old reference. | Text returns and the old reference remains usable. | partial: package test passed, 2026-08-31 |
+| QUERY-07 | P2 | pipe | Session names may contain spaces ([Edge cases](../inspection/query-elements.md#edge-cases)). | Serve a textbox named `Email address`. | Fill it with an exact spaced name. | Fill reports the textbox and character count. | partial: parser and compiled-process tests passed, 2026-08-31 |
+| QUERY-08 | P2 | pipe | Invalid role tokens fail before resolution ([Exit immediately](../inspection/query-elements.md#exit-immediately)). | Open any controlled page. | Construct empty and whitespace-separated role locators. | The package returns typed locator errors. | partial: unit tests passed, 2026-08-31 |
+| QUERY-09 | P1 | pipe | Structural roles resolve outside interactive snapshots ([Begin running](../inspection/query-elements.md#begin-running)). | Serve headings, a list, and labeled landmarks. | Resolve each role without a snapshot. | Heading, list, navigation, and banner follow strict resolution. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-10 | P1 | pipe | Accessible names follow role-specific sources ([While running](../inspection/query-elements.md#while-running)). | Serve `aria-labelledby`, labeled landmarks, and descendant content. | Resolve author names, then try landmark content as its name. | Author names resolve. Content does not name the landmark. | partial: unit and package tests passed, 2026-08-31 |
+| QUERY-11 | P1 | pipe | Role text returns normalized descendant text ([Finish](../inspection/query-elements.md#finish)). | Serve a heading and a list with two items. | Run `find role ... text` for each. | Heading text returns. List items keep a separating space. | partial: unit and compiled-process tests passed, 2026-08-31 |
+| QUERY-12 | P1 | pipe | A role command defaults to click ([Invoke](../inspection/query-elements.md#invoke)). | Serve one same-context link and a second page. | Run role find without an action. | The link navigates. A later locator reads the new document. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-13 | P1 | pipe | Fill resolves and mutates without a snapshot ([While running](../inspection/query-elements.md#while-running)). | Serve one labeled text input. | Capture, fill by role, read the old reference, then capture again. | The old reference reports the new value. Snapshot numbering skips no identity. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-14 | P1 | pipe | Check and uncheck are idempotent role actions ([While running](../inspection/query-elements.md#while-running)). | Serve one labeled native checkbox. | Check twice, uncheck twice, then capture. | Each request reports its committed state. The snapshot reports false. | partial: package and compiled-process tests passed, 2026-08-31 |
+| QUERY-15 | P1 | pipe | Actions resolve strictly before mutation ([While running](../inspection/query-elements.md#while-running)). | Serve two textboxes with matching names and distinct values. | Fill through the ambiguous locator, then read one current reference. | Fill reports ambiguity. Neither value changes. | partial: package test passed, 2026-08-31 |
+| QUERY-16 | P1 | pipe | Missing or failed actionability evidence blocks mutation ([While running](../inspection/query-elements.md#while-running)). | Serve hidden, disabled, and stylesheet-dependent controls. | Fill each control by exact role and name. | Errors identify visible or editable checks. Values stay unchanged. | partial: package tests passed, 2026-08-31 |
+| QUERY-17 | P1 | pipe | Unsupported hover preserves current references ([While running](../inspection/query-elements.md#while-running)). | Serve one button and capture a snapshot. | Hover by role, then read the old reference. | Hover reports unsupported behavior. The reference remains usable. | partial: package and compiled-process tests passed, 2026-08-31 |
+
+Not checkable yet:
+
+- Full ARIA role and accessible-name computation does not exist.
+- Auto-waiting and action timeouts do not exist.
+- Stable-box and receives-events checks do not exist.
+- Pointer dispatch, button activation, and hover state do not exist.
+- Multi-match return values do not exist.
+- Machine-readable responses do not exist.

@@ -12,12 +12,12 @@ use crate::{ElementInput, LayoutInput};
 mod interactive;
 mod visibility;
 
-#[cfg(test)]
-pub(crate) use interactive::interactive_elements_from_html;
 pub(crate) use interactive::{
     CheckedState, ControlState, InteractiveAction, InteractiveElementSource, SelectState,
-    SelectValueError, TextValueState, page_semantics_from_html,
+    SelectValueError, SemanticElementSource, TextValueState, page_semantics_from_html,
 };
+#[cfg(test)]
+pub(crate) use interactive::{interactive_elements_from_html, semantic_elements_from_html};
 
 #[derive(Debug)]
 struct ElementSource {
@@ -95,6 +95,9 @@ impl TokenSink for PageSink {
 impl PageSink {
     fn start_tag(&self, tag: html5ever::tokenizer::Tag) {
         let tag_name = tag.name.to_string();
+        if separates_text(&tag_name) {
+            self.append_text(" ");
+        }
         let attributes = tag
             .attrs
             .iter()
@@ -158,6 +161,10 @@ impl PageSink {
         let mut stack = self.stack.borrow_mut();
         if let Some(index) = stack.iter().rposition(|open| open.tag == tag_name) {
             stack.truncate(index);
+        }
+        drop(stack);
+        if separates_text(tag_name) {
+            self.append_text(" ");
         }
     }
 
@@ -549,6 +556,52 @@ fn is_block_element(tag_name: &str) -> bool {
     )
 }
 
+fn separates_text(tag_name: &str) -> bool {
+    matches!(
+        tag_name,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "br"
+            | "dd"
+            | "details"
+            | "dialog"
+            | "div"
+            | "dl"
+            | "dt"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hr"
+            | "li"
+            | "main"
+            | "nav"
+            | "ol"
+            | "p"
+            | "pre"
+            | "section"
+            | "summary"
+            | "table"
+            | "tbody"
+            | "td"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "tr"
+            | "ul"
+    )
+}
+
 fn is_void_element(tag_name: &str) -> bool {
     matches!(
         tag_name,
@@ -574,6 +627,7 @@ mod tests {
     use super::{
         CheckedState, ControlState, InteractiveAction, SelectState, TextValueState,
         interactive_elements_from_html, layout_input_from_html, page_semantics_from_html,
+        semantic_elements_from_html,
     };
     use crate::{Comparison, LintLayout, RuleConstraint, RuleResult, Session};
 
@@ -704,7 +758,7 @@ mod tests {
         );
 
         assert_eq!(elements.len(), 3);
-        assert_eq!(elements[0].element, "email");
+        assert_eq!(elements[0].element(), "email");
         assert_eq!(elements[0].role(), "textbox");
         assert_eq!(elements[0].name(), "Email address");
         assert_eq!(elements[1].role(), "button");
@@ -713,6 +767,48 @@ mod tests {
         assert_eq!(elements[2].role(), "link");
         assert_eq!(elements[2].name(), "Read documentation");
         assert_eq!(elements[2].text(), "Docs");
+    }
+
+    #[test]
+    fn semantic_text_separates_blocks_and_preserves_inline_adjacency() {
+        let elements = semantic_elements_from_html(
+            r#"<nav aria-label="Primary"><span>Read</span><a href="/docs">Docs</a><ul><li>Rust</li><li>Go</li></ul></nav>"#,
+        );
+        let navigation = elements
+            .iter()
+            .find(|element| element.role() == "navigation")
+            .unwrap();
+        let list = elements
+            .iter()
+            .find(|element| element.role() == "list")
+            .unwrap();
+
+        assert_eq!(navigation.text(), "ReadDocs Rust Go");
+        assert_eq!(list.name(), "");
+        assert_eq!(list.text(), "Rust Go");
+    }
+
+    #[test]
+    fn semantic_names_follow_role_specific_sources() {
+        let elements = semantic_elements_from_html(
+            r#"
+                <span id="one">Site</span><span id="two">map</span>
+                <nav aria-labelledby="one two">Links</nav>
+                <header><h1>Home</h1></header>
+            "#,
+        );
+        let navigation = elements
+            .iter()
+            .find(|element| element.role() == "navigation")
+            .unwrap();
+        let banner = elements
+            .iter()
+            .find(|element| element.role() == "banner")
+            .unwrap();
+
+        assert_eq!(navigation.name(), "Site map");
+        assert_eq!(banner.name(), "");
+        assert_eq!(banner.text(), "Home");
     }
 
     #[test]

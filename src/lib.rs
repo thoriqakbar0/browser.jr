@@ -2,6 +2,7 @@ mod cli;
 mod cli_session;
 mod layout;
 mod loading;
+mod locator;
 mod non_empty;
 mod page;
 mod rules;
@@ -11,15 +12,18 @@ mod snapshot;
 pub use cli::{ExitStatus, run_cli, run_cli_with_input};
 pub use layout::{ElementInput, LayoutError, LayoutInput, LayoutMutation, SemanticElementId};
 pub use loading::LoadError;
+pub use locator::{RoleLocator, RoleLocatorError, RoleMatch};
 pub use non_empty::NonEmpty;
 pub use rules::{Comparison, Finding, RuleConstraint, RuleResult, WidthFinding};
 pub use session::{
-    ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot, CheckElementWidth, ClickElement,
-    ClickResult, ElementAttribute, ElementChecked, ElementEnabled, ElementText, ElementValue,
-    ElementVisible, FillElement, FillResult, GetElementAttribute, GetElementChecked,
+    ActionabilityCheck, ApplyMutation, ApplyMutations, CaptureInteractiveSnapshot,
+    CheckElementWidth, ClickByRole, ClickByRoleResult, ClickElement, ClickResult, ElementAttribute,
+    ElementChecked, ElementEnabled, ElementText, ElementValue, ElementVisible, FillByRole,
+    FillByRoleResult, FillElement, FillResult, FindByRole, GetElementAttribute, GetElementChecked,
     GetElementEnabled, GetElementText, GetElementValue, GetElementVisible, GetPageTitle,
-    GetPageUrl, LintLayout, OpenPage, OpenedPage, PageTitle, PageUrl, ReloadPage, SelectElement,
-    SelectResult, Session, SessionError, SessionRequest, SetCheckedResult, SetElementChecked,
+    GetPageUrl, HoverByRole, HoverByRoleResult, LintLayout, OpenPage, OpenedPage, PageTitle,
+    PageUrl, ReloadPage, RoleAction, SelectElement, SelectResult, Session, SessionError,
+    SessionRequest, SetCheckedByRole, SetCheckedByRoleResult, SetCheckedResult, SetElementChecked,
 };
 pub use snapshot::{
     EvidenceRef, InteractiveElement, InteractiveElementRef, InteractiveElementState,
