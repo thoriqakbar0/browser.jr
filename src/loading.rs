@@ -434,38 +434,67 @@ fn is_permitted_address(address: IpAddr, allow_loopback: bool) -> bool {
     }
 }
 
+/// IANA IPv4 special-purpose ranges denied by public network mode.
+const SPECIAL_IPV4_RANGES: &[(Ipv4Addr, u8)] = &[
+    (Ipv4Addr::new(0, 0, 0, 0), 8),
+    (Ipv4Addr::new(10, 0, 0, 0), 8),
+    (Ipv4Addr::new(100, 64, 0, 0), 10),
+    (Ipv4Addr::new(127, 0, 0, 0), 8),
+    (Ipv4Addr::new(169, 254, 0, 0), 16),
+    (Ipv4Addr::new(172, 16, 0, 0), 12),
+    (Ipv4Addr::new(192, 0, 0, 0), 24),
+    (Ipv4Addr::new(192, 0, 2, 0), 24),
+    (Ipv4Addr::new(192, 31, 196, 0), 24),
+    (Ipv4Addr::new(192, 52, 193, 0), 24),
+    (Ipv4Addr::new(192, 88, 99, 0), 24),
+    (Ipv4Addr::new(192, 168, 0, 0), 16),
+    (Ipv4Addr::new(192, 175, 48, 0), 24),
+    (Ipv4Addr::new(198, 18, 0, 0), 15),
+    (Ipv4Addr::new(198, 51, 100, 0), 24),
+    (Ipv4Addr::new(203, 0, 113, 0), 24),
+    (Ipv4Addr::new(224, 0, 0, 0), 4),
+    (Ipv4Addr::new(240, 0, 0, 0), 4),
+];
+
+/// IANA IPv6 special-purpose ranges denied by public network mode.
+const SPECIAL_IPV6_RANGES: &[(Ipv6Addr, u8)] = &[
+    (Ipv6Addr::UNSPECIFIED, 96),
+    (Ipv6Addr::new(0x0064, 0xff9b, 0, 0, 0, 0, 0, 0), 96),
+    (Ipv6Addr::new(0x0064, 0xff9b, 1, 0, 0, 0, 0, 0), 48),
+    (Ipv6Addr::new(0x0100, 0, 0, 0, 0, 0, 0, 0), 64),
+    (Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 0), 23),
+    (Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 32),
+    (Ipv6Addr::new(0x2002, 0, 0, 0, 0, 0, 0, 0), 16),
+    (Ipv6Addr::new(0x2620, 0x004f, 0x8000, 0, 0, 0, 0, 0), 48),
+    (Ipv6Addr::new(0x3fff, 0, 0, 0, 0, 0, 0, 0), 20),
+    (Ipv6Addr::new(0x5f00, 0, 0, 0, 0, 0, 0, 0), 16),
+    (Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),
+    (Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10),
+    (Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0), 8),
+];
+
 fn is_permitted_ipv4(address: Ipv4Addr, allow_loopback: bool) -> bool {
-    if allow_loopback && address.is_loopback() {
-        return true;
-    }
-    let [first, second, third, _] = address.octets();
-    !(address.is_unspecified()
-        || address.is_private()
-        || address.is_loopback()
-        || address.is_link_local()
-        || address.is_multicast()
-        || address.is_broadcast()
-        || first == 0
-        || (first == 100 && (64..=127).contains(&second))
-        || (first == 192 && second == 0 && third == 0)
-        || (first == 192 && second == 0 && third == 2)
-        || (first == 198 && matches!(second, 18 | 19))
-        || (first == 198 && second == 51 && third == 100)
-        || (first == 203 && second == 0 && third == 113)
-        || first >= 240)
+    (allow_loopback && address.is_loopback())
+        || !SPECIAL_IPV4_RANGES
+            .iter()
+            .any(|(network, prefix)| ipv4_is_in_prefix(address, *network, *prefix))
 }
 
 fn is_permitted_ipv6(address: Ipv6Addr, allow_loopback: bool) -> bool {
-    if allow_loopback && address.is_loopback() {
-        return true;
-    }
-    let segments = address.segments();
-    !(address.is_unspecified()
-        || address.is_loopback()
-        || address.is_multicast()
-        || (segments[0] & 0xfe00) == 0xfc00
-        || (segments[0] & 0xffc0) == 0xfe80
-        || (segments[0] == 0x2001 && segments[1] == 0x0db8))
+    (allow_loopback && address.is_loopback())
+        || !SPECIAL_IPV6_RANGES
+            .iter()
+            .any(|(network, prefix)| ipv6_is_in_prefix(address, *network, *prefix))
+}
+
+fn ipv4_is_in_prefix(address: Ipv4Addr, network: Ipv4Addr, prefix: u8) -> bool {
+    let mask = u32::MAX.checked_shl(u32::from(32 - prefix)).unwrap_or(0);
+    u32::from(address) & mask == u32::from(network) & mask
+}
+
+fn ipv6_is_in_prefix(address: Ipv6Addr, network: Ipv6Addr, prefix: u8) -> bool {
+    let mask = u128::MAX.checked_shl(u32::from(128 - prefix)).unwrap_or(0);
+    u128::from(address) & mask == u128::from(network) & mask
 }
 
 #[cfg(test)]
@@ -607,6 +636,10 @@ mod tests {
             "172.16.0.1",
             "192.168.1.1",
             "192.0.2.1",
+            "192.31.196.1",
+            "192.52.193.1",
+            "192.88.99.1",
+            "192.175.48.1",
             "198.18.0.1",
             "198.51.100.1",
             "203.0.113.1",
@@ -614,12 +647,20 @@ mod tests {
             "240.0.0.1",
             "fc00::1",
             "fe80::1",
+            "64:ff9b::1",
+            "64:ff9b:1::1",
+            "100::1",
+            "2001:1::1",
+            "2002::1",
+            "2620:4f:8000::1",
+            "3fff::1",
+            "5f00::1",
             "2001:db8::1",
         ] {
-            assert!(!is_permitted_address(
-                value.parse::<IpAddr>().unwrap(),
-                false
-            ));
+            assert!(
+                !is_permitted_address(value.parse::<IpAddr>().unwrap(), false),
+                "{value} must be blocked"
+            );
         }
         for value in ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"] {
             assert!(is_permitted_address(

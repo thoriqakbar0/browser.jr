@@ -86,7 +86,7 @@ A successful open installs the final response URL. Failures preserve the previou
 
 - Credentials are rejected.
 - IPv4-mapped IPv6 addresses use the IPv4 policy.
-- Carrier-grade NAT, link-local, multicast, documentation, benchmarking, and reserved address ranges are blocked.
+- The public policy blocks the IANA IPv4 and IPv6 special-purpose ranges, including carrier-grade NAT, translation, tunneling, link-local, multicast, documentation, benchmarking, and reserved ranges.
 - Explicit loopback URLs remain supported for local fixtures.
 - Redirects receive the same DNS and address checks as the initial request.
 
