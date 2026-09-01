@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -15,30 +15,15 @@ use url::{Host, Url};
 
 use super::{
     LoadError, MAX_HTML_BYTES, MAX_RESPONSE_HEADER_BYTES, MAX_RESPONSE_HEADERS, NetworkResponse,
-    NetworkTransport, is_redirect_status,
+    NetworkTransport, RESPONSE_IDLE_TIMEOUT, is_redirect_status,
 };
 
 pub(super) struct HyperNetworkTransport {
     tls_config: Arc<ClientConfig>,
 }
 
-static NETWORK_RUNTIME: OnceLock<Result<tokio::runtime::Runtime, String>> = OnceLock::new();
-
-fn network_runtime() -> Result<&'static tokio::runtime::Runtime, LoadError> {
-    match NETWORK_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| error.to_string())
-    }) {
-        Ok(runtime) => Ok(runtime),
-        Err(error) => Err(LoadError::Request(error.clone())),
-    }
-}
-
 impl HyperNetworkTransport {
     pub(super) fn new() -> Result<Self, LoadError> {
-        network_runtime()?;
         let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         Ok(Self {
             tls_config: Arc::new(build_tls_client_config(roots)),
@@ -47,7 +32,6 @@ impl HyperNetworkTransport {
 
     #[cfg(test)]
     pub(super) fn with_root_store(roots: RootCertStore) -> Result<Self, LoadError> {
-        network_runtime()?;
         Ok(Self {
             tls_config: Arc::new(build_tls_client_config(roots)),
         })
@@ -61,18 +45,25 @@ impl NetworkTransport for HyperNetworkTransport {
         approved_endpoints: &[SocketAddr],
         timeout: Duration,
     ) -> Result<NetworkResponse, LoadError> {
-        let runtime = network_runtime()?;
         std::thread::scope(|scope| {
             scope
                 .spawn(|| {
-                    runtime.block_on(async {
-                        tokio::time::timeout(
-                            timeout,
-                            send_hyper_request(url, approved_endpoints, self.tls_config.clone()),
-                        )
-                        .await
-                        .map_err(|_| LoadError::Timeout("network request"))?
-                    })
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|error| LoadError::Request(error.to_string()))?
+                        .block_on(async {
+                            tokio::time::timeout(
+                                timeout,
+                                send_hyper_request(
+                                    url,
+                                    approved_endpoints,
+                                    self.tls_config.clone(),
+                                ),
+                            )
+                            .await
+                            .map_err(|_| LoadError::Timeout("network request"))?
+                        })
                 })
                 .join()
                 .map_err(|_| LoadError::Request("network worker panicked".into()))?
@@ -138,6 +129,53 @@ async fn send_hyper_request_to_endpoint(
     }
 }
 
+fn validate_body_headers(headers: &hyper::HeaderMap) -> Result<(), LoadError> {
+    if let Some(content_length) = headers.get("content-length") {
+        let content_length = content_length
+            .to_str()
+            .map_err(|error| LoadError::InvalidBody(error.to_string()))?
+            .parse::<u64>()
+            .map_err(|error| LoadError::InvalidBody(error.to_string()))?;
+        if content_length > MAX_HTML_BYTES {
+            return Err(LoadError::InvalidBody(format!(
+                "response exceeds {MAX_HTML_BYTES} bytes"
+            )));
+        }
+    }
+    if headers
+        .get("content-encoding")
+        .is_some_and(|value| value.as_bytes() != b"identity")
+    {
+        return Err(LoadError::InvalidBody(
+            "compressed response bodies are not supported".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn read_bounded_body(mut incoming: hyper::body::Incoming) -> Result<String, LoadError> {
+    let mut bytes = Vec::new();
+    loop {
+        let frame = tokio::time::timeout(RESPONSE_IDLE_TIMEOUT, incoming.frame())
+            .await
+            .map_err(|_| LoadError::Timeout("response body"))?;
+        let Some(frame) = frame else {
+            break;
+        };
+        let frame = frame.map_err(|error| LoadError::InvalidBody(error.to_string()))?;
+        if let Ok(data) = frame.into_data() {
+            let next_len = bytes.len().saturating_add(data.len());
+            if next_len as u64 > MAX_HTML_BYTES {
+                return Err(LoadError::InvalidBody(format!(
+                    "response exceeds {MAX_HTML_BYTES} bytes"
+                )));
+            }
+            bytes.extend_from_slice(&data);
+        }
+    }
+    String::from_utf8(bytes).map_err(|error| LoadError::InvalidBody(error.to_string()))
+}
+
 async fn send_hyper_request_over_io<IO>(url: &Url, io: IO) -> Result<NetworkResponse, LoadError>
 where
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -182,45 +220,11 @@ where
         .get("content-type")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    if let Some(content_length) = response.headers().get("content-length") {
-        let content_length = content_length
-            .to_str()
-            .map_err(|error| LoadError::InvalidBody(error.to_string()))?
-            .parse::<u64>()
-            .map_err(|error| LoadError::InvalidBody(error.to_string()))?;
-        if content_length > MAX_HTML_BYTES {
-            return Err(LoadError::InvalidBody(format!(
-                "response exceeds {MAX_HTML_BYTES} bytes"
-            )));
-        }
-    }
-    if response
-        .headers()
-        .get("content-encoding")
-        .is_some_and(|value| value.as_bytes() != b"identity")
-    {
-        return Err(LoadError::InvalidBody(
-            "compressed response bodies are not supported".into(),
-        ));
-    }
+    validate_body_headers(response.headers())?;
     let body = if is_redirect_status(status) {
         None
     } else {
-        let mut incoming = response.into_body();
-        let mut bytes = Vec::new();
-        while let Some(frame) = incoming.frame().await {
-            let frame = frame.map_err(|error| LoadError::InvalidBody(error.to_string()))?;
-            if let Ok(data) = frame.into_data() {
-                let next_len = bytes.len().saturating_add(data.len());
-                if next_len as u64 > MAX_HTML_BYTES {
-                    return Err(LoadError::InvalidBody(format!(
-                        "response exceeds {MAX_HTML_BYTES} bytes"
-                    )));
-                }
-                bytes.extend_from_slice(&data);
-            }
-        }
-        Some(String::from_utf8(bytes).map_err(|error| LoadError::InvalidBody(error.to_string()))?)
+        Some(read_bounded_body(response.into_body()).await?)
     };
     Ok(NetworkResponse {
         status,

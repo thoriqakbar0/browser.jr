@@ -7,13 +7,17 @@ use http::Uri;
 use url::{Host, Url};
 
 mod hyper_transport;
+mod network_limits;
 
 use hyper_transport::HyperNetworkTransport;
+use network_limits::{acquire_dns_permit, acquire_fetch_permit};
 
 const MAX_HTML_BYTES: u64 = 1024 * 1024;
 const MAX_REDIRECTS: u32 = 5;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DNS_ANSWERS: usize = 16;
+const MAX_CONNECTION_ATTEMPTS: usize = 4;
+pub(super) const RESPONSE_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RESPONSE_HEADERS: usize = 64;
 const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 
@@ -130,8 +134,12 @@ impl<R: NetworkResolver, T: NetworkTransport> FetchEngine<R, T> {
         }
     }
 
+    #[cfg(test)]
     fn fetch(&self, value: &str) -> Result<LoadedHtml, LoadError> {
-        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        self.fetch_before(value, Instant::now() + REQUEST_TIMEOUT)
+    }
+
+    fn fetch_before(&self, value: &str, deadline: Instant) -> Result<LoadedHtml, LoadError> {
         let mut current_url = parse_network_url(value)?;
         let mut visited = Vec::new();
 
@@ -179,8 +187,11 @@ impl<R: NetworkResolver, T: NetworkTransport> FetchEngine<R, T> {
         endpoints: &[SocketAddr],
         deadline: Instant,
     ) -> Result<NetworkResponse, LoadError> {
-        self.transport
-            .send_get(url, endpoints, remaining_request_time(deadline)?)
+        self.transport.send_get(
+            url,
+            &endpoints[..endpoints.len().min(MAX_CONNECTION_ATTEMPTS)],
+            remaining_request_time(deadline)?,
+        )
     }
 
     #[cfg(test)]
@@ -263,12 +274,14 @@ pub(crate) fn load_html(
     network_access: NetworkAccess,
 ) -> Result<LoadedHtml, LoadError> {
     parse_network_url(value)?;
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    let _permit = acquire_fetch_permit()?;
     FetchEngine::new(
         SystemNetworkResolver,
         HyperNetworkTransport::new()?,
         network_access,
     )
-    .fetch(value)
+    .fetch_before(value, deadline)
 }
 
 fn parse_network_url(value: &str) -> Result<Url, LoadError> {
@@ -424,6 +437,15 @@ fn normalize_path(path: &str) -> String {
     normalized
 }
 
+fn enforce_dns_answer_limit(addresses: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, LoadError> {
+    if addresses.len() > MAX_DNS_ANSWERS {
+        return Err(LoadError::Dns(format!(
+            "answer limit exceeded ({MAX_DNS_ANSWERS})"
+        )));
+    }
+    Ok(addresses)
+}
+
 #[derive(Clone, Copy, Debug)]
 struct SystemNetworkResolver;
 
@@ -444,20 +466,24 @@ impl NetworkResolver for SystemNetworkResolver {
             }
             Host::Domain(host) => host.to_owned(),
         };
+        let deadline = Instant::now() + timeout;
+        let permit = acquire_dns_permit()?;
         let (sender, receiver) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
+            let _permit = permit;
             let result = (host.as_str(), port)
                 .to_socket_addrs()
-                .map(|addresses| addresses.take(MAX_DNS_ANSWERS).collect::<Vec<_>>());
+                .map(|addresses| addresses.take(MAX_DNS_ANSWERS + 1).collect::<Vec<_>>());
             let _ = sender.send(result);
         });
-        receiver
-            .recv_timeout(timeout)
+        let addresses = receiver
+            .recv_timeout(remaining_request_time(deadline)?)
             .map_err(|error| match error {
                 mpsc::RecvTimeoutError::Timeout => LoadError::Timeout("DNS"),
                 mpsc::RecvTimeoutError::Disconnected => LoadError::Dns("resolver stopped".into()),
             })?
-            .map_err(|error| LoadError::Dns(error.to_string()))
+            .map_err(|error| LoadError::Dns(error.to_string()))?;
+        enforce_dns_answer_limit(addresses)
     }
 }
 
@@ -542,13 +568,14 @@ mod tests {
     use std::net::IpAddr;
 
     use super::{
-        FetchEngine, HyperNetworkTransport, LoadError, MAX_HTML_BYTES, NetworkAccess,
-        NetworkResolver, NetworkResponse, NetworkTransport, REQUEST_TIMEOUT, is_permitted_address,
-        parse_network_url, resolve_url_reference,
+        FetchEngine, HyperNetworkTransport, LoadError, MAX_CONNECTION_ATTEMPTS, MAX_DNS_ANSWERS,
+        MAX_HTML_BYTES, NetworkAccess, NetworkResolver, NetworkResponse, NetworkTransport,
+        REQUEST_TIMEOUT, enforce_dns_answer_limit, is_permitted_address, parse_network_url,
+        resolve_url_reference,
     };
     use std::cell::Cell;
     use std::collections::HashMap;
-    use std::net::SocketAddr;
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::time::Duration;
     use url::Url;
 
@@ -587,6 +614,7 @@ mod tests {
         source_url: String,
         redirect_location: String,
         request_count: Cell<usize>,
+        approved_endpoint_count: Cell<usize>,
     }
 
     impl FakeTransport {
@@ -595,11 +623,16 @@ mod tests {
                 source_url: source_url.into(),
                 redirect_location: redirect_location.into(),
                 request_count: Cell::new(0),
+                approved_endpoint_count: Cell::new(0),
             }
         }
 
         fn request_count(&self) -> usize {
             self.request_count.get()
+        }
+
+        fn approved_endpoint_count(&self) -> usize {
+            self.approved_endpoint_count.get()
         }
     }
 
@@ -607,10 +640,11 @@ mod tests {
         fn send_get(
             &self,
             url: &Url,
-            _approved_endpoints: &[SocketAddr],
+            approved_endpoints: &[SocketAddr],
             _timeout: Duration,
         ) -> Result<NetworkResponse, LoadError> {
             self.request_count.set(self.request_count.get() + 1);
+            self.approved_endpoint_count.set(approved_endpoints.len());
             if url.as_str() == self.source_url {
                 Ok(NetworkResponse {
                     status: 302,
@@ -812,6 +846,40 @@ mod tests {
         assert_eq!(
             resolve_url_reference(base, "#details").unwrap(),
             "http://localhost:3000/guide/current?old=1#details"
+        );
+    }
+
+    #[test]
+    fn dns_answer_limit_rejects_overflow() {
+        let addresses = (1..=MAX_DNS_ANSWERS + 1)
+            .map(|last| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, last as u8)), 80))
+            .collect();
+
+        let result = enforce_dns_answer_limit(addresses);
+
+        assert!(matches!(result, Err(LoadError::Dns(reason)) if reason.contains("limit")));
+    }
+
+    #[test]
+    fn connection_attempts_use_only_the_bounded_endpoint_prefix() {
+        let resolver = FakeResolver::new([(
+            "public.example",
+            vec![
+                "1.1.1.1:80",
+                "1.0.0.1:80",
+                "8.8.8.8:80",
+                "8.8.4.4:80",
+                "9.9.9.9:80",
+            ],
+        )]);
+        let transport = FakeTransport::redirect("http://unused.example/", "/");
+        let engine = FetchEngine::new(resolver, transport, NetworkAccess::PublicOnly);
+
+        engine.fetch("http://public.example/").unwrap();
+
+        assert_eq!(
+            engine.transport().approved_endpoint_count(),
+            MAX_CONNECTION_ATTEMPTS
         );
     }
 
