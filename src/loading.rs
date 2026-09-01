@@ -141,9 +141,15 @@ impl<R: NetworkResolver, T: NetworkTransport> FetchEngine<R, T> {
 
     fn fetch_before(&self, value: &str, deadline: Instant) -> Result<LoadedHtml, LoadError> {
         let mut current_url = parse_network_url(value)?;
+        let navigation_mode = network_mode_for_url(&current_url);
         let mut visited = Vec::new();
 
         for redirect_count in 0..=MAX_REDIRECTS {
+            if network_mode_for_url(&current_url) != navigation_mode {
+                return Err(LoadError::UnsupportedTarget(
+                    "redirects cannot cross public and loopback network modes".into(),
+                ));
+            }
             reject_redirect_loop(&visited, &current_url)?;
             visited.push(current_url.clone());
             let endpoints = self.resolve_approved_endpoints(&current_url, deadline)?;
@@ -900,6 +906,38 @@ mod tests {
     }
 
     #[test]
+    fn public_redirect_to_explicit_loopback_fails_with_loopback_access() {
+        let resolver = FakeResolver::new([
+            ("public.example", vec!["1.1.1.1:80"]),
+            ("localhost", vec!["127.0.0.1:80"]),
+        ]);
+        let transport =
+            FakeTransport::redirect("http://public.example/", "http://localhost/secret");
+        let engine = FetchEngine::new(resolver, transport, NetworkAccess::PublicAndLoopback);
+
+        let result = engine.fetch("http://public.example/");
+
+        assert!(matches!(result, Err(LoadError::UnsupportedTarget(_))));
+        assert_eq!(engine.transport().request_count(), 1);
+    }
+
+    #[test]
+    fn loopback_redirect_to_public_address_fails_before_second_request() {
+        let resolver = FakeResolver::new([
+            ("localhost", vec!["127.0.0.1:80"]),
+            ("public.example", vec!["1.1.1.1:80"]),
+        ]);
+        let transport =
+            FakeTransport::redirect("http://localhost/", "http://public.example/secret");
+        let engine = FetchEngine::new(resolver, transport, NetworkAccess::PublicAndLoopback);
+
+        let result = engine.fetch("http://localhost/");
+
+        assert!(matches!(result, Err(LoadError::UnsupportedTarget(_))));
+        assert_eq!(engine.transport().request_count(), 1);
+    }
+
+    #[test]
     fn loopback_redirect_to_domain_resolving_loopback_fails_before_second_request() {
         let resolver = FakeResolver::new([
             ("localhost", vec!["127.0.0.1:80"]),
@@ -911,7 +949,7 @@ mod tests {
 
         let result = engine.fetch("http://localhost/");
 
-        assert!(matches!(result, Err(LoadError::BlockedAddress(_))));
+        assert!(matches!(result, Err(LoadError::UnsupportedTarget(_))));
         assert_eq!(engine.transport().request_count(), 1);
     }
 

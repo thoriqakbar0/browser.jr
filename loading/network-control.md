@@ -37,7 +37,7 @@ The loader resolves the target through its own resolver. It passes only the appr
 
 ### While running
 
-Every resolved address must be public unless the initial URL explicitly names `localhost` or a loopback IP. The transport verifies the connected peer before sending HTTP bytes. One 15-second deadline covers DNS, connections, TLS, redirects, and body reads. The body limit is one MiB and the redirect limit is five. Redirect destinations pass through the same resolver policy.
+Every resolved address must be public unless the initial URL explicitly names `localhost` or a loopback IP. The transport verifies the connected peer before sending HTTP bytes. One 15-second deadline covers DNS, connections, TLS, redirects, and body reads. The body limit is one MiB and the redirect limit is five. Redirect destinations pass through the same resolver policy. A redirect chain cannot cross between public and loopback network modes.
 
 ### Finish
 
