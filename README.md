@@ -8,10 +8,10 @@ Playwright and `agent-browser` compatibility are goals. Neither protocol is comp
 
 ## Try it
 
-Start a local web server, then run:
+Open a public or local web page:
 
 ```sh
-./browser.jr lint http://localhost:3000
+./browser.jr lint https://example.com
 ```
 
 Inspect the supported accessibility tree:
@@ -55,7 +55,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 
 ## What works
 
-- bounded loopback HTTP loading
+- bounded public HTTP and HTTPS loading, with loopback support and private-network blocking
 - static HTML parsing with normalized ancestry
 - a small inline and embedded CSS cascade with horizontal and static block-flow layout subsets
 - role locators with current HTML roles, non-presentational descendant image `alt` text, description, state, level, and accessibility-hidden filters
@@ -92,7 +92,6 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - text, image, native-control, stylesheet, clip, effect, or complete browser paint
 - a separate screenshot helper process or complete browser compositor
 - Playwright or `agent-browser` protocol compatibility
-- remote websites or HTTPS
 - a browser window
 
 Unsupported evidence blocks a check. browser.jr does not turn missing evidence into a pass.
@@ -227,7 +226,7 @@ Evidence date: 1 September 2026.
 | `loading/navigation.md` | drafted |
 | `loading/history-navigation.md` | drafted |
 | `loading/reload-page.md` | drafted |
-| `loading/network-control.md` | not started |
+| `loading/network-control.md` | drafted |
 | `interaction/fill-text.md` | drafted |
 | `interaction/type-text.md` | drafted |
 | `interaction/focus-element.md` | drafted |

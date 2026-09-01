@@ -96,7 +96,7 @@ Help and version exit with status zero. Invalid input exits with status two.
 
 - No arguments shows help.
 - `lint` without a URL reports invalid input.
-- `lint <url>` loads a loopback HTTP page with a 1280 CSS pixel viewport.
+- `lint <url>` loads a public HTTP or HTTPS page, or an explicit loopback page with a 1280 CSS pixel viewport.
 - `read <url>` prints normalized static document text.
 - `lint <url> --viewport <css-px>` sets a positive viewport width.
 - `lint <url> --max-width <element> <css-px>` checks one semantic element against a non-negative project limit.

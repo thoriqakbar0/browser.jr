@@ -390,7 +390,7 @@ fn json_session_accepts_the_trailing_flag_form() {
 #[test]
 fn snapshot_json_reports_load_failures_on_stdout() {
     let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
-        .args(["snapshot", "http://example.com", "--interactive", "--json"])
+        .args(["snapshot", "http://192.168.1.1", "--interactive", "--json"])
         .output()
         .unwrap();
 
@@ -398,7 +398,12 @@ fn snapshot_json_reports_load_failures_on_stdout() {
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["success"], false);
     assert!(value["data"].is_null());
-    assert!(value["error"].as_str().unwrap().contains("loopback"));
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap()
+            .contains("private and non-routable")
+    );
     assert!(output.stderr.is_empty());
 }
 

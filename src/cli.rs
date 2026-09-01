@@ -6,7 +6,7 @@ use crate::cli_output::{
 };
 use crate::cli_session::{run_session, write_accessibility_snapshot, write_interactive_snapshot};
 use crate::cli_session_json::run_json_session;
-use crate::loading::{LoadError, load_local_html};
+use crate::loading::{LoadError, load_html};
 use crate::page::layout_input_from_html;
 use crate::{
     AccessibilitySnapshotOptions, CaptureAccessibilitySnapshot, CaptureAccessibilitySnapshotWithin,
@@ -41,7 +41,7 @@ Options:
   --json             Emit machine-readable snapshot or session results on stdout
 
 Current implementation:
-  Static HTML design lint is available for loopback HTTP pages.
+  Static HTML design lint is available for public HTTP, HTTPS, and loopback pages.
   Full and interactive snapshots expose a stated static accessibility subset.
   Session mode supports semantic, attribute, CSS, and XPath locators through stdin.
   Session mode drains data-minimized native action events through the events command.
@@ -373,8 +373,8 @@ fn run_lint(options: LintOptions, output: &mut impl Write, errors: &mut impl Wri
             ExitStatus::InvalidInput,
         );
     };
-    let html = match load_local_html(url) {
-        Ok(html) => html,
+    let html = match load_html(url) {
+        Ok(loaded) => loaded.html,
         Err(error) => return write_load_error(errors, error),
     };
     let mut session = Session::new();
@@ -1090,12 +1090,12 @@ mod tests {
     }
 
     #[test]
-    fn non_loopback_lint_is_rejected_before_loading() {
-        let (status, output, errors) = run(&["lint", "http://example.com"]);
+    fn private_network_lint_is_rejected_before_loading() {
+        let (status, output, errors) = run(&["lint", "http://192.168.1.1"]);
 
         assert_eq!(status, ExitStatus::InvalidInput);
         assert!(output.is_empty());
-        assert!(errors.contains("loopback"));
+        assert!(errors.contains("private and non-routable"));
     }
 
     #[test]

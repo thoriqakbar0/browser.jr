@@ -116,6 +116,68 @@ fn serve_pages_recording_requests(bodies: Vec<&'static str>) -> (String, JoinHan
     (format!("http://{address}/"), handle)
 }
 
+fn serve_redirect_page(expected_requests: usize) -> (String, JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        let mut requests = Vec::with_capacity(expected_requests);
+        for _ in 0..expected_requests {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request_line = String::new();
+            {
+                let mut reader = BufReader::new(&mut stream);
+                reader.read_line(&mut request_line).unwrap();
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header == "\r\n" || header.is_empty() {
+                        break;
+                    }
+                }
+            }
+            let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+            requests.push(path.to_owned());
+            if path == "/start" {
+                write!(
+                    stream,
+                    "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            } else {
+                let body = "<h1>Redirected</h1>";
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        }
+        requests
+    });
+    (format!("http://{address}/start"), handle)
+}
+
+#[test]
+fn redirected_navigation_records_the_committed_final_url_in_history() {
+    let network_guard = network_test_guard();
+    let (redirect_url, redirect_server) = serve_redirect_page(3);
+    let (other_url, other_server) = serve_page("<p>Other</p>");
+    let mut session = Session::new();
+
+    let opened = session.execute(OpenPage { url: redirect_url }).unwrap();
+    assert!(opened.url.ends_with("/final"));
+    session.execute(OpenPage { url: other_url }).unwrap();
+    other_server.join().unwrap();
+
+    let back = session.execute(GoBack).unwrap();
+    let requests = redirect_server.join().unwrap();
+    drop(network_guard);
+
+    assert!(matches!(back, HistoryNavigationResult::Navigated(_)));
+    assert_eq!(requests, vec!["/start", "/final", "/final"]);
+}
+
 #[test]
 fn package_caller_receives_typed_overflow_evidence() {
     let mut session = Session::new();
@@ -7207,7 +7269,7 @@ fn failed_open_preserves_the_current_page() {
     let before = session.execute(CaptureInteractiveSnapshot).unwrap();
 
     let failure = session.execute(OpenPage {
-        url: "http://example.com".into(),
+        url: "http://192.168.1.1".into(),
     });
     let after = session.execute(CaptureInteractiveSnapshot).unwrap();
     drop(network_guard);

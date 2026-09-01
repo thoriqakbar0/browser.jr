@@ -10,7 +10,7 @@ Reload fetches the current URL again and installs a fresh document after success
 
 ## The simple case
 
-The caller opens a loopback page. The server later returns changed HTML for the same URL.
+The caller opens a HTTP or HTTPS page. The server later returns changed HTML for the same URL.
 
 Reload fetches that URL again. The new title, semantics, control state, and references replace the previous document.
 
@@ -43,7 +43,7 @@ Extra session command tokens report invalid input before network access.
 
 ### Begin running
 
-browser.jr loads the current URL through the loopback loader.
+browser.jr loads the current URL through the bounded network loader.
 
 It applies the same target, response, content-type, body, and transfer limits as `OpenPage`.
 
@@ -98,9 +98,9 @@ The caller must capture again before another reference action or observation.
 
 **Output and exit status.** Package callers receive `OpenedPage` or `SessionError`. Session failures use status two or three.
 
-**Resource limits.** The body limit is one MiB. A wall-clock request timeout is not implemented yet.
+**Resource limits.** The body limit is one MiB. The request limit is 15 seconds.
 
-**Network and storage.** Reload permits loopback HTTP only. It writes no persistent storage.
+**Network and storage.** Reload permits public HTTP and HTTPS plus explicit loopback targets. It writes no persistent storage.
 
 **Rendering compatibility.** The new response uses the same static HTML and rendering subsets as open.
 
