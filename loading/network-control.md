@@ -70,7 +70,7 @@ A successful open installs the final response URL. Failures preserve the previou
 
 **Configuration precedence.** No network override exists.
 
-**Output and exit status.** Invalid targets are input failures. Runtime network failures are unavailable failures.
+**Output and exit status.** Invalid targets are input failures. Runtime network failures are unavailable failures. Errors identify DNS, connection, TLS, timeout, HTTP response, and body phases without including response bodies.
 
 **Resource limits.** Responses are limited to one MiB, 64 headers, 64 KiB of header buffering, 16 DNS answers, five redirects, and 15 seconds per load operation. Compressed response bodies are rejected.
 
@@ -78,7 +78,7 @@ A successful open installs the final response URL. Failures preserve the previou
 
 **Rendering compatibility.** Only HTML and XHTML response media types are accepted when a content type is present.
 
-**Isolation.** Public hosts cannot resolve to a mixture containing private or non-routable addresses.
+**Isolation.** Public hosts cannot resolve to a mixture containing private or non-routable addresses. Production deployments must also deny private, special-purpose, metadata, cluster, and control-plane destinations at the egress network boundary.
 
 **Accessibility inspection.** Network policy does not change the supported static semantic subset.
 
@@ -93,5 +93,6 @@ A successful open installs the final response URL. Failures preserve the previou
 
 ## Open questions and verification
 
+- Verify deployment egress rules in each supported hosting environment.
 
 Drafted from the Rust implementation and focused tests on 2026-09-01.

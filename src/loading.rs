@@ -40,6 +40,11 @@ pub enum LoadError {
     BlockedAddress(IpAddr),
     RedirectDowngrade,
     TooManyRedirects(u32),
+    Dns(String),
+    Connection(String),
+    Tls(String),
+    Timeout(&'static str),
+    Response(String),
     Request(String),
     UnexpectedStatus(u16),
     UnsupportedContentType(String),
@@ -66,6 +71,11 @@ impl fmt::Display for LoadError {
             Self::TooManyRedirects(limit) => {
                 write!(formatter, "redirect limit exceeded ({limit})")
             }
+            Self::Dns(reason) => write!(formatter, "DNS failed: {reason}"),
+            Self::Connection(reason) => write!(formatter, "connection failed: {reason}"),
+            Self::Tls(reason) => write!(formatter, "TLS failed: {reason}"),
+            Self::Timeout(phase) => write!(formatter, "{phase} timed out"),
+            Self::Response(reason) => write!(formatter, "HTTP response failed: {reason}"),
             Self::Request(reason) => write!(formatter, "page request failed: {reason}"),
             Self::UnexpectedStatus(status) => {
                 write!(formatter, "page returned HTTP status {status}")
@@ -147,7 +157,7 @@ impl<R: NetworkResolver, T: NetworkTransport> FetchEngine<R, T> {
         let remaining = remaining_request_time(deadline)?;
         let endpoints = self.resolver.resolve_url(url, remaining)?;
         if endpoints.is_empty() {
-            return Err(LoadError::Request("DNS returned no addresses".into()));
+            return Err(LoadError::Dns("no addresses returned".into()));
         }
         for endpoint in &endpoints {
             if !address_is_allowed_for_mode(endpoint.ip(), self.mode) {
@@ -182,7 +192,7 @@ enum FetchStep {
 fn remaining_request_time(deadline: Instant) -> Result<Duration, LoadError> {
     deadline
         .checked_duration_since(Instant::now())
-        .ok_or_else(|| LoadError::Request("request timed out".into()))
+        .ok_or(LoadError::Timeout("navigation"))
 }
 
 fn reject_redirect_loop(visited: &[Url], url: &Url) -> Result<(), LoadError> {
@@ -223,8 +233,8 @@ fn next_redirect_url(
     if redirect_count == MAX_REDIRECTS {
         return Err(LoadError::TooManyRedirects(MAX_REDIRECTS));
     }
-    let location = location
-        .ok_or_else(|| LoadError::Request("redirect response has no Location header".into()))?;
+    let location =
+        location.ok_or_else(|| LoadError::Response("redirect has no Location header".into()))?;
     let next_url = current_url
         .join(&location)
         .map_err(|error| LoadError::InvalidUrl(error.to_string()))?;
@@ -431,12 +441,10 @@ impl NetworkResolver for SystemNetworkResolver {
         receiver
             .recv_timeout(timeout)
             .map_err(|error| match error {
-                mpsc::RecvTimeoutError::Timeout => LoadError::Request("DNS timed out".into()),
-                mpsc::RecvTimeoutError::Disconnected => {
-                    LoadError::Request("DNS resolver stopped".into())
-                }
+                mpsc::RecvTimeoutError::Timeout => LoadError::Timeout("DNS"),
+                mpsc::RecvTimeoutError::Disconnected => LoadError::Dns("resolver stopped".into()),
             })?
-            .map_err(|error| LoadError::Request(error.to_string()))
+            .map_err(|error| LoadError::Dns(error.to_string()))
     }
 }
 
@@ -557,7 +565,7 @@ mod tests {
             self.endpoints_by_host
                 .get(url.host_str().unwrap_or_default())
                 .cloned()
-                .ok_or_else(|| LoadError::Request("fake DNS answer missing".into()))
+                .ok_or_else(|| LoadError::Dns("fake answer missing".into()))
         }
     }
 
@@ -691,7 +699,7 @@ mod tests {
         let result = transport.send_get(&url, &[endpoint], REQUEST_TIMEOUT);
         server.join().unwrap();
 
-        assert!(matches!(result, Err(LoadError::Request(_))));
+        assert!(matches!(result, Err(LoadError::Tls(_))));
     }
 
     #[test]

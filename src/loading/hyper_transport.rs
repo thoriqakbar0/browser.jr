@@ -62,7 +62,7 @@ impl NetworkTransport for HyperNetworkTransport {
                 send_hyper_request(url, approved_endpoints, self.tls_config.clone()),
             )
             .await
-            .map_err(|_| LoadError::Request("request timed out".into()))?
+            .map_err(|_| LoadError::Timeout("network request"))?
         })
     }
 }
@@ -85,7 +85,7 @@ async fn send_hyper_request(
             Err(error) => last_error = Some(error),
         }
     }
-    Err(last_error.unwrap_or_else(|| LoadError::Request("no approved endpoints".into())))
+    Err(last_error.unwrap_or_else(|| LoadError::Connection("no approved endpoints".into())))
 }
 
 async fn send_hyper_request_to_endpoint(
@@ -95,12 +95,12 @@ async fn send_hyper_request_to_endpoint(
 ) -> Result<NetworkResponse, LoadError> {
     let stream = TcpStream::connect(endpoint)
         .await
-        .map_err(|error| LoadError::Request(error.to_string()))?;
+        .map_err(|error| LoadError::Connection(error.to_string()))?;
     let peer = stream
         .peer_addr()
-        .map_err(|error| LoadError::Request(error.to_string()))?;
+        .map_err(|error| LoadError::Connection(error.to_string()))?;
     if peer != endpoint {
-        return Err(LoadError::Request(format!(
+        return Err(LoadError::Connection(format!(
             "connected peer {peer} does not match approved endpoint {endpoint}"
         )));
     }
@@ -110,11 +110,11 @@ async fn send_hyper_request_to_endpoint(
             .host_str()
             .ok_or_else(|| LoadError::InvalidUrl("the URL has no host".into()))?;
         let server_name = rustls::pki_types::ServerName::try_from(host.to_owned())
-            .map_err(|error| LoadError::Request(error.to_string()))?;
+            .map_err(|error| LoadError::Tls(error.to_string()))?;
         let tls = TlsConnector::from(tls_config)
             .connect(server_name, stream)
             .await
-            .map_err(|error| LoadError::Request(error.to_string()))?;
+            .map_err(|error| LoadError::Tls(error.to_string()))?;
         send_hyper_request_over_io(url, tls).await
     } else {
         send_hyper_request_over_io(url, stream).await
@@ -130,7 +130,7 @@ where
         .max_buf_size(MAX_RESPONSE_HEADER_BYTES)
         .handshake(TokioIo::new(io))
         .await
-        .map_err(|error| LoadError::Request(error.to_string()))?;
+        .map_err(|error| LoadError::Connection(error.to_string()))?;
     tokio::spawn(async move {
         let _ = connection.await;
     });
@@ -153,7 +153,7 @@ where
     let response = sender
         .send_request(request)
         .await
-        .map_err(|error| LoadError::Request(error.to_string()))?;
+        .map_err(|error| LoadError::Response(error.to_string()))?;
     let status = response.status().as_u16();
     let redirect_location = response
         .headers()

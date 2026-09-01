@@ -2378,7 +2378,7 @@ fn page_load_failure_is_not_a_pass() {
     assert!(
         String::from_utf8(output.stderr)
             .unwrap()
-            .contains("page request failed")
+            .contains("connection failed")
     );
 }
 
