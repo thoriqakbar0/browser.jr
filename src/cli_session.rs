@@ -146,16 +146,26 @@ impl CliSession {
             ExitStatus::Success,
         );
         for event in events {
+            let related = event
+                .related_target
+                .as_ref()
+                .map_or_else(String::new, |target| {
+                    format!(
+                        " related={:?} related_ordinal={}",
+                        target.target, target.target_ordinal
+                    )
+                });
             status = combine_status(
                 status,
                 write_line(
                     output,
                     &format!(
-                        "event type={} document={} target={:?} ordinal={} bubbles={} composed={} path={:?}",
+                        "event type={} document={} target={:?} ordinal={}{} bubbles={} composed={} path={:?}",
                         event.event_type,
                         event.document_epoch,
                         event.target,
                         event.target_ordinal,
+                        related,
                         event.bubbles,
                         event.composed,
                         event.path.join(" > ")

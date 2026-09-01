@@ -2434,6 +2434,15 @@ fn native_actions_record_data_minimized_dom_event_sequences() {
     assert_eq!(
         events
             .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type,
+                    DomEventType::BeforeInput
+                        | DomEventType::Change
+                        | DomEventType::Click
+                        | DomEventType::Input
+                )
+            })
             .map(|event| (event.event_type, event.target.as_str()))
             .collect::<Vec<_>>(),
         vec![
@@ -2459,8 +2468,8 @@ fn native_actions_record_data_minimized_dom_event_sequences() {
     let document_epoch = events[0].document_epoch;
     assert!(events.iter().all(|event| {
         event.document_epoch == document_epoch
-            && event.bubbles
-            && event.composed == (event.event_type != DomEventType::Change)
+            && event.bubbles == event.event_type.bubbles()
+            && event.composed == event.event_type.composed()
             && event.target_ordinal > 0
             && event.path.first() == Some(&event.target)
             && event.path.iter().any(|element| element == "root")
@@ -7377,6 +7386,15 @@ fn native_actions_record_ordered_dom_events_with_ancestry() {
     assert_eq!(
         events
             .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type,
+                    DomEventType::BeforeInput
+                        | DomEventType::Change
+                        | DomEventType::Click
+                        | DomEventType::Input
+                )
+            })
             .map(|event| (event.event_type, event.target.as_str()))
             .collect::<Vec<_>>(),
         vec![
@@ -7391,7 +7409,11 @@ fn native_actions_record_ordered_dom_events_with_ancestry() {
     );
     assert_eq!(events[0].path, vec!["name", "label[2]", "root"]);
     assert_eq!(events[0].target_ordinal, 3);
-    assert!(events.iter().all(|event| event.bubbles));
+    assert!(
+        events
+            .iter()
+            .all(|event| event.bubbles == event.event_type.bubbles())
+    );
     assert!(empty.is_empty());
 }
 
@@ -7414,11 +7436,209 @@ fn link_click_event_survives_successful_navigation() {
     let events = session.execute(TakeDomEvents).unwrap();
     drop(network_guard);
 
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].event_type, DomEventType::Click);
-    assert_eq!(events[0].target, "next");
-    assert_eq!(events[0].target_ordinal, 2);
-    assert_eq!(events[0].path, vec!["next", "root"]);
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            DomEventType::PointerOver,
+            DomEventType::PointerEnter,
+            DomEventType::MouseOver,
+            DomEventType::MouseEnter,
+            DomEventType::PointerMove,
+            DomEventType::MouseMove,
+            DomEventType::PointerDown,
+            DomEventType::MouseDown,
+            DomEventType::Focus,
+            DomEventType::FocusIn,
+            DomEventType::PointerUp,
+            DomEventType::MouseUp,
+            DomEventType::Click,
+        ]
+    );
+    assert!(events.iter().all(|event| {
+        event.target == "next" && event.target_ordinal == 2 && event.path == ["next", "root"]
+    }));
+}
+
+#[test]
+fn pointer_click_records_playwright_target_and_focus_order() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<main id="root"><button id="first">First</button><button id="second">Second</button></main>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    session
+        .execute(FocusByLocator {
+            locator: Locator::from(CssLocator::new("#first").unwrap()),
+        })
+        .unwrap();
+    assert!(session.execute(TakeDomEvents).unwrap().is_empty());
+
+    session
+        .execute(ClickByLocator {
+            locator: Locator::from(CssLocator::new("#second").unwrap()),
+        })
+        .unwrap();
+    let events = session.execute(TakeDomEvents).unwrap();
+    let focused = session
+        .execute(GetFocusedByLocator {
+            locator: Locator::from(CssLocator::new("#second").unwrap()),
+        })
+        .unwrap();
+    let hovered = session
+        .execute(GetHoveredByLocator {
+            locator: Locator::from(CssLocator::new("#second").unwrap()),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            DomEventType::PointerOver,
+            DomEventType::PointerEnter,
+            DomEventType::MouseOver,
+            DomEventType::MouseEnter,
+            DomEventType::PointerMove,
+            DomEventType::MouseMove,
+            DomEventType::PointerDown,
+            DomEventType::MouseDown,
+            DomEventType::Blur,
+            DomEventType::FocusOut,
+            DomEventType::Focus,
+            DomEventType::FocusIn,
+            DomEventType::PointerUp,
+            DomEventType::MouseUp,
+            DomEventType::Click,
+        ]
+    );
+    assert!(
+        events[..8]
+            .iter()
+            .all(|event| { event.target == "second" && event.related_target.is_none() })
+    );
+    assert!(events[8..10].iter().all(|event| {
+        event.target == "first"
+            && event.related_target.as_ref().is_some_and(|target| {
+                target.target == "second" && target.target_ordinal == events[10].target_ordinal
+            })
+    }));
+    assert!(events[10..12].iter().all(|event| {
+        event.target == "second"
+            && event.related_target.as_ref().is_some_and(|target| {
+                target.target == "first" && target.target_ordinal == events[8].target_ordinal
+            })
+    }));
+    assert!(events[12..].iter().all(|event| event.target == "second"));
+    assert!(focused.focused);
+    assert!(hovered.hovered);
+}
+
+#[test]
+fn hover_records_playwright_chromium_transition_order() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<main id="root"><button id="first">First</button><button id="second">Second</button></main>"#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let first = Locator::from(CssLocator::new("#first").unwrap());
+    let second = Locator::from(CssLocator::new("#second").unwrap());
+    session
+        .execute(HoverByLocator {
+            locator: first.clone(),
+        })
+        .unwrap();
+    session.execute(TakeDomEvents).unwrap();
+
+    session
+        .execute(HoverByLocator {
+            locator: second.clone(),
+        })
+        .unwrap();
+    let transition = session.execute(TakeDomEvents).unwrap();
+    session
+        .execute(HoverByLocator {
+            locator: second.clone(),
+        })
+        .unwrap();
+    let repeated = session.execute(TakeDomEvents).unwrap();
+    let first_state = session
+        .execute(GetHoveredByLocator { locator: first })
+        .unwrap();
+    let second_state = session
+        .execute(GetHoveredByLocator { locator: second })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(
+        transition
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![
+            DomEventType::PointerOut,
+            DomEventType::PointerLeave,
+            DomEventType::PointerOver,
+            DomEventType::PointerEnter,
+            DomEventType::MouseOut,
+            DomEventType::MouseLeave,
+            DomEventType::MouseOver,
+            DomEventType::MouseEnter,
+            DomEventType::PointerMove,
+            DomEventType::MouseMove,
+        ]
+    );
+    assert!(transition[..2].iter().all(|event| {
+        event.target == "first"
+            && event
+                .related_target
+                .as_ref()
+                .is_some_and(|target| target.target == "second")
+    }));
+    assert!(transition[2..4].iter().all(|event| {
+        event.target == "second"
+            && event
+                .related_target
+                .as_ref()
+                .is_some_and(|target| target.target == "first")
+    }));
+    assert!(transition[4..6].iter().all(|event| {
+        event.target == "first"
+            && event
+                .related_target
+                .as_ref()
+                .is_some_and(|target| target.target == "second")
+    }));
+    assert!(transition[6..8].iter().all(|event| {
+        event.target == "second"
+            && event
+                .related_target
+                .as_ref()
+                .is_some_and(|target| target.target == "first")
+    }));
+    assert!(
+        transition[8..]
+            .iter()
+            .all(|event| { event.target == "second" && event.related_target.is_none() })
+    );
+    assert_eq!(
+        repeated
+            .iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>(),
+        vec![DomEventType::PointerMove, DomEventType::MouseMove]
+    );
+    assert!(!first_state.hovered);
+    assert!(second_state.hovered);
 }
 
 #[test]
@@ -7440,10 +7660,10 @@ fn optional_tags_preserve_native_event_ancestry() {
     let events = session.execute(TakeDomEvents).unwrap();
     drop(network_guard);
 
-    assert_eq!(events.len(), 3);
-    assert_eq!(events[0].event_type, DomEventType::Click);
-    assert_eq!(events[1].event_type, DomEventType::Input);
-    assert_eq!(events[2].event_type, DomEventType::Change);
+    assert_eq!(events.len(), 15);
+    assert_eq!(events[12].event_type, DomEventType::Click);
+    assert_eq!(events[13].event_type, DomEventType::Input);
+    assert_eq!(events[14].event_type, DomEventType::Change);
     assert_eq!(events[0].target_ordinal, 5);
     assert_eq!(events[0].path, vec!["two", "second", "list"]);
     assert!(events.iter().all(|event| event.path == events[0].path));

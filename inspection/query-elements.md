@@ -290,11 +290,11 @@ It navigates same-context links, activates supported native buttons, and changes
 
 Supported GET submitters navigate through [`submit-form.md`](../interaction/submit-form.md).
 
-Reset and image controls with form owners reject clicks. Pointer event records are not implemented.
+Reset and image controls with form owners reject clicks. Complete pointer metadata is not implemented.
 
 Successful fill, select, click, check, and uncheck actions append their documented native event records.
 
-Successful link clicks record one bubbling `click` event before navigation.
+Successful link clicks record target-level pointer, mouse, focus, and `click` phases before navigation.
 
 The session transcript does not deliver events to page scripts.
 
@@ -302,7 +302,7 @@ The session transcript does not deliver events to page scripts.
 
 It auto-scrolls a supported target box before storing the source as the exact pointer target.
 
-Hover does not check enabled state or event receipt.
+Hover does not check enabled state. It requires bounded event-receipt evidence.
 
 `hovered` compares one strict match with that pointer target.
 
@@ -310,7 +310,7 @@ Hover does not check enabled state or event receipt.
 
 It supports structural and interactive targets. See [Scroll the page and reveal an element](../interaction/scroll-page.md).
 
-Hover and hovered-state reads do not apply CSS `:hover` or dispatch pointer events.
+Hover records target-level pointer transitions. Hovered-state reads do not apply CSS `:hover`.
 
 Missing visibility evidence blocks an action. Hidden elements also block an action.
 
@@ -533,7 +533,7 @@ Role actions still apply supported actionability checks after strict resolution.
 - Define full ARIA role, state, and accessible-name computation.
 - Add auto-waiting and action timeouts.
 - Add complete receives-events evidence and frame sampling for supported motion.
-- Add pointer and remaining native event records, page-script delivery, remaining form defaults, and dynamic CSS `:hover`.
+- Add complete ancestor pointer dispatch, remaining native records, page-script delivery, remaining form defaults, and dynamic CSS `:hover`.
 - Define regular-expression name matching.
 - Define complete CSS and XPath conformance boundaries.
 - Add namespace-aware XPath.

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Actionability probe</title>
+    <style>
+      @keyframes move-sideways {
+        from { transform: translateX(0); }
+        to { transform: translateX(80px); }
+      }
+
+      body {
+        margin: 0;
+      }
+
+      button {
+        display: block;
+        width: 120px;
+        height: 40px;
+      }
+
+      #moving {
+        animation: move-sideways 120ms linear infinite alternate;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Actionability probe</h1>
+    <button id="static" type="button">Static target</button>
+    <button id="other" type="button">Other target</button>
+    <button id="moving" type="button">Moving target</button>
+    <output id="click-count">0</output>
+    <script>
+      const eventTypes = [
+        "pointerover",
+        "pointerenter",
+        "mouseover",
+        "mouseenter",
+        "pointermove",
+        "mousemove",
+        "pointerdown",
+        "mousedown",
+        "focus",
+        "focusin",
+        "pointerup",
+        "mouseup",
+        "click",
+        "pointerout",
+        "pointerleave",
+        "mouseout",
+        "mouseleave",
+        "blur",
+        "focusout",
+      ];
+      const records = [];
+      let clickCount = 0;
+
+      for (const eventType of eventTypes) {
+        document.addEventListener(
+          eventType,
+          (event) => {
+            records.push({
+              type: event.type,
+              target: event.target.id || event.target.localName,
+              relatedTarget: event.relatedTarget?.id || event.relatedTarget?.localName || null,
+              bubbles: event.bubbles,
+              composed: event.composed,
+            });
+          },
+          true,
+        );
+      }
+
+      for (const button of document.querySelectorAll("button")) {
+        button.addEventListener("click", () => {
+          clickCount += 1;
+          document.querySelector("#click-count").textContent = String(clickCount);
+        });
+      }
+
+      window.actionabilityProbe = {
+        clear() {
+          records.length = 0;
+        },
+        read() {
+          return { clickCount, records: [...records] };
+        },
+        reset() {
+          clickCount = 0;
+          records.length = 0;
+          document.querySelector("#click-count").textContent = "0";
+        },
+      };
+    </script>
+  </body>
+</html>

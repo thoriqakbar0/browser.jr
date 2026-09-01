@@ -2,7 +2,7 @@
 
 Evidence date: 1 September 2026.
 
-Four open compatibility defects affect Lightpanda comparisons. The current browser.jr runtime slice passes its automated checks.
+Six open compatibility defects affect controller comparisons. The current browser.jr runtime slice passes its automated checks.
 
 Missing behavior belongs in the coverage table. A live-page result that conflicts with decided behavior becomes a triage entry.
 
@@ -14,6 +14,8 @@ Missing behavior belongs in the coverage table. A live-page result that conflict
 | BJR-009 | Playwright and Lightpanda compute several accessible names differently | medium | locator compatibility | Define the remaining name subset or add compatibility profiles. | not filed |
 | BJR-010 | Lightpanda clicks continuously moving controls without waiting for stability | medium | actionability compatibility | Keep Playwright stability semantics and confirm Lightpanda's intended boundary. | not filed |
 | BJR-011 | Lightpanda treats a `pointer-events:none` overlay as a click blocker | medium | actionability compatibility | Keep Playwright pointer-event semantics and confirm Lightpanda's intended boundary. | not filed |
+| BJR-012 | Lightpanda omits PointerEvents and hover exit records | medium | event compatibility | Keep Playwright event families and confirm Lightpanda's intended boundary. | not filed |
+| BJR-013 | Playwright engines order pointer transitions differently | low | event compatibility | Keep one explicit target-level order until user-agent profiles exist. | not filed |
 
 ## Open suspected conflicts
 
@@ -72,6 +74,30 @@ Playwright 1.62.1 Chromium, Firefox, and WebKit clicked the button.
 It rejected the click and named the overlay as the covering element.
 
 browser.jr follows Playwright here. Its supported hit-test slice ignores `pointer-events:none` boxes.
+
+### BJR-012
+
+The repository actionability probe clicked one static button and hovered between two buttons.
+
+`agent-browser` 0.34.0 used Lightpanda with a 1,000-millisecond action timeout.
+
+Its click emitted mouse records, then focused the button after `click`.
+
+It emitted no PointerEvents. Its hover transition omitted exit records and related-target identity.
+
+browser.jr follows Playwright's pointer and mouse event families. It keeps page-script delivery unsupported.
+
+### BJR-013
+
+The same probe used Playwright 1.62.1 with Chrome, Firefox, and WebKit.
+
+Chrome and Firefox matched the target-level click sequence through focus and `click`.
+
+WebKit interleaved pointer and mouse enter records. It did not focus the static button.
+
+The engines also interleaved pointer and mouse hover transitions differently.
+
+browser.jr uses Chrome's target-level transition order. Complete user-agent event profiles remain open.
 
 ## Resolved conflicts
 

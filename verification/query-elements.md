@@ -68,13 +68,14 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | QUERY-60 | P1 | pipe | Pointer locators expose typed static stability failures ([While running](../inspection/query-elements.md#while-running)). | Give click, hover, and checked-state targets inline motion declarations. | Run each action through strict locators, then inspect state and events. | Each failure names the stable check. No action effect commits. | partial: package and compiled-process tests passed, 2026-09-01 |
 | QUERY-61 | P1 | pipe | CSS traversal follows normalized HTML ancestry ([Begin running](../inspection/query-elements.md#begin-running)). | Serve omitted roots, optional `li` endings, and an implicit `tbody`. | Resolve structural, descendant, and child selectors. | Each selector follows the parser-built tree without exposing implied roots as targets. | partial: unit, package, and compiled-process tests passed, 2026-08-31 |
 | QUERY-62 | P1 | pipe | Pointer locators expose typed receives-events blockers ([While running](../inspection/query-elements.md#while-running)). | Cover supported click, hover, and checked-state targets with one fixed element. | Run each action through strict CSS locators, then inspect state and events. | Each failure names the receives-events check and blocker. No action effect commits. | partial: package and compiled-process tests passed, 2026-09-01 |
+| QUERY-63 | P1 | pipe | Pointer locators record target-level transitions ([While running](../inspection/query-elements.md#while-running)). | Focus one control and place the pointer on another. | Click, check, and hover through strict locators, then drain events. | Successful actions record pointer, mouse, focus, and related-target evidence without replacing references. | partial: package and compiled-process tests passed; Playwright 1.62.1 Chrome and Firefox matched click order, 2026-09-01 |
 
 Not checkable yet:
 
 - Full ARIA role, state, name, and description computation does not exist.
 - Auto-waiting and action timeouts do not exist.
 - Complete receives-events hit testing and motion frame sampling do not exist.
-- Pointer and remaining event records, page-script delivery, remaining form defaults, and dynamic CSS `:hover` do not exist.
+- Complete ancestor pointer dispatch, remaining event records, page-script delivery, remaining form defaults, and dynamic CSS `:hover` do not exist.
 - Regular-expression locator matching does not exist.
 - Complete CSS and XPath conformance coverage does not exist.
 - Namespace-aware XPath does not exist.

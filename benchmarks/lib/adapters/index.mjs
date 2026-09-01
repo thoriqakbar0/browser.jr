@@ -18,7 +18,7 @@ async function exists(path) {
   }
 }
 
-async function findChromeExecutable() {
+export async function findChromeExecutable() {
   const explicit = process.env.BROWSER_JR_BENCH_CHROME_PATH;
   if (explicit && (await exists(explicit))) return explicit;
 

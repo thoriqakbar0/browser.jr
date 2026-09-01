@@ -57,21 +57,54 @@ pub struct Session {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DomEventType {
     BeforeInput,
+    Blur,
     Change,
     Click,
+    Focus,
+    FocusIn,
+    FocusOut,
     Input,
     KeyDown,
     KeyPress,
     KeyUp,
+    MouseDown,
+    MouseEnter,
+    MouseLeave,
+    MouseMove,
+    MouseOut,
+    MouseOver,
+    MouseUp,
+    PointerDown,
+    PointerEnter,
+    PointerLeave,
+    PointerMove,
+    PointerOut,
+    PointerOver,
+    PointerUp,
 }
 
 impl DomEventType {
     pub const fn bubbles(self) -> bool {
-        true
+        !matches!(
+            self,
+            Self::Blur
+                | Self::Focus
+                | Self::MouseEnter
+                | Self::MouseLeave
+                | Self::PointerEnter
+                | Self::PointerLeave
+        )
     }
 
     pub const fn composed(self) -> bool {
-        !matches!(self, Self::Change)
+        !matches!(
+            self,
+            Self::Change
+                | Self::MouseEnter
+                | Self::MouseLeave
+                | Self::PointerEnter
+                | Self::PointerLeave
+        )
     }
 }
 
@@ -79,12 +112,30 @@ impl std::fmt::Display for DomEventType {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::BeforeInput => "beforeinput",
+            Self::Blur => "blur",
             Self::Change => "change",
             Self::Click => "click",
+            Self::Focus => "focus",
+            Self::FocusIn => "focusin",
+            Self::FocusOut => "focusout",
             Self::Input => "input",
             Self::KeyDown => "keydown",
             Self::KeyPress => "keypress",
             Self::KeyUp => "keyup",
+            Self::MouseDown => "mousedown",
+            Self::MouseEnter => "mouseenter",
+            Self::MouseLeave => "mouseleave",
+            Self::MouseMove => "mousemove",
+            Self::MouseOut => "mouseout",
+            Self::MouseOver => "mouseover",
+            Self::MouseUp => "mouseup",
+            Self::PointerDown => "pointerdown",
+            Self::PointerEnter => "pointerenter",
+            Self::PointerLeave => "pointerleave",
+            Self::PointerMove => "pointermove",
+            Self::PointerOut => "pointerout",
+            Self::PointerOver => "pointerover",
+            Self::PointerUp => "pointerup",
         })
     }
 }
@@ -96,9 +147,16 @@ pub struct DomEvent {
     pub document_epoch: u64,
     pub target: String,
     pub target_ordinal: usize,
+    pub related_target: Option<DomEventTargetIdentity>,
     pub path: Vec<String>,
     pub bubbles: bool,
     pub composed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DomEventTargetIdentity {
+    pub target: String,
+    pub target_ordinal: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,6 +165,14 @@ struct DomEventTarget {
     target: String,
     target_ordinal: usize,
     path: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PointerActionContext {
+    previous_pointer: Option<DomEventTarget>,
+    previous_focus: Option<DomEventTarget>,
+    source_index: usize,
+    target: DomEventTarget,
 }
 
 #[derive(Clone, Copy)]
@@ -585,18 +651,161 @@ impl Session {
             .dom_event_target(interactive_index)
     }
 
+    fn pointer_action_context(&self, source_index: usize) -> PointerActionContext {
+        let page = self
+            .current_page
+            .as_ref()
+            .expect("pointer actions require a current page");
+        let previous_pointer = page
+            .hovered_source_index
+            .map(|index| page.dom_event_target_for_source(index));
+        let previous_focus = page
+            .focused_interactive_index
+            .map(|index| page.dom_event_target(index));
+        let target = page.dom_event_target_for_source(source_index);
+        PointerActionContext {
+            previous_pointer,
+            previous_focus,
+            source_index,
+            target,
+        }
+    }
+
+    fn finish_pointer_move(&mut self, context: &PointerActionContext) {
+        self.commit_pointer_target(context.source_index);
+        self.record_pointer_transition(context.previous_pointer.as_ref(), &context.target);
+    }
+
+    fn finish_pointer_click(
+        &mut self,
+        context: &PointerActionContext,
+        activation_events: &[DomEventType],
+    ) {
+        self.commit_pointer_target(context.source_index);
+        let current_focus = self.current_page.as_ref().and_then(|page| {
+            page.focused_interactive_index
+                .map(|index| page.dom_event_target(index))
+        });
+        self.record_pointer_transition(context.previous_pointer.as_ref(), &context.target);
+        self.record_dom_events(
+            &context.target,
+            &[DomEventType::PointerDown, DomEventType::MouseDown],
+        );
+        self.record_focus_transition(context.previous_focus.as_ref(), current_focus.as_ref());
+        self.record_dom_events(
+            &context.target,
+            &[
+                DomEventType::PointerUp,
+                DomEventType::MouseUp,
+                DomEventType::Click,
+            ],
+        );
+        self.record_dom_events(&context.target, activation_events);
+    }
+
+    fn commit_pointer_target(&mut self, source_index: usize) {
+        self.current_page
+            .as_mut()
+            .expect("pointer actions require a current page")
+            .hovered_source_index = Some(source_index);
+    }
+
+    fn record_pointer_transition(
+        &mut self,
+        previous: Option<&DomEventTarget>,
+        current: &DomEventTarget,
+    ) {
+        if previous.is_some_and(|target| same_dom_event_target(target, current)) {
+            self.record_dom_events(
+                current,
+                &[DomEventType::PointerMove, DomEventType::MouseMove],
+            );
+            return;
+        }
+        if let Some(previous) = previous {
+            self.record_related_dom_events(
+                previous,
+                Some(current),
+                &[DomEventType::PointerOut, DomEventType::PointerLeave],
+            );
+        }
+        self.record_related_dom_events(
+            current,
+            previous,
+            &[DomEventType::PointerOver, DomEventType::PointerEnter],
+        );
+        if let Some(previous) = previous {
+            self.record_related_dom_events(
+                previous,
+                Some(current),
+                &[DomEventType::MouseOut, DomEventType::MouseLeave],
+            );
+        }
+        self.record_related_dom_events(
+            current,
+            previous,
+            &[DomEventType::MouseOver, DomEventType::MouseEnter],
+        );
+        self.record_dom_events(
+            current,
+            &[DomEventType::PointerMove, DomEventType::MouseMove],
+        );
+    }
+
+    fn record_focus_transition(
+        &mut self,
+        previous: Option<&DomEventTarget>,
+        current: Option<&DomEventTarget>,
+    ) {
+        if matches!((previous, current), (Some(left), Some(right)) if same_dom_event_target(left, right))
+        {
+            return;
+        }
+        if let Some(previous) = previous {
+            self.record_related_dom_events(
+                previous,
+                current,
+                &[DomEventType::Blur, DomEventType::FocusOut],
+            );
+        }
+        if let Some(current) = current {
+            self.record_related_dom_events(
+                current,
+                previous,
+                &[DomEventType::Focus, DomEventType::FocusIn],
+            );
+        }
+    }
+
     fn record_dom_events(&mut self, target: &DomEventTarget, types: &[DomEventType]) {
+        self.record_related_dom_events(target, None, types);
+    }
+
+    fn record_related_dom_events(
+        &mut self,
+        target: &DomEventTarget,
+        related_target: Option<&DomEventTarget>,
+        types: &[DomEventType],
+    ) {
         self.dom_events
             .extend(types.iter().map(|event_type| DomEvent {
                 event_type: *event_type,
                 document_epoch: target.document_epoch,
                 target: target.target.clone(),
                 target_ordinal: target.target_ordinal,
+                related_target: related_target.map(|target| DomEventTargetIdentity {
+                    target: target.target.clone(),
+                    target_ordinal: target.target_ordinal,
+                }),
                 path: target.path.clone(),
                 bubbles: event_type.bubbles(),
                 composed: event_type.composed(),
             }));
     }
+}
+
+fn same_dom_event_target(left: &DomEventTarget, right: &DomEventTarget) -> bool {
+    left.document_epoch == right.document_epoch && left.target_ordinal == right.target_ordinal
 }
 
 impl private::Sealed for TakeDomEvents {}
@@ -616,6 +825,10 @@ impl CurrentPage {
 
     fn dom_event_target(&self, interactive_index: usize) -> DomEventTarget {
         let source_index = self.source_index_for_interactive(interactive_index);
+        self.dom_event_target_for_source(source_index)
+    }
+
+    fn dom_event_target_for_source(&self, source_index: usize) -> DomEventTarget {
         let mut path = Vec::new();
         let mut current = Some(source_index);
         while let Some(index) = current {
@@ -627,12 +840,14 @@ impl CurrentPage {
         DomEventTarget {
             document_epoch: self.epoch,
             target: path[0].clone(),
-            target_ordinal: self.interactive_elements[interactive_index].content_ordinal,
+            target_ordinal: self.locator_elements[source_index]
+                .content_ordinal
+                .expect("event targets have a document content ordinal"),
             path,
         }
     }
 
-    fn hover(
+    fn prepare_hover(
         &mut self,
         source_index: usize,
         viewport: ViewportSize,
@@ -656,7 +871,6 @@ impl CurrentPage {
             }
         }
         self.auto_scroll_into_view(source_index, viewport);
-        self.hovered_source_index = Some(source_index);
         Ok(())
     }
 
@@ -3247,7 +3461,7 @@ fn execute_click_by_locator(
         session.viewport,
     )?;
     let action = element.action.clone();
-    let event_target = session.dom_event_target(index);
+    let viewport = session.viewport;
     match action {
         InteractiveAction::Navigate { href } => {
             let current_url = session
@@ -3258,7 +3472,18 @@ fn execute_click_by_locator(
                 .clone();
             let target = resolve_navigation_url(&current_url, &href)
                 .map_err(LocatorOperationError::Navigation)?;
-            session.record_dom_events(&event_target, &[DomEventType::Click]);
+            session
+                .current_page
+                .as_mut()
+                .expect("resolved locator requires a current page")
+                .auto_scroll_into_view(resolved.source_index, viewport);
+            let context = session.pointer_action_context(resolved.source_index);
+            session
+                .current_page
+                .as_mut()
+                .expect("resolved locator requires a current page")
+                .focused_interactive_index = Some(index);
+            session.finish_pointer_click(&context, &[]);
             let page = session
                 .navigate_to(target)
                 .map_err(LocatorOperationError::Navigation)?;
@@ -3268,7 +3493,18 @@ fn execute_click_by_locator(
             })
         }
         InteractiveAction::SubmitForm { form_owner } => {
-            session.record_dom_events(&event_target, &[DomEventType::Click]);
+            session
+                .current_page
+                .as_mut()
+                .expect("resolved locator requires a current page")
+                .auto_scroll_into_view(resolved.source_index, viewport);
+            let context = session.pointer_action_context(resolved.source_index);
+            session
+                .current_page
+                .as_mut()
+                .expect("resolved locator requires a current page")
+                .focused_interactive_index = Some(index);
+            session.finish_pointer_click(&context, &[]);
             let target = session
                 .current_page
                 .as_ref()
@@ -3296,20 +3532,29 @@ fn execute_click_by_locator(
         action @ (InteractiveAction::Activate
         | InteractiveAction::ToggleCheckbox
         | InteractiveAction::SelectRadio) => {
-            let viewport = session.viewport;
+            validate_native_click(
+                session
+                    .current_page
+                    .as_ref()
+                    .expect("resolved locator requires a current page"),
+                index,
+                &action,
+            )
+            .map_err(|reason| LocatorOperationError::UnsupportedAction {
+                action: LocatorAction::Click,
+                reason,
+            })?;
+            session
+                .current_page
+                .as_mut()
+                .expect("resolved locator requires a current page")
+                .auto_scroll_into_view(resolved.source_index, viewport);
+            let context = session.pointer_action_context(resolved.source_index);
             let effect = {
                 let page = session
                     .current_page
                     .as_mut()
                     .expect("resolved locator requires a current page");
-                validate_native_click(page, index, &action).map_err(|reason| {
-                    LocatorOperationError::UnsupportedAction {
-                        action: LocatorAction::Click,
-                        reason,
-                    }
-                })?;
-                let source_index = page.source_index_for_interactive(index);
-                page.auto_scroll_into_view(source_index, viewport);
                 apply_native_click(page, index, action).map_err(|reason| {
                     LocatorOperationError::UnsupportedAction {
                         action: LocatorAction::Click,
@@ -3319,22 +3564,18 @@ fn execute_click_by_locator(
             };
             match effect {
                 NativeClickEffect::Activated => {
-                    session.record_dom_events(&event_target, &[DomEventType::Click]);
+                    session.finish_pointer_click(&context, &[]);
                     Ok(ClickByLocatorResult::Activated {
                         matched: resolved.matched,
                     })
                 }
                 NativeClickEffect::Checked { checked, changed } => {
                     let events = if changed {
-                        &[
-                            DomEventType::Click,
-                            DomEventType::Input,
-                            DomEventType::Change,
-                        ][..]
+                        &[DomEventType::Input, DomEventType::Change][..]
                     } else {
-                        &[DomEventType::Click][..]
+                        &[][..]
                     };
-                    session.record_dom_events(&event_target, events);
+                    session.finish_pointer_click(&context, events);
                     Ok(ClickByLocatorResult::Checked {
                         matched: resolved.matched,
                         checked,
@@ -3680,7 +3921,6 @@ fn execute_set_checked_by_locator(
     };
     let resolved = session.locator_match_for(locator)?;
     let index = session.locator_interactive_index(&resolved, action)?;
-    let event_target = session.dom_event_target(index);
     let viewport = session.viewport;
     let page = session
         .current_page
@@ -3733,14 +3973,13 @@ fn execute_set_checked_by_locator(
             Err(LocatorOperationError::UnsupportedAction { action, reason })
         }
     }?;
-    session.record_dom_events(
-        &event_target,
-        &[
-            DomEventType::Click,
-            DomEventType::Input,
-            DomEventType::Change,
-        ],
-    );
+    let context = session.pointer_action_context(source_index);
+    session
+        .current_page
+        .as_mut()
+        .expect("resolved locator requires a current page")
+        .focused_interactive_index = Some(index);
+    session.finish_pointer_click(&context, &[DomEventType::Input, DomEventType::Change]);
     Ok(result)
 }
 
@@ -3750,16 +3989,18 @@ fn execute_hover_by_locator(
 ) -> Result<HoverByLocatorResult, LocatorOperationError> {
     let resolved = session.locator_match_for(locator)?;
     let viewport = session.viewport;
-    let page = session
+    session
         .current_page
         .as_mut()
-        .expect("resolved locator requires a current page");
-    page.hover(resolved.source_index, viewport)
+        .expect("resolved locator requires a current page")
+        .prepare_hover(resolved.source_index, viewport)
         .map_err(|(check, reason)| LocatorOperationError::ActionBlocked {
             action: LocatorAction::Hover,
             check,
             reason,
         })?;
+    let context = session.pointer_action_context(resolved.source_index);
+    session.finish_pointer_move(&context);
     Ok(HoverByLocatorResult {
         matched: resolved.matched,
     })
@@ -3836,7 +4077,7 @@ impl SessionRequest for ClickElement {
                 reason: format!("receives events check failed: {reason}"),
             })?;
         let action = element.action.clone();
-        let event_target = session.dom_event_target(index);
+        let viewport = session.viewport;
         match action {
             InteractiveAction::Navigate { href } => {
                 let current_url = session
@@ -3851,7 +4092,18 @@ impl SessionRequest for ClickElement {
                         error,
                     }
                 })?;
-                session.record_dom_events(&event_target, &[DomEventType::Click]);
+                session
+                    .current_page
+                    .as_mut()
+                    .expect("validated reference requires a current page")
+                    .auto_scroll_into_view(source_index, viewport);
+                let context = session.pointer_action_context(source_index);
+                session
+                    .current_page
+                    .as_mut()
+                    .expect("validated reference requires a current page")
+                    .focused_interactive_index = Some(index);
+                session.finish_pointer_click(&context, &[]);
                 let page =
                     session
                         .navigate_to(target)
@@ -3865,7 +4117,18 @@ impl SessionRequest for ClickElement {
                 })
             }
             InteractiveAction::SubmitForm { form_owner } => {
-                session.record_dom_events(&event_target, &[DomEventType::Click]);
+                session
+                    .current_page
+                    .as_mut()
+                    .expect("validated reference requires a current page")
+                    .auto_scroll_into_view(source_index, viewport);
+                let context = session.pointer_action_context(source_index);
+                session
+                    .current_page
+                    .as_mut()
+                    .expect("validated reference requires a current page")
+                    .focused_interactive_index = Some(index);
+                session.finish_pointer_click(&context, &[]);
                 let target = session
                     .current_page
                     .as_ref()
@@ -3898,20 +4161,29 @@ impl SessionRequest for ClickElement {
             action @ (InteractiveAction::Activate
             | InteractiveAction::ToggleCheckbox
             | InteractiveAction::SelectRadio) => {
-                let viewport = session.viewport;
+                validate_native_click(
+                    session
+                        .current_page
+                        .as_ref()
+                        .expect("validated reference requires a current page"),
+                    index,
+                    &action,
+                )
+                .map_err(|reason| SessionError::UnsupportedClick {
+                    reference: self.reference,
+                    reason,
+                })?;
+                session
+                    .current_page
+                    .as_mut()
+                    .expect("validated reference requires a current page")
+                    .auto_scroll_into_view(source_index, viewport);
+                let context = session.pointer_action_context(source_index);
                 let effect = {
                     let page = session
                         .current_page
                         .as_mut()
                         .expect("validated reference requires a current page");
-                    validate_native_click(page, index, &action).map_err(|reason| {
-                        SessionError::UnsupportedClick {
-                            reference: self.reference,
-                            reason,
-                        }
-                    })?;
-                    let source_index = page.source_index_for_interactive(index);
-                    page.auto_scroll_into_view(source_index, viewport);
                     apply_native_click(page, index, action).map_err(|reason| {
                         SessionError::UnsupportedClick {
                             reference: self.reference,
@@ -3921,22 +4193,18 @@ impl SessionRequest for ClickElement {
                 };
                 match effect {
                     NativeClickEffect::Activated => {
-                        session.record_dom_events(&event_target, &[DomEventType::Click]);
+                        session.finish_pointer_click(&context, &[]);
                         Ok(ClickResult::Activated {
                             reference: self.reference,
                         })
                     }
                     NativeClickEffect::Checked { checked, changed } => {
                         let events = if changed {
-                            &[
-                                DomEventType::Click,
-                                DomEventType::Input,
-                                DomEventType::Change,
-                            ][..]
+                            &[DomEventType::Input, DomEventType::Change][..]
                         } else {
-                            &[DomEventType::Click][..]
+                            &[][..]
                         };
-                        session.record_dom_events(&event_target, events);
+                        session.finish_pointer_click(&context, events);
                         Ok(ClickResult::Checked {
                             reference: self.reference,
                             checked,
@@ -4226,16 +4494,22 @@ impl SessionRequest for HoverElement {
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
         let interactive_index = session.element_index_for(self.reference)?;
         let viewport = session.viewport;
-        let page = session
+        let source_index = session
+            .current_page
+            .as_ref()
+            .expect("validated reference requires a current page")
+            .source_index_for_interactive(interactive_index);
+        session
             .current_page
             .as_mut()
-            .expect("validated reference requires a current page");
-        let source_index = page.source_index_for_interactive(interactive_index);
-        page.hover(source_index, viewport)
+            .expect("validated reference requires a current page")
+            .prepare_hover(source_index, viewport)
             .map_err(|(check, reason)| SessionError::UnsupportedHover {
                 reference: self.reference,
                 reason: format!("{check} check failed: {reason}"),
             })?;
+        let context = session.pointer_action_context(source_index);
+        session.finish_pointer_move(&context);
         Ok(HoverResult {
             reference: self.reference,
         })
@@ -5325,7 +5599,6 @@ impl SessionRequest for SetElementChecked {
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
         let index = session.element_index_for(self.reference)?;
-        let event_target = session.dom_event_target(index);
         let viewport = session.viewport;
         let page = session
             .current_page
@@ -5386,14 +5659,13 @@ impl SessionRequest for SetElementChecked {
                 reason: error.reason(),
             }),
         }?;
-        session.record_dom_events(
-            &event_target,
-            &[
-                DomEventType::Click,
-                DomEventType::Input,
-                DomEventType::Change,
-            ],
-        );
+        let context = session.pointer_action_context(source_index);
+        session
+            .current_page
+            .as_mut()
+            .expect("validated reference requires a current page")
+            .focused_interactive_index = Some(index);
+        session.finish_pointer_click(&context, &[DomEventType::Input, DomEventType::Change]);
         Ok(result)
     }
 }

@@ -82,6 +82,16 @@ pnpm bench -- --iterations 20 --warmup 2 \
   --scenarios snapshot,agent-loop,full-workflow
 ```
 
+Probe actionability and native event order separately:
+
+```sh
+pnpm probe:actionability
+```
+
+The probe uses one moving target and two static targets.
+
+It reports Playwright Chrome, Firefox, WebKit, and agent-browser Lightpanda results without hiding conflicts.
+
 Use `pnpm bench -- --list` to print accepted engine and scenario names.
 
 The default result path is `benchmarks/results/latest.json`.

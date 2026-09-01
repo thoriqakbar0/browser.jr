@@ -12,7 +12,7 @@ It reveals an off-screen target when browser.jr has complete box geometry.
 
 Supported static hit-test scenes reject an outside element that owns the action point.
 
-Hover does not dispatch pointer or mouse events. It does not apply CSS `:hover` rules.
+Hover records target-level pointer and mouse transitions. It does not deliver them or apply CSS `:hover` rules.
 
 ## The simple case
 
@@ -32,7 +32,8 @@ stateDiagram-v2
     checking --> blocked : hidden, unstable, covered, or unsupported evidence
     checking --> scrolling : visible stable target
     scrolling --> storing
-    storing --> reporting
+    storing --> recording
+    recording --> reporting
     rejected --> finished
     blocked --> finished
     reporting --> finished
@@ -96,6 +97,20 @@ The action does not move focus or change native control state.
 
 The action preserves the current document and interactive references.
 
+A first target records pointer over and enter, then mouse over and enter.
+
+Every success records `pointermove`, then `mousemove` against the current target.
+
+A changed target first records pointer out and leave against the prior target.
+
+It records pointer over and enter against the new target.
+
+It then records mouse out and leave, followed by mouse over and enter.
+
+Transition records include the other target's identity and source ordinal.
+
+Hover records Chrome's target-level order. It does not claim complete ancestor dispatch.
+
 ### Finish
 
 `HoverResult` returns the current reference.
@@ -104,7 +119,7 @@ The action preserves the current document and interactive references.
 
 `HoverByRoleResult` returns the resolved role match.
 
-Session output reports target identity. It does not claim event dispatch.
+Session output reports target identity. The `events` command drains recorded transitions.
 
 ## Variants
 
@@ -143,7 +158,7 @@ Session output reports target identity. It does not claim event dispatch.
 
 browser.jr checks strict resolution, supported static visibility, static stability, and bounded event receipt.
 
-It auto-scrolls supported target boxes. It does not dispatch browser events.
+It auto-scrolls supported target boxes and records target-level pointer transitions.
 
 See Playwright's [`locator.hover()`](https://playwright.dev/docs/api/class-locator#locator-hover) and [actionability table](https://playwright.dev/docs/actionability).
 
@@ -157,13 +172,17 @@ Controlled Playwright 1.62.1 Chromium, Firefox, and WebKit rejected a fixed bloc
 
 They ignored a `pointer-events:none` blocker. `agent-browser` Lightpanda rejected it. See [BJR-011](../bug-triage.md#bjr-011).
 
+The three Playwright engines emitted pointer and mouse transition families, but their order differed. See [BJR-013](../bug-triage.md#bjr-013).
+
+`agent-browser` 0.34.0 Lightpanda omitted PointerEvents, exit records, and related targets. See [BJR-012](../bug-triage.md#bjr-012).
+
 **Isolation.** Hover state belongs to one session and document.
 
 **Accessibility inspection.** Semantic locators use the implemented role and accessible-name subset.
 
 ## Edge cases
 
-- Hovering the current target again is idempotent.
+- Hovering the current target again preserves state and records `pointermove`, then `mousemove`.
 - Inline animation or transition declarations block without replacing the current target.
 - A supported outside blocker preserves offsets and the previous pointer target.
 - A supported target descendant may own the action point.
@@ -185,7 +204,7 @@ They ignored a `pointer-events:none` blocker. `agent-browser` Lightpanda rejecte
 - Complete stacking, clipping, transformed geometry, and unsupported-scene hit testing.
 - Implement frame sampling for supported motion.
 - Define pointer coordinates, nested scrolling, modifiers, force, trial, and timeouts.
-- Implement pointer and mouse event order.
+- Add complete ancestor dispatch, actual descendant hit targets, and pointer metadata.
 - Apply dynamic CSS `:hover` matching and style invalidation.
 - Decide whether hovered-state inspection should include hovered ancestors.
 

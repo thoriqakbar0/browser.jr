@@ -10,7 +10,7 @@ Session-mode callers use `check <ref|selector>` or `uncheck <ref|selector>`. Dir
 
 The action supports native checkbox and radio inputs.
 
-A changed state records `click`, `input`, and `change` in the native event transcript.
+A changed state records the supported pointer click sequence, then `input` and `change`.
 
 A changed state reveals an off-screen target when browser.jr has complete box geometry.
 
@@ -38,7 +38,9 @@ stateDiagram-v2
     checking_control --> checking_actionability : state change required
     checking_actionability --> blocked : disabled, hidden, unstable, covered, or unsupported target
     checking_actionability --> scrolling : mutable checkbox or radio
-    scrolling --> storing
+    scrolling --> moving_pointer
+    moving_pointer --> focusing
+    focusing --> storing
     storing --> recording
     recording --> reported
     rejected --> finished
@@ -99,11 +101,13 @@ Unchecking a false radio returns false. Unchecking a true radio rejects without 
 
 A changed state records `click`, then `input`, then `change`.
 
-All three records bubble. `click` and `input` compose. `change` does not compose.
+Before `click`, it records the target-level pointer, mouse, and focus sequence from [Click an element](click-element.md#while-running).
+
+The action stores the changed control as current focus and pointer target.
+
+`click` and `input` bubble and compose. `change` bubbles without composing.
 
 An idempotent request records nothing. Rejected changes also record nothing.
-
-The action does not change focus or record pointer and focus events.
 
 The transcript does not deliver events to page scripts.
 
@@ -152,7 +156,7 @@ A later snapshot reports the current state and invalidates earlier references.
 
 **Rendering compatibility.** The action mutates browser.jr's native checked-state model.
 
-Changed requests record the Playwright `click`, `input`, `change` order. Idempotent requests remain silent.
+Changed requests record Playwright pointer activation before `click`, `input`, and `change`. Idempotent requests remain silent.
 
 browser.jr does not run platform event handlers.
 
@@ -178,6 +182,7 @@ They ignored a `pointer-events:none` blocker. `agent-browser` Lightpanda rejecte
 - Repeated checkbox check and uncheck requests are idempotent.
 - Idempotent checked-state requests record no events.
 - Changed checkbox and radio requests record `click`, `input`, and `change`.
+- Changed requests move focus and the stored pointer target to the control.
 - Inline animation or transition declarations block changed requests before mutation.
 - A supported outside blocker preserves offsets, checked state, references, and events.
 - A target with `pointer-events:none` rejects when another supported element owns the action point.

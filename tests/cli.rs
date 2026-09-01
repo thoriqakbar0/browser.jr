@@ -1569,7 +1569,7 @@ fn session_mode_drains_native_dom_events_without_echoing_input_values() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("events=29"));
+    assert!(stdout.contains("events=61"));
     assert!(stdout.contains("event type=beforeinput document=1 target=\"name\""));
     assert!(stdout.contains("event type=change document=1 target=\"terms\""));
     assert!(stdout.contains("event type=change document=1 target=\"size\""));
@@ -1578,7 +1578,10 @@ fn session_mode_drains_native_dom_events_without_echoing_input_values() {
     assert!(stdout.contains("event type=keydown document=1 target=\"name\""));
     assert!(stdout.contains("event type=keypress document=1 target=\"name\""));
     assert!(stdout.contains("event type=keyup document=1 target=\"name\""));
-    assert_eq!(stdout.matches("event type=").count(), 29);
+    assert!(stdout.contains(
+        "event type=pointerout document=1 target=\"terms\" ordinal=3 related=\"save\" related_ordinal="
+    ));
+    assert_eq!(stdout.matches("event type=").count(), 61);
     assert!(stdout.contains("events=0"));
     assert!(!stdout.contains("private-value"));
     assert!(!stdout.contains("private-tail"));

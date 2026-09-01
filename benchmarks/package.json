@@ -10,6 +10,7 @@
     "bench": "node run.mjs",
     "bench:smoke": "node run.mjs --iterations 1 --warmup 0",
     "browsers:install": "playwright install firefox webkit",
+    "probe:actionability": "node probe-actionability.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {

@@ -147,6 +147,10 @@ Its bounded hit-test evidence orders supported fixed boxes above normal-flow box
 
 Pointer actions test the prospective post-scroll action point before committing scroll or native state.
 
+Supported pointer actions record target-level pointer, mouse, and focus transitions after every check succeeds.
+
+The transcript stores related-target identity without input values or page-script delivery.
+
 The tokenizer preserves ordered element and direct-text children for accessibility projection.
 
 The implemented `page::visibility` module owns actionability and accessibility visibility evidence. `page` keeps tokenization and layout extraction.
@@ -209,7 +213,7 @@ The separate helper process, effect-bound expansion, text, images, clips, stacki
 
 Navigation replaces the current document and resets its offsets.
 
-Local pointer actions validate first, auto-scroll a supported target box, then commit their state change.
+Local pointer actions validate first, auto-scroll a supported target box, then commit pointer, focus, and native state.
 
 Rejected actions preserve offsets. Unsupported target geometry skips auto-scroll without blocking validated action behavior.
 

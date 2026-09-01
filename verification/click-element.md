@@ -18,10 +18,12 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | CLICK-10 | P1 | package | Native click records preserve source identity across navigation ([While running](../interaction/click-element.md#while-running)). | Serve a button, checkbox, radio, link, and destination page. | Click supported targets, navigate, then drain events. | Each click records `click`. Changed checked controls add `input`, `change`. Navigation retains source metadata. | partial: package and compiled-process tests passed, 2026-08-31 |
 | CLICK-11 | P1 | pipe | Click blocks unsupported motion before effects ([Begin running](../interaction/click-element.md#begin-running)). | Give a target an inline animation or transition declaration. | Click through reference and locator paths, then inspect state and events. | Both paths report the stable check. Focus, state, references, and events remain unchanged. | partial: package and compiled-process tests passed; Playwright 1.62.1 timed out across Chromium, Firefox, and WebKit, 2026-09-01 |
 | CLICK-12 | P1 | pipe | A supported fixed blocker rejects click transactionally ([Begin running](../interaction/click-element.md#begin-running)). | Cover a supported button action point with an earlier fixed element. | Click through reference and locator paths, then inspect focus and events. | Both paths name the receives-events check and blocker. Focus, offsets, and events remain unchanged. | partial: package and compiled-process tests passed; Playwright 1.62.1 and `agent-browser` 0.32.4 rejected the blocker, 2026-09-01 |
+| CLICK-13 | P1 | pipe | Click records target-level pointer and focus order ([While running](../interaction/click-element.md#while-running)). | Focus one button and place the pointer outside another button. | Click the second button, drain events, then inspect focus and hover. | Move records precede down, focus, up, and `click`. Related targets identify both focus owners. | partial: package and compiled-process tests passed; Playwright 1.62.1 Chrome and Firefox matched, 2026-09-01 |
 
 Not checkable yet:
 
-- Pointer, mouse, focus, and submit event records do not exist.
+- Complete ancestor pointer, mouse, focus, and submit event dispatch does not exist.
+- Pointer coordinates, buttons, pointer IDs, and actual descendant hit targets do not exist.
 - Page-script event delivery does not exist.
 - Complete receives-events hit testing and motion frame sampling do not exist.
 - POST, reset, image submitters, and broader form defaults do not exist.

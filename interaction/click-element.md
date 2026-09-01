@@ -14,7 +14,7 @@ Supported local clicks reveal an off-screen target box after checks and before m
 
 Supported static hit-test scenes reject a fixed or later normal-flow element that owns the action point.
 
-Every successful supported click records `click` in the native event transcript.
+Every successful supported click records target-level pointer, mouse, focus, and `click` phases.
 
 A changed checkbox or radio also records `input`, then `change`.
 
@@ -41,11 +41,12 @@ stateDiagram-v2
     resolving --> checking : one interactive target
     checking --> blocked : hidden, unstable, disabled, covered, or unsupported evidence
     checking --> classifying : supported target
-    classifying --> navigating : same-context link
-    classifying --> submitting : supported GET submitter
-    classifying --> scrolling : non-submitting native button or checked control
+    classifying --> scrolling : supported link, submitter, button, or checked control
     classifying --> unsupported : unavailable default action
-    scrolling --> focusing
+    scrolling --> moving_pointer
+    moving_pointer --> focusing
+    focusing --> navigating : same-context link
+    focusing --> submitting : supported GET submitter
     focusing --> toggling : native checkbox
     focusing --> selecting : native radio
     focusing --> reporting : native button
@@ -133,6 +134,8 @@ A supported local click reveals its target before applying focus or checked stat
 
 It commits the same prospective scroll used to choose the action point.
 
+The click moves the stored pointer target after every actionability check succeeds.
+
 A rejected local click preserves page offsets and native state.
 
 A supported native button click stores that button as current focus.
@@ -159,19 +162,29 @@ Failed navigation preserves the current document, focus, control state, and refe
 
 No supported click changes layout state or persistent storage.
 
-A supported click records `click` against its source document and target path.
+A first target records `pointerover`, `pointerenter`, `mouseover`, `mouseenter`, `pointermove`, then `mousemove`.
+
+A changed target first records pointer out and leave, then pointer over and enter.
+
+It then records mouse out and leave, mouse over and enter, `pointermove`, then `mousemove`.
+
+Out, leave, over, enter, blur, and focus records include the related target identity and ordinal.
+
+The click then records `pointerdown`, `mousedown`, supported focus transitions, `pointerup`, `mouseup`, then `click`.
 
 A changed checkbox or radio then records `input` and `change` against the same target.
 
-All records bubble. `click` and `input` compose. `change` does not compose.
+Enter, leave, focus, and blur do not bubble. Enter and leave records do not compose.
 
-A repeated click on an already selected radio records only `click`.
+`change` does not compose. The other implemented click records compose.
+
+A repeated selected-radio click records no `input` or `change`.
 
 Navigation preserves the source click record after document replacement.
 
 A later load or form-default failure also preserves an already recorded click.
 
-No pointer, mouse, focus, or submit records exist yet.
+Complete ancestor enter and leave dispatch, pointer coordinates, buttons, pointer IDs, and submit records remain unavailable.
 
 ### Finish
 
@@ -234,7 +247,7 @@ browser.jr checks strictness for locators, plus supported visibility, static sta
 
 It auto-scrolls supported local target boxes after those checks.
 
-It applies supported native default effects without dispatching pointer input.
+It applies supported native default effects and records target-level pointer input.
 
 It records supported native event metadata without delivering events to page handlers.
 
@@ -248,9 +261,9 @@ The form boundary follows HTML [button activation](https://html.spec.whatwg.org/
 
 Controlled Playwright 1.61.1 and `agent-browser` 0.32.4 Lightpanda runs matched radio click exclusivity.
 
-Controlled Playwright 1.62.1 Chromium, Firefox, and WebKit runs matched the recorded native event sequences.
+Controlled Playwright 1.62.1 Chrome and Firefox runs matched the implemented target-level click order.
 
-Those runs also focused buttons and toggled checkboxes.
+WebKit ordered enter records differently and did not focus the static button. See [BJR-013](../bug-triage.md#bjr-013).
 
 All three engines timed out while clicking a continuously moving control.
 
@@ -259,6 +272,8 @@ All three engines timed out while clicking a continuously moving control.
 All three Playwright engines rejected a fixed blocker and accepted a target descendant.
 
 They also ignored a `pointer-events:none` blocker. `agent-browser` Lightpanda rejected it. See [BJR-011](../bug-triage.md#bjr-011).
+
+`agent-browser` 0.34.0 Lightpanda emitted mouse records without PointerEvents and focused after `click`. See [BJR-012](../bug-triage.md#bjr-012).
 
 **Isolation.** Click state belongs to one session and document.
 
@@ -292,13 +307,14 @@ They also ignored a `pointer-events:none` blocker. `agent-browser` Lightpanda re
 - Checkbox clicks do not become idempotent. `check` and `uncheck` remain idempotent.
 - Every successful native button, checked-control, link, or form click records `click`.
 - A changed checkbox or radio also records `input` and `change`.
-- A repeated selected-radio click records only `click`.
+- A repeated selected-radio click records no `input` or `change`.
+- Repeated clicks on the current pointer target still record `pointermove` and `mousemove` before the press phases.
 - Navigation retains the source-document event records until the caller drains them.
 - Custom ARIA controls stay unsupported without native behavior.
 
 ## Open questions and verification
 
-- Add pointer, mouse, focus, and submit records.
+- Add complete ancestor dispatch, pointer metadata, actual descendant hit targets, and submit records.
 - Add page-script event delivery after JavaScript exists.
 - Complete stacking, clipping, transformed geometry, and unsupported-scene hit testing.
 - Add frame sampling for supported motion.

@@ -144,7 +144,7 @@ Enter navigation, radio movement, modified, and non-ASCII held phases record not
 
 `focus` resolves a current reference or direct selector. `find ... focus` uses every implemented locator kind.
 
-`hover` resolves a current reference or direct selector. It stores one visible source element as the pointer target.
+`hover` resolves a current reference or direct selector. It stores one visible pointer target and records target-level transitions.
 
 Supported local click, hover, changed check, and changed uncheck targets auto-scroll after actionability checks.
 
@@ -186,7 +186,9 @@ Normal-flow box coordinates reflect current page offsets. Fixed boxes remain vie
 
 `events` drains the session's native event transcript.
 
-It prints one count, then each event's type, source document, target, ordinal, bubbling metadata, and ancestor path.
+It prints one count, then each event's type, source document, target, ordinal, bubbling, composition, and ancestor path.
+
+Pointer and focus transitions also print related-target identity and ordinal.
 
 Event records never contain filled text or selected option values.
 
@@ -310,9 +312,9 @@ Supported held-key phases record key-down details and one matching key-up.
 
 Successful select records `input` and `change`, including repeated selection.
 
-Successful click records `click`. Changed checked controls add `input` and `change`.
+Successful click records target-level pointer, mouse, focus, and `click` phases. Changed checked controls add `input` and `change`.
 
-Changed `check` and `uncheck` record `click`, `input`, and `change`. Idempotent requests record nothing.
+Changed `check` and `uncheck` record pointer activation, `click`, `input`, and `change`. Idempotent requests record nothing.
 
 Navigation preserves queued records with their source document epoch.
 
@@ -358,7 +360,7 @@ JSON mode writes a successful `closed` lifecycle envelope. An `exit` command rec
 
 Any command error affects the final exit status even when later commands succeed.
 
-`events` first prints `events=<count>`. Each following line reports type, document, target, bubbling, path, and ordinal.
+`events` first prints `events=<count>`. Each following line reports target, related target, propagation metadata, path, and ordinal.
 
 The queue exists only for the current process. Navigation preserves already recorded events until the next drain.
 
@@ -583,7 +585,7 @@ Interactive snapshots and locators expose agent-oriented targets.
 - Define input length limits and backpressure.
 - Expand CSS selector grammar and add XPath locators through typed request fields.
 - Define configurable test ID attributes.
-- Add auto-waiting, pointer dispatch, dynamic `:hover`, and complete actionability evidence.
+- Add auto-waiting, complete ancestor pointer dispatch, dynamic `:hover`, and complete actionability evidence.
 - Add vertical movement, broader keys, remaining modified defaults, keyboard event dispatch, and keyboard typing delay.
 - Add page-script event delivery after JavaScript exists.
 - Extend normal flow with intrinsic lines and margins. Add scrolling and geometry waiting.

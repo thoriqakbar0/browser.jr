@@ -79,7 +79,7 @@ Navigation tests cover relative links, click and Enter activation, static stabil
 
 History tests cover bounds, back, forward, refetch, failures, branch truncation, reload, forms, and missing pages. HISTORY-01 through HISTORY-09 have partial evidence from 2026-08-31.
 
-Session-mode tests cover persistent actions, observations, native event paths, JSON, snapshots, selectors, navigation, forms, focus, keyboard text, held keys, hover, viewport sizing, scrolling, geometry, stale labels, and recovery. AISESSION-01 through AISESSION-55 have partial evidence from 2026-08-31.
+Session-mode tests cover persistent actions, native event relationships, JSON, snapshots, selectors, navigation, forms, focus, keyboard text, hover, scrolling, geometry, and recovery. AISESSION-01 through AISESSION-56 have partial evidence through 2026-09-01.
 
 Fill tests cover values, focus, selection collapse, native event paths, snapshots, stale references, and session text. FILL-01 through FILL-09 have partial evidence from 2026-08-31.
 
@@ -87,9 +87,9 @@ Type tests cover reference and selector appends, selection preservation, empty t
 
 Focus tests cover reference and locator targets, selection, rejection, document replacement, sequential order, radio groups, body boundaries, and output. FOCUS-01 through FOCUS-09 have partial evidence from 2026-08-31.
 
-Hover tests cover references, locators, visibility, stability, auto-scroll, disabled targets, replacement, document changes, and output. HOVER-01 through HOVER-08 have partial evidence through 2026-09-01.
+Hover tests cover references, locators, visibility, stability, hit testing, target transitions, auto-scroll, replacement, document changes, and output. HOVER-01 through HOVER-10 have partial evidence through 2026-09-01.
 
-Click tests cover link and form navigation, native focus, checked controls, event records, static stability, auto-scroll, references, and output. CLICK-01 through CLICK-11 have partial evidence through 2026-09-01.
+Click tests cover navigation, native focus, checked controls, target-level pointer records, hit testing, static stability, auto-scroll, references, and output. CLICK-01 through CLICK-13 have partial evidence through 2026-09-01.
 
 Key-press tests cover editing, focused text events, complete and held phases, state, selection, controls, submission, navigation, and output. PRESS-01 through PRESS-39 have partial evidence from 2026-08-31.
 
@@ -99,7 +99,7 @@ Value tests cover text and native-select reads, direct selectors, unsupported co
 
 Select tests cover value, label, index, lists, event paths, direct selectors, disabled boundaries, atomic failures, and stale references. SELECT-01 through SELECT-15 have partial automated evidence from 2026-08-31.
 
-Checked-state tests cover native controls, radio groups, event paths, references, selectors, static stability, auto-scroll, idempotence, and stale references. CHECK-01 through CHECK-15 have partial evidence through 2026-09-01.
+Checked-state tests cover native controls, radio groups, pointer activation, event paths, hit testing, static stability, auto-scroll, idempotence, and references. CHECK-01 through CHECK-17 have partial evidence through 2026-09-01.
 
 Text tests cover selector and reference reads, descendants, inert raw text, empty text, accessible-name separation, repeated reads, and navigation. TEXT-01 through TEXT-07 have partial automated evidence from 2026-08-31.
 
@@ -127,6 +127,6 @@ Viewport tests cover defaults, pre-open sizing, current-page reflow, state prese
 
 Reload tests cover replacement, stale references, failed-load recovery, and missing pages. RELOAD-01 through RELOAD-04 have partial automated evidence from 2026-08-31.
 
-Locator tests cover semantic, state, hidden, attribute, CSS, and XPath matching over normalized ancestry. They also cover actions, reads, geometry, scrolling, static stability, native controls, non-presentational descendant image `alt` text, and references. QUERY-01 through QUERY-61 have partial evidence through 2026-09-01.
+Locator tests cover semantic, state, CSS, and XPath matching over normalized ancestry. They also cover pointer transitions, actionability, reads, geometry, native controls, image alternatives, and references. QUERY-01 through QUERY-63 have partial evidence through 2026-09-01.
 
 TTY conditions, interactive cancellation, and broader screenshot paint remain unverified.

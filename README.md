@@ -62,7 +62,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - text, label, attribute, CSS, and XPath locators
 - direct CSS and XPath targets for implemented session actions, reads, and counts
 - text fill, append, focused keyboard insertion, held-key modifiers, phase-correct native `Space`, sequential focus, bounded caret editing, native activation, link navigation, and visible-target hover state
-- a data-minimized native event transcript for supported fill, focused text input, press, held-key phases, select, click, check, and uncheck actions
+- a data-minimized native event transcript for supported text, keyboard, select, pointer, mouse, focus, click, check, and uncheck action phases
 - bounded same-context native GET form submission through submitters and implicit text-control `Enter`
 - native checkbox and radio checked-state reads, writes, snapshots, and exclusive radio groups
 - back and forward navigation through bounded same-context history
@@ -86,7 +86,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 ## What does not work
 
 - JavaScript
-- DOM event delivery to page scripts, plus pointer, focus, and complete keyboard event coverage
+- DOM event delivery to page scripts, complete ancestor dispatch, or complete pointer, focus, and keyboard event metadata
 - a complete DOM, CSS cascade, or layout engine
 - complete stacking, clipping, transformed geometry, or dynamic receives-events hit testing
 - text, image, native-control, stylesheet, clip, effect, or complete browser paint

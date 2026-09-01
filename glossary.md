@@ -150,11 +150,15 @@ Successful pointer actions commit automatic action scrolling after their checks.
 
 Type records supported events in the native event transcript. It does not deliver them to page scripts.
 
-**Focus.** The current page's supported active target or document body. Focus does not dispatch browser events.
+**Focus.** The current page's supported active target or document body. The direct focus action does not record browser events.
 
 **Focused state.** Whether one resolved target owns the current page focus at the time of a read.
 
-**Hover.** An action that stores one visible source element as the current page's pointer target.
+**Hover.** An action that moves the supported pointer target and records target-level pointer and mouse movement.
+
+**Pointer transition.** A move from the prior pointer target to the current target.
+
+The transcript includes target-level out, leave, over, enter, and move records with related-target identity.
 
 **Hovered state.** Whether one resolved target is the exact current pointer target. It does not imply CSS pseudo-class matching.
 
@@ -206,7 +210,9 @@ Read-only non-key input events differ across Playwright engines. browser.jr does
 
 **Native event transcript.** Session-owned, data-minimized records of supported native action events.
 
-Each record contains type, document epoch, target identity, source ordinal, ancestor path, and bubbling metadata. It contains no input value.
+Each record contains type, document epoch, target identity, source ordinal, ancestor path, bubbling, and composition metadata.
+
+Transition and focus records can include one related target and its source ordinal. Records contain no input value.
 
 The transcript does not dispatch events to page scripts. `TakeDomEvents` and session `events` drain it.
 

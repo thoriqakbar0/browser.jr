@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const FIXTURE_DIRECTORY = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 const ROUTES = new Map([
   ["/", "index.html"],
+  ["/actionability.html", "actionability.html"],
   ["/index.html", "index.html"],
   ["/next.html", "next.html"],
 ]);
