@@ -122,7 +122,22 @@ pnpm bench
 
 ## Benchmark snapshot
 
-A clean Apple M3 run used 10 measured samples after 1 warmup. Every supported scenario passed its correctness check.
+This benchmark compares browser.jr with six other browser-control paths over the same local two-page fixture:
+
+- browser.jr through one persistent release CLI session
+- Chrome, Firefox, and WebKit through Playwright
+- Lightpanda through Puppeteer over CDP
+- agent-browser through its CLI and daemon, using either Chrome or Lightpanda
+
+Each adapter starts once and reuses one warm browser session. Scenario setup runs before the timer.
+
+The full workflow includes its initial navigation. Browser startup, browser.jr compilation, and correctness checks stay outside the timer.
+
+The harness discards one warmup, then records 10 samples. It sorts them and reports the fifth value as the median.
+
+Every supported sample must return its expected title, snapshot content, or control value. Unsupported scenarios receive no timing.
+
+A clean Apple M3 run produced these full-workflow medians:
 
 | Adapter | Full-workflow median |
 | --- | ---: |
@@ -134,11 +149,15 @@ A clean Apple M3 run used 10 measured samples after 1 warmup. Every supported sc
 | agent-browser with Chrome | 7,366.00 ms |
 | agent-browser with Lightpanda | 1,693.90 ms |
 
-The workflow opens the fixture, inspects it, changes controls, reads their state, follows a link, and reads the destination title.
+The timed workflow opens the fixture, snapshots its controls, fills text, checks a checkbox, and selects `blue`.
+
+It then reads all three values, follows a link, and reads the destination title.
 
 browser.jr ran this workflow within its current static HTML boundary. It did not run the JavaScript evaluation or screenshot scenarios.
 
 These numbers measure browser-control latency, not rendering-engine speed or browser compatibility. agent-browser timings include its CLI and daemon overhead.
+
+[Read the benchmark method](benchmarks/README.md) for every scenario and fairness rule.
 
 [Read the complete result](benchmarks/results/README.md) for p95 values, scenario tables, runtime versions, and comparison limits.
 
