@@ -430,12 +430,20 @@ struct SystemNetworkResolver;
 impl NetworkResolver for SystemNetworkResolver {
     fn resolve_url(&self, url: &Url, timeout: Duration) -> Result<Vec<SocketAddr>, LoadError> {
         let host = url
-            .host_str()
-            .ok_or_else(|| LoadError::InvalidUrl("the URL has no host".into()))?
-            .to_owned();
+            .host()
+            .ok_or_else(|| LoadError::InvalidUrl("the URL has no host".into()))?;
         let port = url
             .port_or_known_default()
             .ok_or_else(|| LoadError::InvalidUrl("the URL has no port".into()))?;
+        let host = match host {
+            Host::Ipv4(address) => {
+                return Ok(vec![SocketAddr::new(IpAddr::V4(address), port)]);
+            }
+            Host::Ipv6(address) => {
+                return Ok(vec![SocketAddr::new(IpAddr::V6(address), port)]);
+            }
+            Host::Domain(host) => host.to_owned(),
+        };
         let (sender, receiver) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let result = (host.as_str(), port)
@@ -852,6 +860,57 @@ mod tests {
 
         assert_eq!(result, Err(LoadError::RedirectDowngrade));
         assert_eq!(engine.transport().request_count(), 1);
+    }
+
+    #[test]
+    fn hyper_transport_returns_an_error_inside_a_tokio_runtime() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(async {
+            HyperNetworkTransport::new().unwrap().send_get(
+                &Url::parse("http://127.0.0.1:9/").unwrap(),
+                &["127.0.0.1:9".parse().unwrap()],
+                Duration::from_millis(100),
+            )
+        });
+
+        assert!(matches!(result, Err(LoadError::Connection(_))));
+    }
+
+    #[test]
+    fn hyper_transport_loads_an_ipv6_literal() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("[::1]:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 11\r\nConnection: close\r\n\r\n<p>ipv6</p>"
+            )
+            .unwrap();
+        });
+        let url = Url::parse(&format!("http://[::1]:{}/", endpoint.port())).unwrap();
+
+        let response = HyperNetworkTransport::new()
+            .unwrap()
+            .send_get(&url, &[endpoint], REQUEST_TIMEOUT)
+            .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(response.body.as_deref(), Some("<p>ipv6</p>"));
     }
 
     #[test]

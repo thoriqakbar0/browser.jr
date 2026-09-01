@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -11,7 +11,7 @@ use rustls::{ClientConfig, RootCertStore};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
-use url::Url;
+use url::{Host, Url};
 
 use super::{
     LoadError, MAX_HTML_BYTES, MAX_RESPONSE_HEADER_BYTES, MAX_RESPONSE_HEADERS, NetworkResponse,
@@ -19,31 +19,36 @@ use super::{
 };
 
 pub(super) struct HyperNetworkTransport {
-    runtime: tokio::runtime::Runtime,
     tls_config: Arc<ClientConfig>,
+}
+
+static NETWORK_RUNTIME: OnceLock<Result<tokio::runtime::Runtime, String>> = OnceLock::new();
+
+fn network_runtime() -> Result<&'static tokio::runtime::Runtime, LoadError> {
+    match NETWORK_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(runtime) => Ok(runtime),
+        Err(error) => Err(LoadError::Request(error.clone())),
+    }
 }
 
 impl HyperNetworkTransport {
     pub(super) fn new() -> Result<Self, LoadError> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| LoadError::Request(error.to_string()))?;
+        network_runtime()?;
         let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         Ok(Self {
-            runtime,
             tls_config: Arc::new(build_tls_client_config(roots)),
         })
     }
 
     #[cfg(test)]
     pub(super) fn with_root_store(roots: RootCertStore) -> Result<Self, LoadError> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| LoadError::Request(error.to_string()))?;
+        network_runtime()?;
         Ok(Self {
-            runtime,
             tls_config: Arc::new(build_tls_client_config(roots)),
         })
     }
@@ -56,13 +61,21 @@ impl NetworkTransport for HyperNetworkTransport {
         approved_endpoints: &[SocketAddr],
         timeout: Duration,
     ) -> Result<NetworkResponse, LoadError> {
-        self.runtime.block_on(async {
-            tokio::time::timeout(
-                timeout,
-                send_hyper_request(url, approved_endpoints, self.tls_config.clone()),
-            )
-            .await
-            .map_err(|_| LoadError::Timeout("network request"))?
+        let runtime = network_runtime()?;
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    runtime.block_on(async {
+                        tokio::time::timeout(
+                            timeout,
+                            send_hyper_request(url, approved_endpoints, self.tls_config.clone()),
+                        )
+                        .await
+                        .map_err(|_| LoadError::Timeout("network request"))?
+                    })
+                })
+                .join()
+                .map_err(|_| LoadError::Request("network worker panicked".into()))?
         })
     }
 }
@@ -106,11 +119,15 @@ async fn send_hyper_request_to_endpoint(
     }
 
     if url.scheme() == "https" {
-        let host = url
-            .host_str()
-            .ok_or_else(|| LoadError::InvalidUrl("the URL has no host".into()))?;
-        let server_name = rustls::pki_types::ServerName::try_from(host.to_owned())
-            .map_err(|error| LoadError::Tls(error.to_string()))?;
+        let server_name = match url
+            .host()
+            .ok_or_else(|| LoadError::InvalidUrl("the URL has no host".into()))?
+        {
+            Host::Domain(host) => rustls::pki_types::ServerName::try_from(host.to_owned())
+                .map_err(|error| LoadError::Tls(error.to_string()))?,
+            Host::Ipv4(address) => rustls::pki_types::ServerName::IpAddress(address.into()),
+            Host::Ipv6(address) => rustls::pki_types::ServerName::IpAddress(address.into()),
+        };
         let tls = TlsConnector::from(tls_config)
             .connect(server_name, stream)
             .await
