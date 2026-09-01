@@ -17,7 +17,10 @@ const MAX_REDIRECTS: u32 = 5;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DNS_ANSWERS: usize = 16;
 const MAX_CONNECTION_ATTEMPTS: usize = 4;
+#[cfg(not(test))]
 pub(super) const RESPONSE_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+pub(super) const RESPONSE_IDLE_TIMEOUT: Duration = Duration::from_millis(50);
 const MAX_RESPONSE_HEADERS: usize = 64;
 const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 
@@ -1059,6 +1062,42 @@ mod tests {
         assert!(peer.is_loopback());
         assert_eq!(request_line, "GET /test HTTP/1.1\r\n");
         assert_eq!(response.body.as_deref(), Some("<p>approved</p>"));
+    }
+
+    #[test]
+    fn hyper_transport_rejects_an_idle_response_body() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 1\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            stream.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        let url = Url::parse("http://public.example/").unwrap();
+
+        let result =
+            HyperNetworkTransport::new()
+                .unwrap()
+                .send_get(&url, &[endpoint], REQUEST_TIMEOUT);
+        server.join().unwrap();
+
+        assert_eq!(result, Err(LoadError::Timeout("response body")));
     }
 
     #[test]
