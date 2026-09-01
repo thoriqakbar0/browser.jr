@@ -11,3 +11,4 @@ ts	phase	decision	why	evidence	result
 2026-09-01T15:37:00Z	verification	ran formatting, Clippy, all targets, debtmap, diff check, nested-Tokio probe, IPv6 loopback, and public HTTPS	each accepted finding needs code, test, and real-surface evidence	cargo test --all-targets; /tmp/browser-jr-async-review; example.com	verified
 2026-09-01T15:38:00Z	documentation	replaced mutable and amended evidence pointers with the exact surviving documentation commit	the prior d1cdf0a and HEAD pointers were unstable	commit cbe74cb	verified
 2026-09-01T15:39:00Z	frame	closed the planned review-fix run	all accepted review findings now have fixes or explicit bounded tradeoffs	commits 5bed638..5570a83	VERIFIED
+2026-09-01T15:45:00Z	verification	added a real stalled-body transport test	the idle limit needed end-to-end socket evidence rather than a constant and helper test	commit 948fcdd	verified
