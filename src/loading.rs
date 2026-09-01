@@ -118,15 +118,15 @@ trait NetworkTransport {
 struct FetchEngine<R, T> {
     resolver: R,
     transport: T,
-    mode: NetworkMode,
+    network_access: NetworkAccess,
 }
 
 impl<R: NetworkResolver, T: NetworkTransport> FetchEngine<R, T> {
-    fn new(resolver: R, transport: T, mode: NetworkMode) -> Self {
+    fn new(resolver: R, transport: T, network_access: NetworkAccess) -> Self {
         Self {
             resolver,
             transport,
-            mode,
+            network_access,
         }
     }
 
@@ -159,8 +159,14 @@ impl<R: NetworkResolver, T: NetworkTransport> FetchEngine<R, T> {
         if endpoints.is_empty() {
             return Err(LoadError::Dns("no addresses returned".into()));
         }
+        let mode = network_mode_for_url(url);
+        if mode == NetworkMode::LoopbackOnly && self.network_access == NetworkAccess::PublicOnly {
+            return Err(LoadError::UnsupportedTarget(
+                "loopback URLs require explicit network access".into(),
+            ));
+        }
         for endpoint in &endpoints {
-            if !address_is_allowed_for_mode(endpoint.ip(), self.mode) {
+            if !address_is_allowed_for_mode(endpoint.ip(), mode) {
                 return Err(LoadError::BlockedAddress(endpoint.ip()));
             }
         }
@@ -256,14 +262,13 @@ pub(crate) fn load_html(
     value: &str,
     network_access: NetworkAccess,
 ) -> Result<LoadedHtml, LoadError> {
-    let url = parse_network_url(value)?;
-    let mode = network_mode_for_url(&url);
-    if mode == NetworkMode::LoopbackOnly && network_access == NetworkAccess::PublicOnly {
-        return Err(LoadError::UnsupportedTarget(
-            "loopback URLs require explicit network access".into(),
-        ));
-    }
-    FetchEngine::new(SystemNetworkResolver, HyperNetworkTransport::new()?, mode).fetch(value)
+    parse_network_url(value)?;
+    FetchEngine::new(
+        SystemNetworkResolver,
+        HyperNetworkTransport::new()?,
+        network_access,
+    )
+    .fetch(value)
 }
 
 fn parse_network_url(value: &str) -> Result<Url, LoadError> {
@@ -495,6 +500,7 @@ const SPECIAL_IPV6_RANGES: &[(Ipv6Addr, u8)] = &[
     (Ipv6Addr::new(0x3fff, 0, 0, 0, 0, 0, 0, 0), 20),
     (Ipv6Addr::new(0x5f00, 0, 0, 0, 0, 0, 0, 0), 16),
     (Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),
+    (Ipv6Addr::new(0xfec0, 0, 0, 0, 0, 0, 0, 0), 10),
     (Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10),
     (Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0), 8),
 ];
@@ -528,7 +534,7 @@ mod tests {
     use std::net::IpAddr;
 
     use super::{
-        FetchEngine, HyperNetworkTransport, LoadError, MAX_HTML_BYTES, NetworkMode,
+        FetchEngine, HyperNetworkTransport, LoadError, MAX_HTML_BYTES, NetworkAccess,
         NetworkResolver, NetworkResponse, NetworkTransport, REQUEST_TIMEOUT, is_permitted_address,
         parse_network_url, resolve_url_reference,
     };
@@ -730,6 +736,7 @@ mod tests {
             "http://169.254.1.1/page",
             "http://192.168.1.1/page",
             "http://[fc00::1]/page",
+            "http://[fec0::1]/page",
             "http://[fe80::1]/page",
         ] {
             let result = parse_network_url(value);
@@ -759,6 +766,7 @@ mod tests {
             "224.0.0.1",
             "240.0.0.1",
             "fc00::1",
+            "fec0::1",
             "fe80::1",
             "64:ff9b::1",
             "64:ff9b:1::1",
@@ -807,9 +815,25 @@ mod tests {
         ]);
         let transport =
             FakeTransport::redirect("https://public.example/", "https://private.example/secret");
-        let engine = FetchEngine::new(resolver, transport, NetworkMode::PublicOnly);
+        let engine = FetchEngine::new(resolver, transport, NetworkAccess::PublicOnly);
 
         let result = engine.fetch("https://public.example/");
+
+        assert!(matches!(result, Err(LoadError::BlockedAddress(_))));
+        assert_eq!(engine.transport().request_count(), 1);
+    }
+
+    #[test]
+    fn loopback_redirect_to_domain_resolving_loopback_fails_before_second_request() {
+        let resolver = FakeResolver::new([
+            ("localhost", vec!["127.0.0.1:80"]),
+            ("attacker.example", vec!["127.0.0.1:80"]),
+        ]);
+        let transport =
+            FakeTransport::redirect("http://localhost/", "http://attacker.example/secret");
+        let engine = FetchEngine::new(resolver, transport, NetworkAccess::PublicAndLoopback);
+
+        let result = engine.fetch("http://localhost/");
 
         assert!(matches!(result, Err(LoadError::BlockedAddress(_))));
         assert_eq!(engine.transport().request_count(), 1);
@@ -822,7 +846,7 @@ mod tests {
             ("plain.example", vec!["93.184.216.35:80"]),
         ]);
         let transport = FakeTransport::redirect("https://secure.example/", "http://plain.example/");
-        let engine = FetchEngine::new(resolver, transport, NetworkMode::PublicOnly);
+        let engine = FetchEngine::new(resolver, transport, NetworkAccess::PublicOnly);
 
         let result = engine.fetch("https://secure.example/");
 
