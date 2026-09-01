@@ -17,13 +17,13 @@ Open a public or local web page:
 Inspect the supported accessibility tree:
 
 ```sh
-./browser.jr snapshot http://localhost:3000
+./browser.jr --allow-loopback snapshot http://localhost:3000
 ```
 
 Project the tree to agent-oriented reference targets:
 
 ```sh
-./browser.jr snapshot http://localhost:3000 --interactive
+./browser.jr --allow-loopback snapshot http://localhost:3000 --interactive
 ```
 
 Pipe one full snapshot as JSON:
@@ -36,26 +36,26 @@ Keep one page alive across commands:
 
 ```sh
 printf 'open http://localhost:3000\nsnapshot\nget title\nexit\n' \
-  | ./browser.jr session
+  | ./browser.jr --allow-loopback session
 ```
 
 Stream identified JSON results for the same commands:
 
 ```sh
 printf 'open http://localhost:3000\nget title\nexit\n' \
-  | ./browser.jr --json session
+  | ./browser.jr --allow-loopback --json session
 ```
 
 Capture its current viewport as a PNG:
 
 ```sh
 printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
-  | ./browser.jr session
+  | ./browser.jr --allow-loopback session
 ```
 
 ## What works
 
-- bounded public HTTP and HTTPS loading, with loopback support and private-network blocking
+- bounded public HTTP and HTTPS loading, with explicit loopback access and private-network blocking
 - static HTML parsing with normalized ancestry
 - a small inline and embedded CSS cascade with horizontal and static block-flow layout subsets
 - role locators with current HTML roles, non-presentational descendant image `alt` text, description, state, level, and accessibility-hidden filters

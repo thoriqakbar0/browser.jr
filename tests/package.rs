@@ -15,12 +15,12 @@ use browser_jr::{
     HistoryNavigationResult, HoverByLocator, HoverByRole, HoverElement, InteractiveElementState,
     KeyDown, KeyUp, KeyboardEventKey, KeyboardInsertText, KeyboardKey, KeyboardModifier,
     KeyboardTextEffect, KeyboardType, LabelLocator, LayoutInput, LayoutMutation, LintLayout,
-    Locator, LocatorAction, LocatorInspection, NonEmpty, OnDemandRasterProcess, OpenPage,
-    PageScroll, PageText, PlaceholderLocator, PrepareScreenshot, PressByLocator, PressKey,
-    PressResult, ReloadPage, RoleAction, RoleLocator, RuleConstraint, RuleResult, ScrollDirection,
-    ScrollElementIntoView, ScrollIntoViewByLocator, ScrollPage, SelectByLocator, SelectElement,
-    SelectOptionTarget, SelectOptions, SelectOptionsByLocator, SelectOptionsResult, SelectResult,
-    Session, SessionError, SetCheckedByLocator, SetCheckedByRole, SetElementChecked,
+    Locator, LocatorAction, LocatorInspection, NetworkAccess, NonEmpty, OnDemandRasterProcess,
+    OpenPage, PageScroll, PageText, PlaceholderLocator, PrepareScreenshot, PressByLocator,
+    PressKey, PressResult, ReloadPage, RoleAction, RoleLocator, RuleConstraint, RuleResult,
+    ScrollDirection, ScrollElementIntoView, ScrollIntoViewByLocator, ScrollPage, SelectByLocator,
+    SelectElement, SelectOptionTarget, SelectOptions, SelectOptionsByLocator, SelectOptionsResult,
+    SelectResult, Session, SessionError, SetCheckedByLocator, SetCheckedByRole, SetElementChecked,
     SetViewportSize, SoftwareRasterProcessFactory, TakeDomEvents, TestIdLocator, TextLocator,
     TextPressEffect, TitleLocator, TypeByLocator, TypeElement, TypeResult, ViewportSize,
     XPathLocator,
@@ -163,7 +163,7 @@ fn redirected_navigation_records_the_committed_final_url_in_history() {
     let network_guard = network_test_guard();
     let (redirect_url, redirect_server) = serve_redirect_page(3);
     let (other_url, other_server) = serve_page("<p>Other</p>");
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
 
     let opened = session.execute(OpenPage { url: redirect_url }).unwrap();
     assert!(opened.url.ends_with("/final"));
@@ -179,8 +179,25 @@ fn redirected_navigation_records_the_committed_final_url_in_history() {
 }
 
 #[test]
+fn loopback_loading_requires_explicit_session_access() {
+    let network_guard = network_test_guard();
+    let (blocked_url, blocked_server) = serve_page("<p>Blocked</p>");
+    let default_result = Session::new().execute(OpenPage { url: blocked_url });
+    drop(blocked_server);
+
+    let (allowed_url, allowed_server) = serve_page("<p>Allowed</p>");
+    let allowed_result = Session::with_network_access(NetworkAccess::PublicAndLoopback)
+        .execute(OpenPage { url: allowed_url });
+    allowed_server.join().unwrap();
+    drop(network_guard);
+
+    assert!(matches!(default_result, Err(SessionError::Load(_))));
+    assert!(allowed_result.is_ok());
+}
+
+#[test]
 fn package_caller_receives_typed_overflow_evidence() {
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     let result = session
         .execute(LintLayout {
             input: LayoutInput {
@@ -209,7 +226,7 @@ fn package_session_assigns_fresh_refs_to_each_interactive_snapshot() {
     let (url, server) = serve_page(
         r#"<label for="email">Email</label><input id="email"><button id="save">Save</button>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
 
     let opened = session.execute(OpenPage { url: url.clone() }).unwrap();
     server.join().unwrap();
@@ -238,7 +255,7 @@ fn accessibility_snapshot_exposes_typed_tree_nodes_and_resolvable_heading_refs()
     let (url, server) = serve_page(
         r#"<button>Outside</button><main id="content"><h1>Hello <em>there</em></h1><a href="/docs">Docs</a></main>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -281,7 +298,7 @@ fn accessibility_snapshot_emits_list_markers_only_for_unscoped_non_compact_trees
     let (url, server) = serve_page(
         r#"<main id="content"><ul><li>Alpha</li><li hidden>Hidden</li><li>Beta<ul><li>Nested</li></ul></li></ul><ol start="3"><li>Third</li><li value="7">Seventh</li><li>Eighth</li></ol></main>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -323,9 +340,11 @@ fn accessibility_snapshot_emits_list_markers_only_for_unscoped_non_compact_trees
 
 #[test]
 fn accessibility_snapshot_requires_an_open_page() {
-    let result = Session::new().execute(CaptureAccessibilitySnapshot {
-        options: AccessibilitySnapshotOptions::default(),
-    });
+    let result = Session::with_network_access(NetworkAccess::PublicAndLoopback).execute(
+        CaptureAccessibilitySnapshot {
+            options: AccessibilitySnapshotOptions::default(),
+        },
+    );
 
     assert_eq!(result, Err(SessionError::NoPage));
 }
@@ -336,7 +355,7 @@ fn interactive_snapshots_resolve_link_target_urls() {
     let (url, server) = serve_page(
         r#"<a href="guide/next?q=1#details">Next</a><button>Save</button><a href="action" role="button">Open</a>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
 
     session.execute(OpenPage { url: url.clone() }).unwrap();
     server.join().unwrap();
@@ -362,7 +381,7 @@ fn package_prepares_scroll_aware_locator_and_full_page_screenshots() {
             </body>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session
         .execute(SetViewportSize {
             width: 100,
@@ -416,7 +435,7 @@ fn package_blocks_screenshots_when_visible_paint_is_unsupported() {
     let network_guard = network_test_guard();
     let (url, server) =
         serve_page(r#"<main style="width:100px;height:20px;background-color:#fff">hello</main>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -444,7 +463,7 @@ fn scoped_snapshots_keep_only_descendants_and_map_refs_to_source_elements() {
             <section id="empty"><p>Nothing interactive</p></section>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let full = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -515,7 +534,7 @@ fn role_locators_resolve_without_a_prior_snapshot() {
     let (url, server) = serve_page(
         r#"<button>Save Draft</button><button>Publish</button><input aria-label="Email address">"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -543,7 +562,7 @@ fn role_locators_use_descendant_image_alt_text_in_accessible_names() {
             <button id="presentational"><img role="presentation" alt="Ignored"></button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -576,7 +595,7 @@ fn role_locator_resolution_is_strict_and_transactional() {
     let (url, server) = serve_page(
         r#"<button>Save Draft</button><button>Save Changes</button><input aria-label="Email address">"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -615,7 +634,7 @@ fn role_locator_resolution_is_strict_and_transactional() {
 fn successful_role_resolution_preserves_snapshot_references() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<button>Save</button><button>Publish</button>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -652,7 +671,7 @@ fn role_locators_resolve_structural_roles_and_role_specific_names() {
             <footer aria-label="Site footer">Legal</footer>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -705,7 +724,7 @@ fn role_locators_cover_current_implicit_html_role_mappings() {
             <img alt=""><img alt="" title="Chart">
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -773,7 +792,7 @@ fn presentational_roles_yield_to_focus_and_global_aria_conflicts() {
             <button role="presentation" disabled>Disabled</button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -834,7 +853,7 @@ fn role_locators_match_accessible_descriptions_in_precedence_order() {
             <button aria-describedby="" aria-description="ignored fallback">Empty reference</button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -910,7 +929,7 @@ fn role_locators_filter_accessibility_state_and_current_control_state() {
             <div aria-hidden="true"><button>Ghost</button></div>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -1063,7 +1082,7 @@ fn role_locators_report_unknown_stylesheet_visibility() {
     let network_guard = network_test_guard();
     let (url, server) =
         serve_page(r#"<link rel="stylesheet" href="theme.css"><button>Save</button>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let locator = RoleLocator::new("button").unwrap().with_exact_name("Save");
@@ -1092,7 +1111,7 @@ fn role_actions_fill_and_check_without_capturing_a_snapshot() {
     let (url, server) = serve_page(
         r#"<label>Email<input value="old"></label><label><input type="checkbox">Terms</label>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let before = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -1179,7 +1198,7 @@ fn role_actions_resolve_strictly_before_mutation() {
     let (url, server) = serve_page(
         r#"<input aria-label="Email" value="first"><input aria-label="Email address" value="second">"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -1209,7 +1228,7 @@ fn role_actions_report_actionability_and_unsupported_behavior() {
     let (url, server) = serve_page(
         r#"<input aria-label="Hidden" hidden><input aria-label="Disabled" disabled><button>Save</button><h1>Title</h1>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -1286,7 +1305,7 @@ fn pointer_actions_require_supported_static_stability_evidence_before_mutation()
             <a id="locator-link" href="/next" style="transition:all 1s">Moving link</a>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -1453,7 +1472,7 @@ fn pointer_actions_require_supported_static_stability_evidence_before_mutation()
 fn clicking_by_role_navigates_and_invalidates_snapshot_references() {
     let network_guard = network_test_guard();
     let (url, server) = serve_pages(vec![r#"<a href="/next">Next</a>"#, r#"<h1>Arrived</h1>"#]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     let old_reference = snapshot.elements[0].reference;
@@ -1487,7 +1506,7 @@ fn clicking_by_role_navigates_and_invalidates_snapshot_references() {
 fn failed_role_navigation_preserves_the_page_and_snapshot_references() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<a href="http://example.com/away">Away</a>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -1516,7 +1535,7 @@ fn role_actions_block_when_visibility_evidence_is_unavailable() {
     let (url, server) = serve_page(
         r#"<link rel="stylesheet" href="/style.css"><input aria-label="Styled" value="old">"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let locator = RoleLocator::new("textbox")
@@ -1554,7 +1573,7 @@ fn text_label_and_placeholder_locators_follow_user_facing_sources() {
             <input id="login" type="submit" value="Log in">
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -1624,7 +1643,7 @@ fn locator_actions_fill_check_and_navigate_through_one_pipeline() {
         "#,
         r#"<h1>Arrived</h1>"#,
     ]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     let email_ref = snapshot.elements[0].reference;
@@ -1700,7 +1719,7 @@ fn locator_actions_resolve_strictly_and_preserve_state_on_failure() {
             <button>Save</button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -1757,7 +1776,7 @@ fn hover_tracks_one_visible_target_across_reference_and_locator_paths() {
             <button id="hidden" hidden>Hidden</button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -1822,7 +1841,7 @@ fn failed_locator_hover_preserves_the_previous_target_and_document_replacement_c
         r#"<button id="visible">Visible</button><button id="hidden" hidden>Hidden</button>"#,
         r#"<button id="visible">Visible</button><button id="hidden" hidden>Hidden</button>"#,
     ]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     let visible = Locator::from(CssLocator::new("#visible").unwrap());
     let hidden = Locator::from(CssLocator::new("#hidden").unwrap());
@@ -1873,7 +1892,7 @@ fn alt_title_and_test_id_locators_use_static_attributes() {
         "#,
         r#"<h1>Arrived</h1>"#,
     ]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     let email_ref = snapshot.elements[0].reference;
@@ -1939,7 +1958,7 @@ fn css_position_locators_select_document_order_without_ambiguity() {
             <input id="third" class="card field" data-kind="item" value="three">
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -2000,7 +2019,7 @@ fn document_css_and_xpath_locators_share_strict_resolution_and_state() {
             </section>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -2065,7 +2084,7 @@ fn locator_collections_return_document_order_and_allow_zero_matches() {
             </section>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -2138,7 +2157,7 @@ fn locator_reads_and_form_actions_share_current_selector_state() {
             <input id="secret" type="password" value="private">
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -2301,7 +2320,7 @@ fn inner_html_reads_share_normalized_dom_and_block_sensitive_descendants() {
             <div id="secret" role="button"><input type="password" value="private"></div>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -2354,7 +2373,7 @@ fn opening_a_new_document_replaces_interactive_refs() {
     let network_guard = network_test_guard();
     let (first_url, first_server) = serve_page(r#"<button>First</button>"#);
     let (second_url, second_server) = serve_page(r#"<button>Second</button>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
 
     session.execute(OpenPage { url: first_url }).unwrap();
     first_server.join().unwrap();
@@ -2378,7 +2397,7 @@ fn clicking_a_link_navigates_and_invalidates_the_previous_ref() {
         r#"<title> Second
             page </title><button id="arrived">Arrived</button>"#,
     ]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let before_url = session.execute(GetPageUrl).unwrap();
     let before_title = session.execute(GetPageTitle).unwrap();
@@ -2433,7 +2452,7 @@ fn native_actions_record_data_minimized_dom_event_sequences() {
         "#,
         r#"<h1 id="arrived">Arrived</h1>"#,
     ]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     assert!(session.execute(TakeDomEvents).unwrap().is_empty());
     session.execute(OpenPage { url }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -2551,7 +2570,7 @@ fn native_clicks_focus_buttons_and_toggle_checkboxes_without_invalidating_refs()
             <form><button id="reset" type="reset">Reset</button></form>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -2668,7 +2687,7 @@ fn get_form_click_serializes_current_successful_controls_and_navigates() {
         </form>
     "#;
     let (url, server) = serve_pages_recording_requests(vec![form, "<h1>Results</h1>"]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     let old_reference = snapshot.elements[0].reference;
@@ -2734,7 +2753,7 @@ fn form_activation_keys_use_submitter_overrides_and_external_form_controls() {
     "#;
     let (url, server) =
         serve_pages_recording_requests(vec![form, "<h1>Found</h1>", form, "<h1>Found</h1>"]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
 
     let enter = session
@@ -2778,7 +2797,7 @@ fn implicit_enter_uses_the_first_default_submitter_and_current_values() {
         </form>
     "#;
     let (url, server) = serve_pages_recording_requests(vec![form, "<h1>Results</h1>"]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     let old_query = snapshot.elements[1].reference;
@@ -2831,7 +2850,7 @@ fn implicit_enter_without_a_submitter_obeys_the_blocking_field_count() {
         </form>
     "#;
     let (url, server) = serve_pages_recording_requests(vec![form, "<h1>Solo</h1>"]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     let first = snapshot.elements[0].reference;
@@ -2884,7 +2903,7 @@ fn implicit_enter_preserves_state_for_disabled_defaults_and_unsupported_methods(
         <input id="outside" value="three">
     "#;
     let (url, server) = serve_page(form);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -2951,7 +2970,7 @@ fn unsupported_form_submission_modes_preserve_the_page_and_references() {
             <form action="http://example.com/away"><button>Remote</button></form>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -2996,7 +3015,7 @@ fn reload_replaces_the_document_and_failed_reload_preserves_it() {
         r#"<title>First</title><button>First</button>"#,
         r#"<title>Second</title><button>Second</button>"#,
     ]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let first = session.execute(CaptureInteractiveSnapshot).unwrap();
     let first_reference = first.elements[0].reference;
@@ -3043,7 +3062,7 @@ fn history_navigation_moves_transactionally_and_truncates_forward_entries() {
     ]);
     let second_url = format!("{url}two");
     let branch_url = format!("{url}branch");
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let first = session.execute(CaptureInteractiveSnapshot).unwrap();
     let link = first.elements[0].reference;
@@ -3107,7 +3126,7 @@ fn history_navigation_moves_transactionally_and_truncates_forward_entries() {
 fn failed_history_load_preserves_the_page_reference_and_history_position() {
     let network_guard = network_test_guard();
     let (first_url, first_server) = serve_page(r#"<button>First</button>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session
         .execute(OpenPage {
             url: first_url.clone(),
@@ -3141,7 +3160,7 @@ fn reload_replaces_the_document_without_adding_a_history_entry() {
         r#"<title>First</title><button>First</button>"#,
         r#"<title>Reloaded</title><button>Reloaded</button>"#,
     ]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     session.execute(ReloadPage).unwrap();
     server.join().unwrap();
@@ -3160,7 +3179,7 @@ fn reload_replaces_the_document_without_adding_a_history_entry() {
 fn a_new_snapshot_invalidates_previous_refs() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<div role="button">Save</div>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let first = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -3193,7 +3212,7 @@ fn unsupported_clicks_preserve_the_current_snapshot() {
     let (url, server) = serve_page(
         r#"<div role="button">Save</div><a href="/new" target="_blank">New</a><a href="/file" download>File</a>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -3222,7 +3241,7 @@ fn text_value_actions_update_and_read_current_state() {
     let (url, server) = serve_page(
         r#"<label for="email">Email</label><input id="email" value="old"><textarea aria-label="Note">draft</textarea><input aria-label="Locked" value="fixed" readonly><button>Save</button>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let before = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -3341,7 +3360,7 @@ fn type_actions_append_text_and_preserve_failure_state() {
             <button>Save</button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let before = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -3444,7 +3463,7 @@ fn focus_and_press_use_page_owned_focus_and_control_owned_selection() {
             <button>Save</button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -3581,7 +3600,7 @@ fn control_activation_keys_share_native_click_state_and_preserve_refs() {
             <form><button id="reset" type="reset">Reset</button></form>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -3649,7 +3668,7 @@ fn link_enter_navigates_through_locator_and_current_focus_paths() {
     let first = r#"<a id="next" href="/next">Next</a>"#;
     let destination = r#"<title>Arrived</title><h1>Arrived</h1>"#;
     let (url, server) = serve_pages(vec![first, destination, first, destination]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let first_snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     let old_link = first_snapshot.elements[0].reference;
@@ -3699,7 +3718,7 @@ fn link_enter_navigates_through_locator_and_current_focus_paths() {
 fn failed_link_enter_preserves_the_page_focus_and_reference() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<a id="next" href="/missing">Next</a>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -3740,7 +3759,7 @@ fn focused_state_reads_follow_page_focus_and_strict_locators() {
             </body>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -3869,7 +3888,7 @@ fn focused_state_reads_follow_page_focus_and_strict_locators() {
     ));
     assert!(fresh.focused);
 
-    let mut empty = Session::new();
+    let mut empty = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     assert_eq!(
         empty.execute(GetFocusedByLocator {
             locator: Locator::from(CssLocator::new("body").unwrap()),
@@ -3889,7 +3908,7 @@ fn editing_keys_match_playwright_caret_and_selection_boundaries() {
 cd</textarea>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -4045,7 +4064,7 @@ fn focused_keyboard_text_uses_selection_and_preserves_noneditable_state() {
     let (url, server) = serve_page(
         r#"<input id="plain" value="abc"><input id="locked" value="fixed" readonly><button id="save">Save</button>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -4123,7 +4142,8 @@ fn focused_keyboard_text_uses_selection_and_preserves_noneditable_state() {
     drop(network_guard);
 
     assert_eq!(
-        Session::new().execute(KeyboardType { text: "x".into() }),
+        Session::with_network_access(NetworkAccess::PublicAndLoopback)
+            .execute(KeyboardType { text: "x".into() }),
         Err(SessionError::NoPage)
     );
 }
@@ -4134,7 +4154,7 @@ fn keyboard_insert_text_records_editable_and_readonly_native_events() {
     let (url, server) = serve_page(
         r#"<main id="root"><input id="plain"><input id="locked" readonly><button id="save">Save</button></main>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -4201,7 +4221,7 @@ fn keyboard_type_records_portable_per_scalar_native_events() {
     let (url, server) = serve_page(
         r#"<main id="root"><input id="plain"><input id="locked" readonly><button id="save">Save</button></main>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -4276,7 +4296,7 @@ fn keyboard_type_records_portable_per_scalar_native_events() {
 fn keyboard_type_normalizes_line_breaks_for_text_controls() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<input id="plain"><textarea id="note"></textarea>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -4350,7 +4370,7 @@ fn complete_press_records_portable_text_and_native_control_events() {
             </main>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -4596,7 +4616,7 @@ fn held_space_defers_native_state_and_cancels_after_focus_change() {
             <input id="alternate" type="radio" name="plan">
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -4796,7 +4816,7 @@ fn held_space_defers_submit_navigation_until_key_up() {
         </form>
     "#;
     let (url, server) = serve_pages_recording_requests(vec![form, "<h1>Sent</h1>"]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url: url.clone() }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     let submit = snapshot.elements[0].reference;
@@ -4848,7 +4868,7 @@ fn held_keyboard_keys_apply_modifiers_and_report_repeat_state() {
     let (url, server) = serve_page(
         r#"<input id="plain" value="abc"><label for="other">Other</label><input id="other">"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -4990,7 +5010,7 @@ fn held_keyboard_keys_apply_modifiers_and_report_repeat_state() {
 
     assert!(KeyboardEventKey::new("Shift+ArrowLeft").is_err());
     assert_eq!(
-        Session::new().execute(KeyDown {
+        Session::with_network_access(NetworkAccess::PublicAndLoopback).execute(KeyDown {
             key: KeyboardEventKey::new("Shift").unwrap(),
         }),
         Err(SessionError::NoPage)
@@ -5006,7 +5026,7 @@ fn press_by_locator_focuses_one_strict_target_before_editing() {
             <label for="second">Second</label><input id="second" value="two">
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -5074,7 +5094,7 @@ fn tab_and_shift_tab_match_chromium_sequential_focus_order() {
             <input id="hidden" hidden>
         "##,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -5210,7 +5230,7 @@ fn tab_blocks_when_the_document_has_an_unrepresented_focus_target() {
     let network_guard = network_test_guard();
     let (url, server) =
         serve_page(r#"<button>Save</button><div contenteditable="true">Draft</div>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -5232,7 +5252,7 @@ fn document_replacement_clears_focus_before_the_next_press() {
     let network_guard = network_test_guard();
     let body = r#"<input id="email" value="old">"#;
     let (url, server) = serve_pages(vec![body, body]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     session
@@ -5270,7 +5290,7 @@ fn select_actions_update_native_selects_and_preserve_failure_state() {
             <button>Save</button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let before = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -5464,7 +5484,7 @@ fn select_options_match_labels_and_indexes_transactionally() {
             </select>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -5562,7 +5582,7 @@ fn editable_reads_match_native_and_contenteditable_boundaries() {
             <fieldset disabled><input id="fieldset-input"></fieldset>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -5646,7 +5666,7 @@ fn visibility_reads_require_supported_static_box_evidence() {
             <button style="width:0">Unknown box</button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -5720,7 +5740,7 @@ fn bounding_box_reads_share_complete_geometry_and_preserve_state() {
             <button id="fixed-margin" style="position:fixed;left:10px;top:10px;width:20px;height:20px;margin-left:2px">Margin</button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -5834,7 +5854,7 @@ fn normal_flow_bounding_boxes_stack_blocks_and_size_auto_parents() {
             </body>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -5953,7 +5973,7 @@ fn normal_flow_bounding_boxes_reject_intrinsic_text_and_collapsing_margins() {
             <aside id="after" style="height:10px"></aside>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -6021,7 +6041,7 @@ fn page_scroll_moves_document_boxes_keeps_fixed_boxes_and_resets_on_reload() {
         </body>
     "#;
     let (url, server) = serve_pages(vec![body, body]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     let target = snapshot.elements[0].reference;
@@ -6149,7 +6169,7 @@ fn descendants_of_fixed_boxes_keep_viewport_coordinates_during_scroll() {
             </body>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let before = session
@@ -6201,7 +6221,7 @@ fn scroll_into_view_resolves_references_and_locators_without_replacing_state() {
             </body>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -6285,7 +6305,7 @@ fn pointer_actions_auto_scroll_after_checks_and_keep_failed_actions_transactiona
             </body>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session
         .execute(SetViewportSize {
             width: 640,
@@ -6407,7 +6427,7 @@ fn pointer_actions_block_when_a_fixed_element_intercepts_the_action_point() {
             </body>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session
         .execute(SetViewportSize {
             width: 640,
@@ -6519,7 +6539,7 @@ fn hit_testing_accepts_target_descendants_and_ignores_pointer_events_none() {
             </body>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let clicked = session
@@ -6562,7 +6582,7 @@ fn overlapping_unsupported_hit_test_evidence_blocks_pointer_actions() {
             </body>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let result = session.execute(ClickByLocator {
@@ -6584,7 +6604,7 @@ fn overlapping_unsupported_hit_test_evidence_blocks_pointer_actions() {
 #[test]
 fn scrolling_requires_an_open_page() {
     assert_eq!(
-        Session::new().execute(ScrollPage {
+        Session::with_network_access(NetworkAccess::PublicAndLoopback).execute(ScrollPage {
             direction: ScrollDirection::Down,
             distance: 300,
         }),
@@ -6602,7 +6622,7 @@ fn viewport_resize_reflows_geometry_and_preserves_live_page_state() {
             </body>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
 
     assert_eq!(
         session.execute(GetViewportSize),
@@ -6711,7 +6731,8 @@ fn bounding_box_locator_requires_an_open_page() {
     let locator = Locator::from(CssLocator::new("#fixed").unwrap());
 
     assert_eq!(
-        Session::new().execute(GetBoundingBoxByLocator { locator }),
+        Session::with_network_access(NetworkAccess::PublicAndLoopback)
+            .execute(GetBoundingBoxByLocator { locator }),
         Err(SessionError::NoPage)
     );
 }
@@ -6722,7 +6743,7 @@ fn checkbox_actions_update_and_read_current_state() {
     let (url, server) = serve_page(
         r#"<label><input type="checkbox"> Updates</label><input type="checkbox" checked disabled aria-label="Locked"><button>Save</button><div role="switch" aria-label="Custom"></div>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let before = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -6836,7 +6857,7 @@ fn radio_groups_share_exclusive_state_across_check_click_press_and_tab() {
             <button id="after" type="button">After</button>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -6980,7 +7001,7 @@ fn radio_arrow_keys_wrap_and_skip_disabled_or_hidden_group_members() {
             <form><label><input id="other" type="radio" name="plan">Other</label></form>
         "#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -7040,7 +7061,7 @@ fn element_text_reads_descendants_without_using_the_accessible_name() {
     let (url, server) = serve_page(
         r#"<button aria-label="Save changes"> Hello <span>world</span> </button><input aria-label="Email">"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -7069,7 +7090,7 @@ fn element_attribute_reads_preserve_missing_and_sensitive_states() {
     let (url, server) = serve_page(
         r#"<a href="/next" data-kind="primary">Next</a><input type="password" value="secret" aria-label="Password">"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -7134,7 +7155,7 @@ fn element_attribute_reads_preserve_missing_and_sensitive_states() {
 fn failed_link_navigation_preserves_the_page_and_ref() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<a href="http://example.com/away">Away</a>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -7162,7 +7183,8 @@ fn failed_link_navigation_preserves_the_page_and_ref() {
 
 #[test]
 fn interactive_snapshot_requires_an_open_page() {
-    let result = Session::new().execute(CaptureInteractiveSnapshot);
+    let result = Session::with_network_access(NetworkAccess::PublicAndLoopback)
+        .execute(CaptureInteractiveSnapshot);
 
     assert_eq!(result, Err(SessionError::NoPage));
 }
@@ -7170,7 +7192,7 @@ fn interactive_snapshot_requires_an_open_page() {
 #[test]
 fn page_url_requires_an_open_page() {
     assert_eq!(
-        Session::new().execute(GetPageUrl),
+        Session::with_network_access(NetworkAccess::PublicAndLoopback).execute(GetPageUrl),
         Err(SessionError::NoPage)
     );
 }
@@ -7178,7 +7200,7 @@ fn page_url_requires_an_open_page() {
 #[test]
 fn page_title_requires_an_open_page() {
     assert_eq!(
-        Session::new().execute(GetPageTitle),
+        Session::with_network_access(NetworkAccess::PublicAndLoopback).execute(GetPageTitle),
         Err(SessionError::NoPage)
     );
 }
@@ -7190,7 +7212,7 @@ fn page_text_reads_normalized_static_content_across_navigation() {
         r#"<title>One</title><main>Hello <span>world</span><script>ignore()</script> <a href="/two">Next</a></main>"#,
         r#"<title>Two</title><main>Second <strong>page</strong><input value="secret"></main>"#,
     ]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     let link = snapshot.elements[0].reference;
@@ -7215,7 +7237,7 @@ fn page_text_reads_normalized_static_content_across_navigation() {
 #[test]
 fn page_text_requires_an_open_page() {
     assert_eq!(
-        Session::new().execute(GetPageText),
+        Session::with_network_access(NetworkAccess::PublicAndLoopback).execute(GetPageText),
         Err(SessionError::NoPage)
     );
 }
@@ -7223,22 +7245,28 @@ fn page_text_requires_an_open_page() {
 #[test]
 fn reload_requires_an_open_page() {
     assert_eq!(
-        Session::new().execute(ReloadPage),
+        Session::with_network_access(NetworkAccess::PublicAndLoopback).execute(ReloadPage),
         Err(SessionError::NoPage)
     );
 }
 
 #[test]
 fn history_navigation_requires_an_open_page() {
-    assert_eq!(Session::new().execute(GoBack), Err(SessionError::NoPage));
-    assert_eq!(Session::new().execute(GoForward), Err(SessionError::NoPage));
+    assert_eq!(
+        Session::with_network_access(NetworkAccess::PublicAndLoopback).execute(GoBack),
+        Err(SessionError::NoPage)
+    );
+    assert_eq!(
+        Session::with_network_access(NetworkAccess::PublicAndLoopback).execute(GoForward),
+        Err(SessionError::NoPage)
+    );
 }
 
 #[test]
 fn opening_a_page_invalidates_previous_layout_evidence() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<button>Save</button>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session
         .execute(LintLayout {
             input: LayoutInput {
@@ -7263,7 +7291,7 @@ fn opening_a_page_invalidates_previous_layout_evidence() {
 fn failed_open_preserves_the_current_page() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<button>Save</button>"#);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let before = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -7282,7 +7310,7 @@ fn failed_open_preserves_the_current_page() {
 
 #[test]
 fn package_caller_can_apply_a_project_width_limit() {
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session
         .execute(LintLayout {
             input: LayoutInput {
@@ -7316,7 +7344,7 @@ fn package_caller_can_apply_a_project_width_limit() {
 
 #[test]
 fn project_width_limit_passes_at_the_boundary() {
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session
         .execute(LintLayout {
             input: LayoutInput {
@@ -7344,7 +7372,7 @@ fn project_width_limit_passes_at_the_boundary() {
 
 #[test]
 fn project_width_limit_blocks_when_the_element_is_missing() {
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session
         .execute(LintLayout {
             input: LayoutInput {
@@ -7374,7 +7402,7 @@ fn project_width_limit_blocks_when_the_element_is_missing() {
 
 #[test]
 fn project_width_limit_blocks_when_target_geometry_is_unsupported() {
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session
         .execute(LintLayout {
             input: LayoutInput {
@@ -7412,7 +7440,7 @@ fn native_actions_record_ordered_dom_events_with_ancestry() {
     let (url, server) = serve_page(
         r#"<main id="root"><label>Name<input id="name"></label><label><input id="terms" type="checkbox">Terms</label><select id="size"><option value="s">Small</option><option value="l">Large</option></select></main>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
@@ -7486,7 +7514,7 @@ fn link_click_event_survives_successful_navigation() {
         r#"<main id="root"><a id="next" href="/next">Next</a></main>"#,
         r#"<main>Arrived</main>"#,
     ]);
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
     session
@@ -7530,7 +7558,7 @@ fn pointer_click_records_playwright_target_and_focus_order() {
     let (url, server) = serve_page(
         r#"<main id="root"><button id="first">First</button><button id="second">Second</button></main>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     session
@@ -7609,7 +7637,7 @@ fn hover_records_playwright_chromium_transition_order() {
     let (url, server) = serve_page(
         r#"<main id="root"><button id="first">First</button><button id="second">Second</button></main>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
     let first = Locator::from(CssLocator::new("#first").unwrap());
@@ -7709,7 +7737,7 @@ fn optional_tags_preserve_native_event_ancestry() {
     let (url, server) = serve_page(
         r#"<ul id="list"><li id="first"><input id="one" type="checkbox"><li id="second"><input id="two" type="checkbox"></ul>"#,
     );
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session.execute(OpenPage { url }).unwrap();
     server.join().unwrap();
 
@@ -7733,17 +7761,18 @@ fn optional_tags_preserve_native_event_ancestry() {
 
 #[test]
 fn project_width_limit_requires_a_snapshot() {
-    let result = Session::new().execute(CheckElementWidth {
-        element: "article".into(),
-        maximum_width: 720,
-    });
+    let result =
+        Session::with_network_access(NetworkAccess::PublicAndLoopback).execute(CheckElementWidth {
+            element: "article".into(),
+            maximum_width: 720,
+        });
 
     assert_eq!(result, Err(SessionError::NoSnapshot));
 }
 
 #[test]
 fn package_mutation_uses_the_same_session() {
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     let initial = session
         .execute(LintLayout {
             input: LayoutInput {
@@ -7787,7 +7816,7 @@ fn package_mutation_batch_is_atomic_and_clean_equivalent() {
         viewport_width: 320,
         elements: vec![ElementInput::supported("hero", 280, 80)],
     };
-    let mut incremental_session = Session::new();
+    let mut incremental_session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     incremental_session
         .execute(LintLayout { input: initial })
         .unwrap();
@@ -7806,7 +7835,7 @@ fn package_mutation_batch_is_atomic_and_clean_equivalent() {
             ],
         })
         .unwrap();
-    let clean = Session::new()
+    let clean = Session::with_network_access(NetworkAccess::PublicAndLoopback)
         .execute(LintLayout { input: changed })
         .unwrap();
 
@@ -7827,7 +7856,7 @@ fn package_mutation_batch_is_atomic_and_clean_equivalent() {
 
 #[test]
 fn failed_package_mutation_batch_preserves_the_committed_layout() {
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
     session
         .execute(LintLayout {
             input: LayoutInput {

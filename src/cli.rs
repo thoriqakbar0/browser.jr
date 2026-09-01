@@ -11,8 +11,8 @@ use crate::page::layout_input_from_html;
 use crate::{
     AccessibilitySnapshotOptions, CaptureAccessibilitySnapshot, CaptureAccessibilitySnapshotWithin,
     CaptureInteractiveSnapshot, CaptureInteractiveSnapshotWithin, CheckElementWidth, Comparison,
-    CssLocator, GetPageText, LintLayout, Locator, OpenPage, RuleConstraint, RuleResult, Session,
-    SessionError, WidthFinding,
+    CssLocator, GetPageText, LintLayout, Locator, NetworkAccess, OpenPage, RuleConstraint,
+    RuleResult, Session, SessionError, WidthFinding,
 };
 
 use crate::DEFAULT_VIEWPORT_WIDTH;
@@ -21,11 +21,11 @@ const HELP: &str = "browser.jr
 A browser engine package for programmable interface verification.
 
 Usage:
-  browser.jr lint <url> [--viewport <css-px>] [--max-width <element> <css-px>]
-  browser.jr read <url>
-  browser.jr [--json] snapshot <url> [--interactive] [snapshot-options] [--json]
-  browser.jr session
-  browser.jr --json session
+  browser.jr [--allow-loopback] lint <url> [--viewport <css-px>] [--max-width <element> <css-px>]
+  browser.jr [--allow-loopback] read <url>
+  browser.jr [--allow-loopback] [--json] snapshot <url> [--interactive] [snapshot-options] [--json]
+  browser.jr [--allow-loopback] session
+  browser.jr [--allow-loopback] --json session
   browser.jr help
 
 Options:
@@ -39,9 +39,11 @@ Options:
   -d, --depth         Limit the full tree to a zero-based depth
   -s, --selector      Limit the snapshot to one strict CSS target
   --json             Emit machine-readable snapshot or session results on stdout
+  --allow-loopback   Allow explicit localhost and loopback-IP URLs
 
 Current implementation:
-  Static HTML design lint is available for public HTTP, HTTPS, and loopback pages.
+  Static HTML design lint is available for public HTTP and HTTPS pages.
+  Loopback pages require --allow-loopback.
   Full and interactive snapshots expose a stated static accessibility subset.
   Session mode supports semantic, attribute, CSS, and XPath locators through stdin.
   Session mode drains data-minimized native action events through the events command.
@@ -103,6 +105,27 @@ impl ExitStatus {
     }
 }
 
+fn extract_network_access(args: Vec<OsString>) -> Result<(Vec<OsString>, NetworkAccess), String> {
+    let mut filtered = Vec::with_capacity(args.len());
+    let mut allow_loopback = false;
+    for argument in args {
+        if argument == "--allow-loopback" {
+            if allow_loopback {
+                return Err("browser.jr: --allow-loopback cannot be repeated".into());
+            }
+            allow_loopback = true;
+        } else {
+            filtered.push(argument);
+        }
+    }
+    let access = if allow_loopback {
+        NetworkAccess::PublicAndLoopback
+    } else {
+        NetworkAccess::PublicOnly
+    };
+    Ok((filtered, access))
+}
+
 pub fn run_cli<I, O, E>(args: I, output: &mut O, errors: &mut E) -> ExitStatus
 where
     I: IntoIterator<Item = OsString>,
@@ -124,7 +147,11 @@ where
     O: Write,
     E: Write,
 {
-    let args: Vec<OsString> = args.into_iter().collect();
+    let raw_args: Vec<OsString> = args.into_iter().collect();
+    let (args, network_access) = match extract_network_access(raw_args) {
+        Ok(parsed) => parsed,
+        Err(message) => return write_line(errors, &message, ExitStatus::InvalidInput),
+    };
     match args.as_slice() {
         [] => write_help(output),
         [arg] if arg == "help" || arg == "-h" || arg == "--help" => write_help(output),
@@ -134,18 +161,24 @@ where
             ExitStatus::Success,
         ),
         [command, rest @ ..] if command == "lint" => match parse_lint_options(rest) {
-            Ok(options) => run_lint(options, output, errors),
+            Ok(options) => run_lint(options, network_access, output, errors),
             Err(message) => write_line(errors, &message, ExitStatus::InvalidInput),
         },
-        [command, url] if command == "read" => run_read(url, output, errors),
+        [command, url] if command == "read" => run_read(url, network_access, output, errors),
         [flag, command, rest @ ..] if flag == "--json" && command == "snapshot" => {
-            run_snapshot_invocation(rest, SnapshotOutputFormat::Json, output, errors)
+            run_snapshot_invocation(
+                rest,
+                SnapshotOutputFormat::Json,
+                network_access,
+                output,
+                errors,
+            )
         }
         [flag, command] if flag == "--json" && command == "session" => {
-            run_json_session(input, output, errors)
+            run_json_session(input, output, errors, network_access)
         }
         [command, flag] if command == "session" && flag == "--json" => {
-            run_json_session(input, output, errors)
+            run_json_session(input, output, errors, network_access)
         }
         [flag, ..] if flag == "--json" => write_snapshot_error(
             output,
@@ -154,10 +187,14 @@ where
             "browser.jr: --json supports snapshot and session only",
             ExitStatus::InvalidInput,
         ),
-        [command, rest @ ..] if command == "snapshot" => {
-            run_snapshot_invocation(rest, SnapshotOutputFormat::Human, output, errors)
-        }
-        [command] if command == "session" => run_session(input, output, errors),
+        [command, rest @ ..] if command == "snapshot" => run_snapshot_invocation(
+            rest,
+            SnapshotOutputFormat::Human,
+            network_access,
+            output,
+            errors,
+        ),
+        [command] if command == "session" => run_session(input, output, errors, network_access),
         _ => write_line(
             errors,
             "browser.jr: invalid arguments; run browser.jr help",
@@ -166,7 +203,12 @@ where
     }
 }
 
-fn run_read(url: &OsString, output: &mut impl Write, errors: &mut impl Write) -> ExitStatus {
+fn run_read(
+    url: &OsString,
+    network_access: NetworkAccess,
+    output: &mut impl Write,
+    errors: &mut impl Write,
+) -> ExitStatus {
     let Some(url) = url.to_str() else {
         return write_line(
             errors,
@@ -174,7 +216,7 @@ fn run_read(url: &OsString, output: &mut impl Write, errors: &mut impl Write) ->
             ExitStatus::InvalidInput,
         );
     };
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(network_access);
     if let Err(error) = session.execute(OpenPage { url: url.into() }) {
         return write_session_error(errors, error);
     }
@@ -187,6 +229,7 @@ fn run_read(url: &OsString, output: &mut impl Write, errors: &mut impl Write) ->
 fn run_snapshot_invocation(
     args: &[OsString],
     initial_output_format: SnapshotOutputFormat,
+    network_access: NetworkAccess,
     output: &mut impl Write,
     errors: &mut impl Write,
 ) -> ExitStatus {
@@ -198,7 +241,7 @@ fn run_snapshot_invocation(
         SnapshotOutputFormat::Human
     };
     match parse_snapshot_options(args, initial_output_format) {
-        Ok(options) => run_snapshot(options, output, errors),
+        Ok(options) => run_snapshot(options, network_access, output, errors),
         Err(message) => write_snapshot_error(
             output,
             errors,
@@ -365,7 +408,12 @@ fn parse_width(value: &OsString, flag: &str) -> Result<u64, String> {
         })
 }
 
-fn run_lint(options: LintOptions, output: &mut impl Write, errors: &mut impl Write) -> ExitStatus {
+fn run_lint(
+    options: LintOptions,
+    network_access: NetworkAccess,
+    output: &mut impl Write,
+    errors: &mut impl Write,
+) -> ExitStatus {
     let Some(url) = options.url.to_str() else {
         return write_line(
             errors,
@@ -373,11 +421,11 @@ fn run_lint(options: LintOptions, output: &mut impl Write, errors: &mut impl Wri
             ExitStatus::InvalidInput,
         );
     };
-    let html = match load_html(url) {
+    let html = match load_html(url, network_access) {
         Ok(loaded) => loaded.html,
         Err(error) => return write_load_error(errors, error),
     };
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(network_access);
     let result = match session.execute(LintLayout {
         input: layout_input_from_html(&html, options.viewport_width),
     }) {
@@ -407,6 +455,7 @@ fn run_lint(options: LintOptions, output: &mut impl Write, errors: &mut impl Wri
 
 fn run_snapshot(
     options: SnapshotOptions,
+    network_access: NetworkAccess,
     output: &mut impl Write,
     errors: &mut impl Write,
 ) -> ExitStatus {
@@ -419,7 +468,7 @@ fn run_snapshot(
             ExitStatus::InvalidInput,
         );
     };
-    let mut session = Session::new();
+    let mut session = Session::with_network_access(network_access);
     if let Err(error) = session.execute(OpenPage { url: url.into() }) {
         return write_snapshot_session_error(output, errors, options.output_format, error);
     }
@@ -1046,9 +1095,10 @@ mod tests {
         let (status, output, errors) = run(&["--help"]);
 
         assert_eq!(status, ExitStatus::Success);
-        assert!(output.contains("browser.jr lint <url>"));
-        assert!(output.contains("browser.jr session"));
+        assert!(output.contains("browser.jr [--allow-loopback] lint <url>"));
+        assert!(output.contains("browser.jr [--allow-loopback] session"));
         assert!(output.contains("--json"));
+        assert!(output.contains("--allow-loopback"));
         assert!(output.contains("Static HTML design lint is available"));
         assert!(errors.is_empty());
     }

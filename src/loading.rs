@@ -17,6 +17,16 @@ const MAX_DNS_ANSWERS: usize = 16;
 const MAX_RESPONSE_HEADERS: usize = 64;
 const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 
+/// Controls whether one session may load explicit loopback URLs.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NetworkAccess {
+    /// Allow public HTTP and HTTPS destinations only.
+    #[default]
+    PublicOnly,
+    /// Allow public destinations and explicit loopback URLs.
+    PublicAndLoopback,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LoadedHtml {
     pub(crate) final_url: String,
@@ -232,9 +242,17 @@ fn address_is_allowed_for_mode(address: IpAddr, mode: NetworkMode) -> bool {
     }
 }
 
-pub(crate) fn load_html(value: &str) -> Result<LoadedHtml, LoadError> {
+pub(crate) fn load_html(
+    value: &str,
+    network_access: NetworkAccess,
+) -> Result<LoadedHtml, LoadError> {
     let url = parse_network_url(value)?;
     let mode = network_mode_for_url(&url);
+    if mode == NetworkMode::LoopbackOnly && network_access == NetworkAccess::PublicOnly {
+        return Err(LoadError::UnsupportedTarget(
+            "loopback URLs require explicit network access".into(),
+        ));
+    }
     FetchEngine::new(SystemNetworkResolver, HyperNetworkTransport::new()?, mode).fetch(value)
 }
 

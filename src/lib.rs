@@ -26,7 +26,7 @@ pub use keyboard::{
 pub use layout::{
     BoundingBox, ElementInput, LayoutError, LayoutInput, LayoutMutation, SemanticElementId,
 };
-pub use loading::LoadError;
+pub use loading::{LoadError, NetworkAccess};
 pub use locator::{
     AltLocator, CssLocator, CssLocatorError, LabelLocator, Locator, LocatorMatch, LocatorPosition,
     LocatorValueError, PlaceholderLocator, RoleLocator, RoleLocatorError, RoleMatch, TestIdLocator,

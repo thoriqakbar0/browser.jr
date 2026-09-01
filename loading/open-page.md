@@ -2,13 +2,13 @@
 
 ## Summary
 
-`browser.jr lint <url>` and `browser.jr snapshot <url> --interactive` load one public HTTP or HTTPS page, or an explicit loopback page. Package callers use `OpenPage`.
+`browser.jr lint <url>` and `browser.jr snapshot <url> --interactive` load one public HTTP or HTTPS page, or an explicit loopback page when access is enabled. Package callers use `OpenPage`.
 
 Session-mode callers send `open <url>`. They can use `get url` and `get title` to inspect the current page.
 
 ## The simple case
 
-The developer supplies a public HTTP or HTTPS URL, or starts a local server and supplies its loopback URL.
+The developer supplies a public HTTP or HTTPS URL, or starts a local server, enables loopback access, and supplies its loopback URL.
 
 browser.jr reads HTML with a one MiB body cap, a 15-second request limit, and at most five redirects. It then starts lint or interactive snapshot work.
 
@@ -30,7 +30,7 @@ stateDiagram-v2
 
 ### Invoke
 
-The CLI or package boundary parses the URL before network access. It rejects credentials, unsupported schemes, and literal private or non-routable targets.
+The CLI or package boundary parses the URL before network access. The CLI requires `--allow-loopback` for a loopback URL. A package session requires `NetworkAccess::PublicAndLoopback`. It rejects credentials, unsupported schemes, and literal private or non-routable targets.
 
 ### Exit immediately
 
@@ -89,7 +89,7 @@ Each successful retained open adds an entry to [navigation history](history-navi
 
 **Resource limits.** The body limit is one MiB. The request limit is 15 seconds and the redirect limit is five.
 
-**Network and storage.** The loader permits public HTTP and HTTPS, plus explicit loopback targets. It disables proxies and rejects DNS answers that include private or non-routable addresses. It writes no page data to storage.
+**Network and storage.** The loader permits public HTTP and HTTPS by default. Explicit loopback targets require session-level access. It disables proxies and rejects DNS answers that include private or non-routable addresses. It writes no page data to storage.
 
 **Rendering compatibility.** The loader accepts HTML. The first title element supplies the page title. Title whitespace collapses.
 

@@ -18,7 +18,7 @@ The one-shot CLI has no `click` command. [`browser.jr session`](../automation/ai
 
 ## The simple case
 
-The caller opens a loopback page through `OpenPage`. It captures `CaptureInteractiveSnapshot` and selects one link reference.
+The caller opens a page through `OpenPage`. It captures `CaptureInteractiveSnapshot` and selects one link reference.
 
 The caller submits `ClickElement`. browser.jr resolves the link against the current URL and loads the next document.
 
@@ -34,7 +34,7 @@ stateDiagram-v2
     checking_action --> unsupported : action outside implemented subset
     checking_action --> loading : same-context link
     loading --> failed : invalid or unavailable target
-    loading --> navigated : valid loopback HTML response
+    loading --> navigated : valid HTML response
     navigated --> finished
     rejected --> finished
     unsupported --> finished
@@ -126,7 +126,7 @@ Successful native link `Enter` navigation records the same history entry.
 
 **Resource limits.** The body limit is one MiB. A wall-clock request timeout is not implemented yet.
 
-**Network and storage.** The resolved target must remain loopback HTTP. Navigation writes no persistent state.
+**Network and storage.** The resolved target must remain within the session network policy. Navigation writes no persistent state.
 
 **Rendering compatibility.** Navigation parses static HTML. JavaScript and browser event dispatch remain unsupported.
 
@@ -141,7 +141,7 @@ It does not sample motion frames or check event reception.
 - A fresh snapshot makes references from the previous snapshot stale.
 - A successful navigation makes its clicked reference stale.
 - A relative `href` resolves against the current page URL.
-- A non-loopback resolved URL fails without replacing the page.
+- A target outside the session network policy fails without replacing the page.
 - A supported native button returns `Activated` without navigation.
 - A supported native submitter returns `Navigated` after GET form loading.
 - A `_blank` target does not silently navigate the current page.

@@ -9,6 +9,12 @@ use std::thread::{self, JoinHandle};
 static NETWORK_TEST: Mutex<()> = Mutex::new(());
 static SCREENSHOT_TEST_ID: AtomicU64 = AtomicU64::new(1);
 
+fn browser_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_browser-jr"));
+    command.arg("--allow-loopback");
+    command
+}
+
 fn network_test_guard() -> MutexGuard<'static, ()> {
     NETWORK_TEST
         .lock()
@@ -48,7 +54,7 @@ fn read_request_headers(stream: &std::net::TcpStream) {
 }
 
 fn run_session_script(script: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let mut child = browser_command()
         .arg("session")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -65,7 +71,7 @@ fn run_session_script(script: &str) -> Output {
 }
 
 fn run_json_session_script(script: &str, trailing_flag: bool) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_browser-jr"));
+    let mut command = browser_command();
     if trailing_flag {
         command.args(["session", "--json"]);
     } else {
@@ -92,11 +98,23 @@ fn screenshot_test_path(name: &str) -> PathBuf {
 }
 
 #[test]
-fn help_runs_through_the_binary_boundary() {
+fn loopback_cli_requires_allow_loopback() {
     let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
-        .arg("--help")
+        .args(["snapshot", "http://127.0.0.1:1", "--interactive"])
         .output()
         .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("loopback URLs require explicit network access"),
+        "unexpected stderr: {stderr:?}"
+    );
+}
+
+#[test]
+fn help_runs_through_the_binary_boundary() {
+    let output = browser_command().arg("--help").output().unwrap();
 
     assert!(
         output.status.success(),
@@ -105,9 +123,9 @@ fn help_runs_through_the_binary_boundary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("browser.jr lint <url>"));
-    assert!(stdout.contains("browser.jr read <url>"));
-    assert!(stdout.contains("browser.jr --json session"));
+    assert!(stdout.contains("browser.jr [--allow-loopback] lint <url>"));
+    assert!(stdout.contains("browser.jr [--allow-loopback] read <url>"));
+    assert!(stdout.contains("browser.jr [--allow-loopback] --json session"));
     assert!(stdout.contains("one envelope for each lifecycle event and input command"));
     assert!(stdout.contains("native action events through the events command"));
     assert!(stdout.contains("solid-box PNG screenshots"));
@@ -120,10 +138,7 @@ fn read_command_returns_normalized_static_page_text() {
     let (url, server) = serve_page(
         r#"<title>Docs</title><main>Hello <span>world</span><script>ignore()</script> <button>Save</button><input value="secret"></main>"#,
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
-        .args(["read", &url])
-        .output()
-        .unwrap();
+    let output = browser_command().args(["read", &url]).output().unwrap();
     server.join().unwrap();
     drop(network_guard);
 
@@ -141,7 +156,7 @@ fn interactive_snapshot_reports_ordered_agent_refs() {
     let (url, server) = serve_page(
         r#"<label for="email">Email address</label><input id="email"><button id="save">Save</button>"#,
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args(["snapshot", &url, "--interactive"])
         .output()
         .unwrap();
@@ -162,7 +177,7 @@ fn interactive_snapshot_options_match_agent_browser_output() {
     let network_guard = network_test_guard();
     let body = r#"<a href="guide/next?q=1#details">Next</a><button>Save</button>"#;
     let (url, server) = serve_pages(vec![body, body]);
-    let human = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let human = browser_command()
         .args([
             "snapshot",
             &url,
@@ -174,7 +189,7 @@ fn interactive_snapshot_options_match_agent_browser_output() {
         ])
         .output()
         .unwrap();
-    let json = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let json = browser_command()
         .args(["--json", "snapshot", &url, "-i", "-u", "-c", "-d", "1"])
         .output()
         .unwrap();
@@ -285,7 +300,7 @@ fn interactive_snapshot_json_matches_the_agent_envelope() {
     let (url, server) = serve_page(
         r#"<label for="email">Email address</label><input id="email"><button>Save</button>"#,
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args(["--json", "snapshot", &url, "--interactive"])
         .output()
         .unwrap();
@@ -389,7 +404,7 @@ fn json_session_accepts_the_trailing_flag_form() {
 
 #[test]
 fn snapshot_json_reports_load_failures_on_stdout() {
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args(["snapshot", "http://192.168.1.1", "--interactive", "--json"])
         .output()
         .unwrap();
@@ -411,7 +426,7 @@ fn snapshot_json_reports_load_failures_on_stdout() {
 fn snapshot_json_reports_scope_failures_on_stdout() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<button>Save</button>"#);
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args([
             "snapshot",
             &url,
@@ -447,7 +462,7 @@ fn one_shot_snapshot_scopes_interactive_elements_with_css() {
             <main><section><input aria-label="Email"><button>Inside</button></section></main>
         "#,
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args(["snapshot", &url, "-i", "-s", "main > section"])
         .output()
         .unwrap();
@@ -512,7 +527,7 @@ fn full_snapshot_json_uses_the_tree_text_and_ref_map() {
     let network_guard = network_test_guard();
     let (url, server) =
         serve_page(r#"<main><h1>Hello</h1><a href="/docs">Docs</a><section></section></main>"#);
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args(["snapshot", &url, "--json", "--urls", "--compact"])
         .output()
         .unwrap();
@@ -2257,10 +2272,7 @@ fn session_mode_reads_editable_state_through_references_and_selectors() {
 fn snapshot_defaults_to_the_full_accessibility_tree() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<main><h1>Hello</h1><button>Save</button></main>"#);
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
-        .args(["snapshot", &url])
-        .output()
-        .unwrap();
+    let output = browser_command().args(["snapshot", &url]).output().unwrap();
     server.join().unwrap();
     drop(network_guard);
 
@@ -2308,7 +2320,7 @@ fn full_snapshot_matches_document_list_marker_projection() {
 
 #[test]
 fn invalid_snapshot_selector_fails_before_loading() {
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args([
             "snapshot",
             "http://127.0.0.1:1",
@@ -2332,7 +2344,7 @@ fn invalid_snapshot_selector_fails_before_loading() {
 fn empty_interactive_snapshot_succeeds() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<p>Nothing actionable</p>"#);
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args(["snapshot", &url, "--interactive"])
         .output()
         .unwrap();
@@ -2358,10 +2370,7 @@ fn page_load_failure_is_not_a_pass() {
     let unavailable_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", unavailable_listener.local_addr().unwrap());
     drop(unavailable_listener);
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
-        .args(["lint", &url])
-        .output()
-        .unwrap();
+    let output = browser_command().args(["lint", &url]).output().unwrap();
     drop(network_guard);
 
     assert_eq!(output.status.code(), Some(3));
@@ -2378,7 +2387,7 @@ fn local_page_overflow_reports_structured_evidence() {
     let network_guard = network_test_guard();
     let (url, server) =
         serve_page(r#"<div id="hero" style="position:fixed;left:280px;width:80px"></div>"#);
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args(["lint", &url, "--viewport", "320"])
         .output()
         .unwrap();
@@ -2406,7 +2415,7 @@ fn fitting_local_page_passes() {
     let network_guard = network_test_guard();
     let (url, server) =
         serve_page(r#"<main id="content" style="position:fixed;left:0;width:320px"></main>"#);
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args(["lint", &url, "--viewport", "320"])
         .output()
         .unwrap();
@@ -2430,7 +2439,7 @@ fn fitting_local_page_passes() {
 fn normal_block_local_page_passes() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<main id="content"></main>"#);
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args(["lint", &url, "--viewport", "320"])
         .output()
         .unwrap();
@@ -2454,10 +2463,7 @@ fn normal_block_local_page_passes() {
 fn unsupported_page_layout_is_blocked() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<span id="content"></span>"#);
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
-        .args(["lint", &url])
-        .output()
-        .unwrap();
+    let output = browser_command().args(["lint", &url]).output().unwrap();
     server.join().unwrap();
     drop(network_guard);
 
@@ -2472,7 +2478,7 @@ fn unsupported_page_layout_is_blocked() {
 fn project_width_limit_reports_observed_width() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(r#"<main id="content" style="width:880px"></main>"#);
-    let output = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+    let output = browser_command()
         .args([
             "lint",
             &url,

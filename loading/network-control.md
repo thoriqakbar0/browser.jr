@@ -2,7 +2,7 @@
 
 ## Summary
 
-browser.jr loads public HTTP and HTTPS pages. Explicit `localhost` and loopback-IP targets remain available for local development. Other private and non-routable targets are blocked.
+browser.jr loads public HTTP and HTTPS pages. `localhost` and loopback-IP targets require explicit session access for local development. Other private and non-routable targets are blocked.
 
 ## The simple case
 
@@ -25,7 +25,7 @@ stateDiagram-v2
 
 ### Invoke
 
-The caller supplies an HTTP or HTTPS URL without credentials.
+The caller supplies an HTTP or HTTPS URL without credentials. CLI callers add `--allow-loopback` for local targets. Package callers create the session with `NetworkAccess::PublicAndLoopback`.
 
 ### Exit immediately
 
@@ -47,8 +47,8 @@ A successful open installs the final response URL. Failures preserve the previou
 
 | Modifier | Set at invocation | Changed while running |
 | --- | --- | --- |
-| Flags and options | No network-policy flag exists. | Nothing changes. |
-| Project configuration | No network configuration exists. | Nothing reloads. |
+| Flags and options | `--allow-loopback` grants loopback access to the CLI session. | The access stays fixed. |
+| Project configuration | Package callers select `NetworkAccess` when they create a session. | The access stays fixed. |
 | Target matrix | One URL is loaded. | Redirects may replace the target URL. |
 | Output channel | Load failures use the command's normal error channel. | The channel stays fixed. |
 
@@ -87,12 +87,11 @@ A successful open installs the final response URL. Failures preserve the previou
 - Credentials are rejected.
 - IPv4-mapped IPv6 addresses use the IPv4 policy.
 - The public policy blocks the IANA IPv4 and IPv6 special-purpose ranges, including carrier-grade NAT, translation, tunneling, link-local, multicast, documentation, benchmarking, and reserved ranges.
-- Explicit loopback URLs remain supported for local fixtures.
+- Explicit loopback URLs remain supported for local fixtures only when loopback access is enabled.
 - Redirects receive the same DNS and address checks as the initial request.
 - TLS certificates must chain to a trusted root and match the original URL hostname.
 
 ## Open questions and verification
 
-- Decide whether private-network access needs an explicit opt-in mode.
 
 Drafted from the Rust implementation and focused tests on 2026-09-01.

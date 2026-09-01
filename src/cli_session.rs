@@ -1,5 +1,6 @@
 use std::io::{BufRead, Write};
 
+use crate::NetworkAccess;
 use crate::cli::{ExitStatus, combine_status, write_line, write_session_error};
 use crate::cli_output::{
     SnapshotOutputOptions, format_accessibility_snapshot_node, format_snapshot_element,
@@ -102,9 +103,9 @@ pub(crate) struct CliSession {
 }
 
 impl CliSession {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn with_network_access(network_access: NetworkAccess) -> Self {
         Self {
-            engine: Session::new(),
+            engine: Session::with_network_access(network_access),
             current_references: Vec::new(),
             raster: OnDemandRasterProcess::new(SoftwareRasterProcessFactory),
             next_screenshot_id: 1,
@@ -1972,12 +1973,13 @@ pub(crate) fn run_session(
     input: &mut impl BufRead,
     output: &mut impl Write,
     errors: &mut impl Write,
+    network_access: NetworkAccess,
 ) -> ExitStatus {
     if writeln!(output, "session ready").is_err() || output.flush().is_err() {
         return ExitStatus::Unavailable;
     }
 
-    let mut session = CliSession::new();
+    let mut session = CliSession::with_network_access(network_access);
     let commands_status = run_commands(&mut session, input, output, errors);
     let status = combine_status(
         commands_status,
@@ -3113,7 +3115,7 @@ mod tests {
         SelectCommandValues, SessionCommand, SnapshotOutputOptions, SnapshotSessionOptions,
         SnapshotSessionProjection, build_direct_locator, parse_command, run_session,
     };
-    use crate::Locator;
+    use crate::{Locator, NetworkAccess};
     use std::io::Cursor;
 
     #[test]
@@ -3122,7 +3124,12 @@ mod tests {
         let mut output = Vec::new();
         let mut errors = Vec::new();
 
-        let status = run_session(&mut input, &mut output, &mut errors);
+        let status = run_session(
+            &mut input,
+            &mut output,
+            &mut errors,
+            NetworkAccess::PublicAndLoopback,
+        );
 
         assert_eq!(status, ExitStatus::InvalidInput);
         let output = String::from_utf8(output).unwrap();
@@ -3208,7 +3215,12 @@ mod tests {
         let mut output = Vec::new();
         let mut errors = Vec::new();
 
-        let status = run_session(&mut input, &mut output, &mut errors);
+        let status = run_session(
+            &mut input,
+            &mut output,
+            &mut errors,
+            NetworkAccess::PublicAndLoopback,
+        );
 
         assert_eq!(status, ExitStatus::InvalidInput);
         assert!(

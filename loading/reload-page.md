@@ -100,7 +100,7 @@ The caller must capture again before another reference action or observation.
 
 **Resource limits.** The body limit is one MiB. The request limit is 15 seconds.
 
-**Network and storage.** Reload permits public HTTP and HTTPS plus explicit loopback targets. It writes no persistent storage.
+**Network and storage.** Reload permits public HTTP and HTTPS plus loopback targets when session access permits them. It writes no persistent storage.
 
 **Rendering compatibility.** The new response uses the same static HTML and rendering subsets as open.
 

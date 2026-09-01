@@ -59,7 +59,7 @@ A new open, link, or form navigation after a back move removes every forward ent
 
 ### While running
 
-browser.jr loads the selected URL through the same bounded loopback loader as `OpenPage`.
+browser.jr loads the selected URL through the same bounded network loader as `OpenPage`.
 
 History movement refetches and reparses the URL. It does not restore a cached document.
 
@@ -114,7 +114,7 @@ Session output reports the command, URL, and `navigated` state. Successful moves
 
 **Resource limits.** Each move uses the one MiB body limit. A wall-clock timeout is not implemented.
 
-**Network and storage.** Every successful move performs a loopback HTTP request. History remains in memory.
+**Network and storage.** Every successful move loads through the session network policy. History remains in memory.
 
 **Rendering compatibility.** Playwright [`page.goBack()`](https://playwright.dev/docs/api/class-page#page-go-back) and [`page.goForward()`](https://playwright.dev/docs/api/class-page#page-go-forward) return `null` at a bound.
 
