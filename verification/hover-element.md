@@ -14,9 +14,10 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | HOVER-06 | P1 | package | Document replacement clears pointer state ([Edge cases](../interaction/hover-element.md#edge-cases)). | Serve the same visible button twice. | Hover, reload, then read by locator. | The new document returns false. | partial: package test passed, 2026-08-31 |
 | HOVER-07 | P1 | package | Hover auto-scrolls after visibility checks ([While running](../interaction/hover-element.md#while-running)). | Put one supported structural target below a short viewport. | Hover it through CSS, then read its box. | The complete box is inside the viewport. Pointer state becomes current. | partial: package and compiled-process tests passed, 2026-08-31 |
 | HOVER-08 | P1 | pipe | Hover blocks unsupported motion without replacing pointer state ([Begin running](../interaction/hover-element.md#begin-running)). | Give reference and locator targets inline motion declarations. | Hover each target, then inspect current pointer state. | Both paths report the stable check. No target becomes hovered. | partial: package and compiled-process tests passed, 2026-09-01 |
+| HOVER-09 | P1 | pipe | A supported fixed blocker rejects hover transactionally ([Begin running](../interaction/hover-element.md#begin-running)). | Cover a supported hover target's action point with an earlier fixed element. | Hover through reference and locator paths, then inspect pointer state. | Both paths name the receives-events check and blocker. Offsets and pointer state remain unchanged. | partial: package and compiled-process tests passed; Playwright 1.62.1 and `agent-browser` 0.32.4 rejected the blocker, 2026-09-01 |
 
 Not checkable yet:
 
-- Pointer coordinates, events, receives-events checks, and motion frame sampling do not exist.
+- Pointer events, complete receives-events hit testing, and motion frame sampling do not exist.
 - Dynamic CSS `:hover` matching does not exist.
 - Hover options and auto-waiting do not exist.

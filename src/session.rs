@@ -11,10 +11,10 @@ use crate::loading::{LoadError, load_local_html, resolve_url_reference};
 use crate::locator::{Locator, LocatorMatch, LocatorPosition, RoleLocator, RoleMatch};
 use crate::non_empty::NonEmpty;
 use crate::page::{
-    AccessibilityNodeSource, ControlState, InteractiveAction, InteractiveElementSource,
-    LocatorElementSource, SelectValueError, SelectorIndex, SelectorQueryError,
-    SequentialFocusSource, TextValueError, page_semantics_from_html_with_viewport,
-    paint_commands_from_html,
+    AccessibilityNodeSource, ControlState, HitTestCandidate, HitTestLayer, InteractiveAction,
+    InteractiveElementSource, LocatorElementSource, SelectValueError, SelectorIndex,
+    SelectorQueryError, SequentialFocusSource, TextValueError,
+    page_semantics_from_html_with_viewport, paint_commands_from_html,
 };
 use crate::rules::{
     RuleResult, WidthFinding, evaluate_horizontal_overflow, evaluate_max_element_width,
@@ -107,6 +107,15 @@ struct DomEventTarget {
     target: String,
     target_ordinal: usize,
     path: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+struct HitTestPoint {
+    x: i64,
+    y: i64,
+    scroll_x: u64,
+    scroll_y: u64,
+    target_layer: HitTestLayer,
 }
 
 /// Drains native DOM event records created since the prior drain.
@@ -633,6 +642,8 @@ impl CurrentPage {
                 self.locator_elements[source_index]
                     .stable()
                     .map_err(|reason| (ActionabilityCheck::Stable, reason.into()))?;
+                self.receives_events(source_index, viewport)
+                    .map_err(|reason| (ActionabilityCheck::ReceivesEvents, reason))?;
             }
             Ok(false) => {
                 return Err((
@@ -702,6 +713,131 @@ impl CurrentPage {
         self.scroll_box_into_view(bounding_box, scrolls_with_document, viewport);
     }
 
+    fn receives_events(&self, source_index: usize, viewport: ViewportSize) -> Result<(), String> {
+        let Some(point) = self.hit_test_point(source_index, viewport)? else {
+            return Ok(());
+        };
+        let Some(hit_index) = self.hit_test_source_at(source_index, point)? else {
+            return Err(format!(
+                "no supported element receives pointer events at ({}, {})",
+                point.x, point.y
+            ));
+        };
+        if hit_index == source_index
+            || locator_element_is_descendant(&self.locator_elements, hit_index, source_index)
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "{} intercepts pointer events at ({}, {})",
+            self.locator_elements[hit_index].element, point.x, point.y
+        ))
+    }
+
+    fn hit_test_point(
+        &self,
+        source_index: usize,
+        viewport: ViewportSize,
+    ) -> Result<Option<HitTestPoint>, String> {
+        let Ok(Some((target_box, scrolls_with_document))) =
+            self.locator_elements[source_index].document_bounding_box()
+        else {
+            return Ok(None);
+        };
+        let (scroll_x, scroll_y) =
+            self.scroll_offsets_for_box(target_box, scrolls_with_document, viewport);
+        let target_box = self.locator_elements[source_index]
+            .bounding_box(scroll_x, scroll_y)
+            .map_err(str::to_owned)?
+            .ok_or_else(|| "element is hidden or has an empty box".to_owned())?;
+        let (point_x, point_y) = action_point(target_box, viewport)
+            .ok_or_else(|| "element has no action point inside the viewport".to_owned())?;
+        Ok(Some(HitTestPoint {
+            x: point_x,
+            y: point_y,
+            scroll_x,
+            scroll_y,
+            target_layer: hit_test_layer_for_scroll(scrolls_with_document),
+        }))
+    }
+
+    fn hit_test_source_at(
+        &self,
+        source_index: usize,
+        point: HitTestPoint,
+    ) -> Result<Option<usize>, String> {
+        let mut hit = None::<(HitTestLayer, usize)>;
+        for index in 0..self.locator_elements.len() {
+            let Some(layer) = self.hit_test_candidate_layer(source_index, index, point)? else {
+                continue;
+            };
+            if hit.is_none_or(|current| (layer, index) >= current) {
+                hit = Some((layer, index));
+            }
+        }
+        Ok(hit.map(|(_, index)| index))
+    }
+
+    fn hit_test_candidate_layer(
+        &self,
+        source_index: usize,
+        candidate_index: usize,
+        point: HitTestPoint,
+    ) -> Result<Option<HitTestLayer>, String> {
+        let candidate = &self.locator_elements[candidate_index];
+        match candidate.hit_test_candidate(point.scroll_x, point.scroll_y) {
+            HitTestCandidate::ReceivesEvents {
+                layer,
+                bounding_box,
+            } => Ok(bounding_box_contains(bounding_box, point.x, point.y).then_some(layer)),
+            HitTestCandidate::IgnoresEvents => Ok(None),
+            HitTestCandidate::Unsupported {
+                layer,
+                bounding_box,
+                reason,
+            } => self.unsupported_hit_test_candidate(
+                source_index,
+                candidate_index,
+                point,
+                layer,
+                bounding_box,
+                reason,
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn unsupported_hit_test_candidate(
+        &self,
+        source_index: usize,
+        candidate_index: usize,
+        point: HitTestPoint,
+        layer: HitTestLayer,
+        bounding_box: Option<BoundingBox>,
+        reason: &str,
+    ) -> Result<Option<HitTestLayer>, String> {
+        let same_subtree = candidate_index != source_index
+            && (locator_element_is_descendant(
+                &self.locator_elements,
+                candidate_index,
+                source_index,
+            ) || locator_element_is_descendant(
+                &self.locator_elements,
+                source_index,
+                candidate_index,
+            ));
+        let cannot_cover = layer < point.target_layer
+            || bounding_box
+                .is_some_and(|bounding_box| !bounding_box_contains(bounding_box, point.x, point.y));
+        if candidate_index != source_index && (same_subtree || cannot_cover) {
+            return Ok(None);
+        }
+        Err(format!(
+            "hit-test evidence for {} is not implemented: {reason}",
+            self.locator_elements[candidate_index].element
+        ))
+    }
+
     fn scroll_box_into_view(
         &mut self,
         bounding_box: BoundingBox,
@@ -710,23 +846,36 @@ impl CurrentPage {
     ) -> PageScroll {
         let previous_x = self.scroll_x;
         let previous_y = self.scroll_y;
-        if scrolls_with_document {
-            self.scroll_x = scroll_axis_into_view(
+        (self.scroll_x, self.scroll_y) =
+            self.scroll_offsets_for_box(bounding_box, scrolls_with_document, viewport);
+        self.scroll_result(previous_x, previous_y)
+    }
+
+    fn scroll_offsets_for_box(
+        &self,
+        bounding_box: BoundingBox,
+        scrolls_with_document: bool,
+        viewport: ViewportSize,
+    ) -> (u64, u64) {
+        if !scrolls_with_document {
+            return (self.scroll_x, self.scroll_y);
+        }
+        (
+            scroll_axis_into_view(
                 self.scroll_x,
                 self.max_scroll_x(viewport),
                 bounding_box.x,
                 bounding_box.width,
                 viewport.width,
-            );
-            self.scroll_y = scroll_axis_into_view(
+            ),
+            scroll_axis_into_view(
                 self.scroll_y,
                 self.max_scroll_y(viewport),
                 bounding_box.y,
                 bounding_box.height,
                 viewport.height,
-            );
-        }
-        self.scroll_result(previous_x, previous_y)
+            ),
+        )
     }
 
     fn resize(&mut self, viewport: ViewportSize) -> PageScroll {
@@ -1252,6 +1401,41 @@ fn scroll_axis_into_view(
     u64::try_from(target.max(0))
         .unwrap_or(u64::MAX)
         .min(maximum)
+}
+
+fn action_point(bounding_box: BoundingBox, viewport: ViewportSize) -> Option<(i64, i64)> {
+    let left = i128::from(bounding_box.x).max(0);
+    let top = i128::from(bounding_box.y).max(0);
+    let right = (i128::from(bounding_box.x) + i128::from(bounding_box.width))
+        .min(i128::from(viewport.width));
+    let bottom = (i128::from(bounding_box.y) + i128::from(bounding_box.height))
+        .min(i128::from(viewport.height));
+    if left >= right || top >= bottom {
+        return None;
+    }
+    Some((
+        i64::try_from((left + right) / 2).ok()?,
+        i64::try_from((top + bottom) / 2).ok()?,
+    ))
+}
+
+fn hit_test_layer_for_scroll(scrolls_with_document: bool) -> HitTestLayer {
+    if scrolls_with_document {
+        HitTestLayer::Normal
+    } else {
+        HitTestLayer::Fixed
+    }
+}
+
+fn bounding_box_contains(bounding_box: BoundingBox, x: i64, y: i64) -> bool {
+    let x = i128::from(x);
+    let y = i128::from(y);
+    let left = i128::from(bounding_box.x);
+    let top = i128::from(bounding_box.y);
+    x >= left
+        && x < left + i128::from(bounding_box.width)
+        && y >= top
+        && y < top + i128::from(bounding_box.height)
 }
 
 fn focus_after(
@@ -1942,6 +2126,7 @@ impl SessionRequest for ScrollPage {
 pub enum ActionabilityCheck {
     Visible,
     Stable,
+    ReceivesEvents,
     Enabled,
     Editable,
 }
@@ -1976,6 +2161,7 @@ impl std::fmt::Display for ActionabilityCheck {
         formatter.write_str(match self {
             Self::Visible => "visible",
             Self::Stable => "stable",
+            Self::ReceivesEvents => "receives events",
             Self::Enabled => "enabled",
             Self::Editable => "editable",
         })
@@ -3054,6 +3240,12 @@ fn execute_click_by_locator(
         &page.locator_elements[resolved.source_index],
         LocatorAction::Click,
     )?;
+    require_locator_receives_events(
+        page,
+        resolved.source_index,
+        LocatorAction::Click,
+        session.viewport,
+    )?;
     let action = element.action.clone();
     let event_target = session.dom_event_target(index);
     match action {
@@ -3523,6 +3715,7 @@ fn execute_set_checked_by_locator(
     require_locator_visible(&page.interactive_elements[index], action)?;
     let source_index = page.source_index_for_interactive(index);
     require_locator_stable(&page.locator_elements[source_index], action)?;
+    require_locator_receives_events(page, source_index, action, viewport)?;
     page.auto_scroll_into_view(source_index, viewport);
     let result = match page.set_checked(index, replacement) {
         Ok(checked) => Ok(SetCheckedByLocatorResult {
@@ -3632,6 +3825,15 @@ impl SessionRequest for ClickElement {
             .map_err(|reason| SessionError::UnsupportedClick {
                 reference: self.reference,
                 reason: format!("stable check failed: {reason}"),
+            })?;
+        session
+            .current_page
+            .as_ref()
+            .expect("validated reference requires a current page")
+            .receives_events(source_index, session.viewport)
+            .map_err(|reason| SessionError::UnsupportedClick {
+                reference: self.reference,
+                reason: format!("receives events check failed: {reason}"),
             })?;
         let action = element.action.clone();
         let event_target = session.dom_event_target(index);
@@ -5168,6 +5370,11 @@ impl SessionRequest for SetElementChecked {
                 reference: self.reference,
                 reason: format!("stable check failed: {reason}"),
             })?;
+        page.receives_events(source_index, viewport)
+            .map_err(|reason| SessionError::UnsupportedCheck {
+                reference: self.reference,
+                reason: format!("receives events check failed: {reason}"),
+            })?;
         page.auto_scroll_into_view(source_index, viewport);
         let result = match page.set_checked(index, self.checked) {
             Ok(checked) => Ok(SetCheckedResult {
@@ -5721,6 +5928,20 @@ fn require_locator_stable(
             action,
             check: ActionabilityCheck::Stable,
             reason: reason.into(),
+        })
+}
+
+fn require_locator_receives_events(
+    page: &CurrentPage,
+    source_index: usize,
+    action: LocatorAction,
+    viewport: ViewportSize,
+) -> Result<(), LocatorOperationError> {
+    page.receives_events(source_index, viewport)
+        .map_err(|reason| LocatorOperationError::ActionBlocked {
+            action,
+            check: ActionabilityCheck::ReceivesEvents,
+            reason,
         })
 }
 

@@ -79,6 +79,8 @@ Normal-flow boxes subtract the current horizontal and vertical page offsets.
 
 Fixed boxes keep their viewport coordinates after page scrolling.
 
+Their supported descendants also keep viewport coordinates.
+
 Longhand padding and painted border widths expand a content box.
 
 `box-sizing:border-box` keeps the declared width and height when their edges fit.
@@ -160,6 +162,7 @@ Unsupported evidence returns `SessionError::UnsupportedBoundingBox` or `Unsuppor
 - Zero width or height returns no box.
 - Supported normal blocks stack in document order.
 - Fixed descendants do not move their normal-flow siblings.
+- Supported descendants of fixed boxes remain viewport relative while the page scrolls.
 - Auto-height containers use supported in-flow child boxes.
 - Empty auto-height boxes return no box and consume no flow height.
 - `display:none` targets consume no flow height.

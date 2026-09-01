@@ -12,6 +12,8 @@ Native button, checkbox, and radio clicks move current page focus to their targe
 
 Supported local clicks reveal an off-screen target box after checks and before mutation.
 
+Supported static hit-test scenes reject a fixed or later normal-flow element that owns the action point.
+
 Every successful supported click records `click` in the native event transcript.
 
 A changed checkbox or radio also records `input`, then `change`.
@@ -37,7 +39,7 @@ stateDiagram-v2
     [*] --> resolving
     resolving --> rejected : missing, stale, or ambiguous target
     resolving --> checking : one interactive target
-    checking --> blocked : hidden, unstable, disabled, or unsupported evidence
+    checking --> blocked : hidden, unstable, disabled, covered, or unsupported evidence
     checking --> classifying : supported target
     classifying --> navigating : same-context link
     classifying --> submitting : supported GET submitter
@@ -87,7 +89,19 @@ Every click also requires supported static stability evidence.
 
 Inline animation or transition declarations on the target or its ancestors block that evidence.
 
-browser.jr does not sample animation frames or check whether the target receives pointer events.
+When target geometry is supported, browser.jr computes the post-scroll action point without changing page offsets.
+
+It checks supported static and fixed boxes at that point.
+
+A target descendant may receive the event. A box with `pointer-events:none` cannot receive it.
+
+A known outside blocker reports the `ReceivesEvents` actionability check and its element identity.
+
+Overlapping unsupported hit-test evidence also blocks instead of becoming a pass.
+
+Unsupported target geometry keeps the earlier action behavior without claiming a complete document hit test.
+
+browser.jr does not sample animation frames or model complete stacking, clipping, or transformed hit geometry.
 
 A supported local click auto-scrolls when browser.jr has a complete target box.
 
@@ -116,6 +130,8 @@ Explicit ARIA buttons and checkboxes do not gain native default actions.
 ### While running
 
 A supported local click reveals its target before applying focus or checked state.
+
+It commits the same prospective scroll used to choose the action point.
 
 A rejected local click preserves page offsets and native state.
 
@@ -214,11 +230,11 @@ Package callers drain records with `TakeDomEvents`. Session callers use `events`
 
 It then performs a mouse click and waits for initiated navigation.
 
-browser.jr checks strictness for locators, plus supported visibility, static stability, and enabled evidence.
+browser.jr checks strictness for locators, plus supported visibility, static stability, enabled evidence, and bounded event receipt.
 
 It auto-scrolls supported local target boxes after those checks.
 
-It applies supported native default effects without pointer geometry.
+It applies supported native default effects without dispatching pointer input.
 
 It records supported native event metadata without delivering events to page handlers.
 
@@ -240,6 +256,10 @@ All three engines timed out while clicking a continuously moving control.
 
 `agent-browser` 0.32.4 Lightpanda clicked the same control immediately. See [BJR-010](../bug-triage.md#bjr-010).
 
+All three Playwright engines rejected a fixed blocker and accepted a target descendant.
+
+They also ignored a `pointer-events:none` blocker. `agent-browser` Lightpanda rejected it. See [BJR-011](../bug-triage.md#bjr-011).
+
 **Isolation.** Click state belongs to one session and document.
 
 **Accessibility inspection.** Semantic locators use the implemented role and accessible-name subset.
@@ -253,6 +273,10 @@ All three engines timed out while clicking a continuously moving control.
 - An unnamed radio is its own group.
 - A hidden button never gains focus.
 - Inline animation or transition declarations block before click effects.
+- A supported fixed blocker rejects the click before scrolling, focus, state, or event mutation.
+- A supported target descendant may own the action point.
+- A `pointer-events:none` box does not block a supported target.
+- A target with `pointer-events:none` rejects when another supported element owns the action point.
 - An off-screen supported local target moves into the viewport before mutation.
 - Unsupported target geometry preserves offsets and keeps the supported click behavior.
 - Failed local clicks preserve page offsets.
@@ -276,7 +300,8 @@ All three engines timed out while clicking a continuously moving control.
 
 - Add pointer, mouse, focus, and submit records.
 - Add page-script event delivery after JavaScript exists.
-- Add receives-events evidence and frame sampling for supported motion.
+- Complete stacking, clipping, transformed geometry, and unsupported-scene hit testing.
+- Add frame sampling for supported motion.
 - Expand form submission and implement reset.
 - Define click coordinates, modifiers, count, force, trial, scroll control, and timeouts.
 

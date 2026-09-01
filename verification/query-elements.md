@@ -67,12 +67,13 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | QUERY-59 | P1 | pipe | Content names include descendant image text alternatives ([Begin running](../inspection/query-elements.md#begin-running)). | Serve an icon-only button with a nested non-presentational image. | Resolve the button through its exact image `alt` text, then capture an interactive snapshot. | The role locator and snapshot expose the image `alt` text as the button's accessible name. | partial: unit, package, compiled-process, Playwright 1.62.1 Chromium, Firefox, WebKit, and `agent-browser` 0.32.4 Lightpanda checks passed, 2026-09-01 |
 | QUERY-60 | P1 | pipe | Pointer locators expose typed static stability failures ([While running](../inspection/query-elements.md#while-running)). | Give click, hover, and checked-state targets inline motion declarations. | Run each action through strict locators, then inspect state and events. | Each failure names the stable check. No action effect commits. | partial: package and compiled-process tests passed, 2026-09-01 |
 | QUERY-61 | P1 | pipe | CSS traversal follows normalized HTML ancestry ([Begin running](../inspection/query-elements.md#begin-running)). | Serve omitted roots, optional `li` endings, and an implicit `tbody`. | Resolve structural, descendant, and child selectors. | Each selector follows the parser-built tree without exposing implied roots as targets. | partial: unit, package, and compiled-process tests passed, 2026-08-31 |
+| QUERY-62 | P1 | pipe | Pointer locators expose typed receives-events blockers ([While running](../inspection/query-elements.md#while-running)). | Cover supported click, hover, and checked-state targets with one fixed element. | Run each action through strict CSS locators, then inspect state and events. | Each failure names the receives-events check and blocker. No action effect commits. | partial: package and compiled-process tests passed, 2026-09-01 |
 
 Not checkable yet:
 
 - Full ARIA role, state, name, and description computation does not exist.
 - Auto-waiting and action timeouts do not exist.
-- Receives-events checks and motion frame sampling do not exist.
+- Complete receives-events hit testing and motion frame sampling do not exist.
 - Pointer and remaining event records, page-script delivery, remaining form defaults, and dynamic CSS `:hover` do not exist.
 - Regular-expression locator matching does not exist.
 - Complete CSS and XPath conformance coverage does not exist.

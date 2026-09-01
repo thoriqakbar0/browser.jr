@@ -18,6 +18,7 @@ Run these checks against a controlled loopback page. Record the fixture and brow
 | BOX-10 | P1 | pipe | Explicit normal-flow interactive boxes support references and selectors ([Begin running](../inspection/inspect-layout.md#begin-running)). | Serve a border-box button inside stacked blocks. | Read its reference and a later CSS target. | Both boxes report their normal-flow coordinates. The reference remains usable. | partial: package and compiled-process tests passed, 2026-08-31 |
 | BOX-11 | P1 | package | Box reads use current viewport offsets ([While running](../inspection/inspect-layout.md#while-running)). | Serve normal and fixed supported boxes. | Scroll both axes and read both boxes. | Normal coordinates change. Fixed coordinates stay stable. | partial: package test passed, 2026-08-31 |
 | BOX-12 | P1 | package | Viewport resize recomputes supported boxes ([Begin running](../inspection/inspect-layout.md#begin-running)). | Serve an explicit-height body. | Read at 640 width, resize to 800, and read again. | The viewport-relative body width changes from 624 to 784. | partial: package test passed, 2026-08-31 |
+| BOX-13 | P1 | package | Supported descendants of fixed boxes remain viewport relative ([While running](../inspection/inspect-layout.md#while-running)). | Put one supported block inside a fixed parent above a scrollable document. | Read the child, scroll both axes, and read it again. | Both reads return the same box. | partial: package test passed, 2026-09-01 |
 
 Not checkable yet:
 

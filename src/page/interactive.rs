@@ -107,6 +107,7 @@ struct LocatorEvidence {
     semantic: LocatorSemanticEvidence,
     visibility: VisibilityState,
     stability: StabilityState,
+    hit_test: HitTestState,
     bounding_box: BoundingBoxEvidence,
     source: LocatorSourceEvidence,
 }
@@ -148,6 +149,41 @@ enum BoundingBoxEvidence {
 enum StabilityState {
     Stable,
     Unsupported(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum HitTestLayer {
+    Normal,
+    Fixed,
+}
+
+pub(crate) enum HitTestCandidate<'a> {
+    ReceivesEvents {
+        layer: HitTestLayer,
+        bounding_box: BoundingBox,
+    },
+    IgnoresEvents,
+    Unsupported {
+        layer: HitTestLayer,
+        bounding_box: Option<BoundingBox>,
+        reason: &'a str,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum HitTestState {
+    ReceivesEvents {
+        layer: HitTestLayer,
+        bounding_box: BoundingBox,
+        scrolls_with_document: bool,
+    },
+    IgnoresEvents,
+    Unsupported {
+        layer: HitTestLayer,
+        bounding_box: Option<BoundingBox>,
+        scrolls_with_document: bool,
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -791,6 +827,37 @@ impl LocatorElementSource {
         match &self.evidence.stability {
             StabilityState::Stable => Ok(()),
             StabilityState::Unsupported(reason) => Err(reason),
+        }
+    }
+
+    pub(crate) fn hit_test_candidate(&self, scroll_x: u64, scroll_y: u64) -> HitTestCandidate<'_> {
+        match &self.evidence.hit_test {
+            HitTestState::ReceivesEvents {
+                layer,
+                bounding_box,
+                scrolls_with_document,
+            } => HitTestCandidate::ReceivesEvents {
+                bounding_box: scroll_hit_test_box(
+                    *bounding_box,
+                    *scrolls_with_document,
+                    scroll_x,
+                    scroll_y,
+                ),
+                layer: *layer,
+            },
+            HitTestState::IgnoresEvents => HitTestCandidate::IgnoresEvents,
+            HitTestState::Unsupported {
+                layer,
+                bounding_box,
+                scrolls_with_document,
+                reason,
+            } => HitTestCandidate::Unsupported {
+                layer: *layer,
+                bounding_box: bounding_box.map(|bounding_box| {
+                    scroll_hit_test_box(bounding_box, *scrolls_with_document, scroll_x, scroll_y)
+                }),
+                reason,
+            },
         }
     }
 
@@ -1575,13 +1642,14 @@ fn element_sources(
             {
                 Ok(value) if value.width > 0 && value.height > 0 => BoundingBoxEvidence::Visible {
                     value: *value,
-                    scrolls_with_document: source_scrolls_with_document(index, styles),
+                    scrolls_with_document: source_scrolls_with_document(index, sources, styles),
                 },
                 Ok(_) => BoundingBoxEvidence::Hidden,
                 Err(reason) => BoundingBoxEvidence::Unsupported(reason.clone()),
             },
         };
         let stability = stability_state(index, sources, styles);
+        let hit_test = hit_test_state(index, source, sources, styles, &bounding_boxes[index]);
         let interactive_index = role
             .as_deref()
             .is_some_and(is_snapshot_reference_role)
@@ -1614,6 +1682,7 @@ fn element_sources(
                 },
                 visibility: visibility.clone(),
                 stability,
+                hit_test,
                 bounding_box,
                 source: LocatorSourceEvidence {
                     tag: source.tag.clone(),
@@ -1693,14 +1762,263 @@ fn motion_property(name: &str) -> bool {
         || name.starts_with("transition-")
 }
 
+fn hit_test_state(
+    source_index: usize,
+    source: &ElementSource,
+    sources: &[ElementSource],
+    styles: Result<&[BTreeMap<String, String>], &str>,
+    bounding_box: &Result<BoundingBox, String>,
+) -> HitTestState {
+    if source.content_ordinal.is_none() {
+        return HitTestState::IgnoresEvents;
+    }
+    let styles = match styles {
+        Ok(styles) => styles,
+        Err(reason) => return unsupported_hit_test_without_geometry(reason),
+    };
+    let ancestry = source_ancestry(source_index, sources);
+    let layer = hit_test_layer(&ancestry, styles);
+    let scrolls_with_document = layer != HitTestLayer::Fixed;
+    let pointer_events =
+        pointer_events_hit_test_state(&ancestry, sources, styles, bounding_box, layer);
+    let visibility =
+        visibility_hit_test_state(source_index, source, sources, styles, bounding_box, layer);
+    if matches!(pointer_events, Some(HitTestState::IgnoresEvents))
+        || matches!(visibility, Some(HitTestState::IgnoresEvents))
+    {
+        return HitTestState::IgnoresEvents;
+    }
+    if let Some(state) = pointer_events {
+        return state;
+    }
+    if let Some(state) = visibility {
+        return state;
+    }
+    let bounding_box = match bounding_box {
+        Ok(value) if value.width > 0 && value.height > 0 => *value,
+        Ok(_) => return HitTestState::IgnoresEvents,
+        Err(reason) => return unsupported_hit_test_geometry(source, layer, reason),
+    };
+    if let Some(reason) = unsupported_hit_test_reason(&ancestry, sources, styles) {
+        return HitTestState::Unsupported {
+            layer,
+            bounding_box: Some(bounding_box),
+            scrolls_with_document,
+            reason,
+        };
+    }
+    HitTestState::ReceivesEvents {
+        layer,
+        bounding_box,
+        scrolls_with_document,
+    }
+}
+
+fn source_ancestry(source_index: usize, sources: &[ElementSource]) -> Vec<usize> {
+    let mut ancestry = Vec::new();
+    let mut current = Some(source_index);
+    while let Some(index) = current {
+        ancestry.push(index);
+        current = sources[index].parent;
+    }
+    ancestry
+}
+
+fn hit_test_layer(ancestry: &[usize], styles: &[BTreeMap<String, String>]) -> HitTestLayer {
+    if ancestry
+        .iter()
+        .any(|index| styles[*index].get("position").map(String::as_str) == Some("fixed"))
+    {
+        HitTestLayer::Fixed
+    } else {
+        HitTestLayer::Normal
+    }
+}
+
+fn pointer_events_hit_test_state(
+    ancestry: &[usize],
+    sources: &[ElementSource],
+    styles: &[BTreeMap<String, String>],
+    bounding_box: &Result<BoundingBox, String>,
+    layer: HitTestLayer,
+) -> Option<HitTestState> {
+    let (value, element) = ancestry.iter().find_map(|index| {
+        styles[*index]
+            .get("pointer-events")
+            .map(|value| (value.as_str(), sources[*index].id.as_str()))
+    })?;
+    match value {
+        "auto" => None,
+        "none" => Some(HitTestState::IgnoresEvents),
+        _ => Some(unsupported_hit_test_state(
+            layer,
+            bounding_box,
+            layer != HitTestLayer::Fixed,
+            format!("pointer-events:{value} hit testing is not implemented for {element}"),
+        )),
+    }
+}
+
+fn visibility_hit_test_state(
+    source_index: usize,
+    source: &ElementSource,
+    sources: &[ElementSource],
+    styles: &[BTreeMap<String, String>],
+    bounding_box: &Result<BoundingBox, String>,
+    layer: HitTestLayer,
+) -> Option<HitTestState> {
+    match focus_visibility_state(source_index, source, sources, styles) {
+        VisibilityState::Visible => None,
+        VisibilityState::Hidden => Some(HitTestState::IgnoresEvents),
+        VisibilityState::Unsupported { reason } => Some(unsupported_hit_test_state(
+            layer,
+            bounding_box,
+            layer != HitTestLayer::Fixed,
+            reason,
+        )),
+    }
+}
+
+fn unsupported_hit_test_reason(
+    ancestry: &[usize],
+    sources: &[ElementSource],
+    styles: &[BTreeMap<String, String>],
+) -> Option<String> {
+    ancestry.iter().enumerate().find_map(|(depth, index)| {
+        unsupported_hit_test_style_reason(depth, &sources[*index].id, &styles[*index])
+    })
+}
+
+fn unsupported_hit_test_style_reason(
+    depth: usize,
+    element: &str,
+    properties: &BTreeMap<String, String>,
+) -> Option<String> {
+    fixed_z_index_reason(element, properties)
+        .or_else(|| clip_reason(element, properties))
+        .or_else(|| overflow_reason(depth, element, properties))
+        .or_else(|| stacking_context_reason(element, properties))
+}
+
+fn fixed_z_index_reason(element: &str, properties: &BTreeMap<String, String>) -> Option<String> {
+    (properties.get("position").map(String::as_str) == Some("fixed")
+        && properties
+            .get("z-index")
+            .is_some_and(|value| value != "auto"))
+    .then(|| format!("fixed-position z-index hit testing is not implemented for {element}"))
+}
+
+fn clip_reason(element: &str, properties: &BTreeMap<String, String>) -> Option<String> {
+    ["clip", "clip-path", "mask", "perspective"]
+        .into_iter()
+        .find(|name| properties.contains_key(*name))
+        .map(|name| format!("inline {name} hit testing is not implemented for {element}"))
+}
+
+fn overflow_reason(
+    depth: usize,
+    element: &str,
+    properties: &BTreeMap<String, String>,
+) -> Option<String> {
+    (depth > 0
+        && properties
+            .get("overflow")
+            .is_some_and(|value| value != "visible"))
+    .then(|| format!("ancestor overflow clipping is not implemented for {element}"))
+}
+
+fn stacking_context_reason(element: &str, properties: &BTreeMap<String, String>) -> Option<String> {
+    let unsupported = properties
+        .get("opacity")
+        .is_some_and(|value| value != "1" && value != "1.0")
+        || properties
+            .get("filter")
+            .is_some_and(|value| value != "none")
+        || properties
+            .get("isolation")
+            .is_some_and(|value| value == "isolate")
+        || properties
+            .get("mix-blend-mode")
+            .is_some_and(|value| value != "normal");
+    unsupported.then(|| format!("stacking-context hit testing is not implemented for {element}"))
+}
+
+fn unsupported_hit_test_without_geometry(reason: &str) -> HitTestState {
+    HitTestState::Unsupported {
+        layer: HitTestLayer::Fixed,
+        bounding_box: None,
+        scrolls_with_document: false,
+        reason: reason.into(),
+    }
+}
+
+fn unsupported_hit_test_geometry(
+    source: &ElementSource,
+    layer: HitTestLayer,
+    reason: &str,
+) -> HitTestState {
+    HitTestState::Unsupported {
+        layer,
+        bounding_box: None,
+        scrolls_with_document: layer != HitTestLayer::Fixed,
+        reason: format!(
+            "hit-test geometry for {} is not implemented: {reason}",
+            source.id
+        ),
+    }
+}
+
+fn unsupported_hit_test_state(
+    layer: HitTestLayer,
+    bounding_box: &Result<BoundingBox, String>,
+    scrolls_with_document: bool,
+    reason: String,
+) -> HitTestState {
+    HitTestState::Unsupported {
+        layer,
+        bounding_box: bounding_box
+            .as_ref()
+            .ok()
+            .copied()
+            .filter(|value| value.width > 0 && value.height > 0),
+        scrolls_with_document,
+        reason,
+    }
+}
+
+fn scroll_hit_test_box(
+    bounding_box: BoundingBox,
+    scrolls_with_document: bool,
+    scroll_x: u64,
+    scroll_y: u64,
+) -> BoundingBox {
+    if !scrolls_with_document {
+        return bounding_box;
+    }
+    BoundingBox {
+        x: subtract_scroll(bounding_box.x, scroll_x),
+        y: subtract_scroll(bounding_box.y, scroll_y),
+        width: bounding_box.width,
+        height: bounding_box.height,
+    }
+}
+
 fn source_scrolls_with_document(
     source_index: usize,
+    sources: &[ElementSource],
     styles: Result<&[BTreeMap<String, String>], &str>,
 ) -> bool {
-    styles
-        .ok()
-        .and_then(|styles| styles[source_index].get("position"))
-        .is_none_or(|position| position != "fixed")
+    let Ok(styles) = styles else {
+        return true;
+    };
+    let mut current = Some(source_index);
+    while let Some(index) = current {
+        if styles[index].get("position").map(String::as_str) == Some("fixed") {
+            return false;
+        }
+        current = sources[index].parent;
+    }
+    true
 }
 
 fn document_extent(
@@ -1714,7 +2032,7 @@ fn document_extent(
         .iter()
         .enumerate()
         .zip(bounding_boxes)
-        .filter(|((index, _), _)| source_scrolls_with_document(*index, styles))
+        .filter(|((index, _), _)| source_scrolls_with_document(*index, sources, styles))
         .filter_map(|(_, bounding_box)| bounding_box.as_ref().ok())
         .fold(
             (viewport_width, viewport_height),

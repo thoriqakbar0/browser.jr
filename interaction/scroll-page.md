@@ -93,6 +93,10 @@ Local click, hover, changed check, and changed uncheck run actionability checks 
 
 These actions use the same smallest adjustment when the target has a supported box.
 
+The bounded receives-events check uses those prospective offsets to choose its action point.
+
+A successful action commits the offsets. A known blocker leaves the previous offsets unchanged.
+
 Unsupported target geometry leaves offsets unchanged. The validated action still runs.
 
 Rejected actions and unchanged check states preserve page offsets.

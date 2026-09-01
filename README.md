@@ -70,6 +70,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - complete viewport-relative boxes for supported fixed and static block geometry
 - bounded page scrolling, explicit scroll-into-view, and supported-box auto-scroll for local click, hover, check, and uncheck
 - supported static stability checks for click, hover, and changed checked-state actions
+- static and fixed action-point blocker checks for supported click, hover, and changed checked-state scenes
 - runtime viewport sizing with state-preserving static page reflow
 - normalized whole-page static text through package, one-shot CLI, and session mode
 - whole-page and CSS-scoped accessibility-tree snapshots with ordered text, native list markers, compact pruning, depth limits, and resolved link URLs
@@ -87,6 +88,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - JavaScript
 - DOM event delivery to page scripts, plus pointer, focus, and complete keyboard event coverage
 - a complete DOM, CSS cascade, or layout engine
+- complete stacking, clipping, transformed geometry, or dynamic receives-events hit testing
 - text, image, native-control, stylesheet, clip, effect, or complete browser paint
 - a separate screenshot helper process or complete browser compositor
 - Playwright or `agent-browser` protocol compatibility

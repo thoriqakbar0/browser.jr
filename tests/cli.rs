@@ -1476,6 +1476,54 @@ fn session_mode_blocks_pointer_actions_without_static_stability_evidence() {
 }
 
 #[test]
+fn session_mode_reports_receives_events_blockers_without_mutation() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body style="margin-left:0;margin-right:0;margin-top:0;margin-bottom:0">
+                <div id="cover" style="position:fixed;left:0;top:0;width:120px;height:100px">Cover</div>
+                <div style="height:200px"></div>
+                <button id="save" style="display:block;box-sizing:border-box;width:120px;height:40px">Save</button>
+                <input id="terms" type="checkbox" aria-label="Terms" style="display:block;box-sizing:border-box;width:20px;height:20px">
+                <button id="hover" style="display:block;box-sizing:border-box;width:120px;height:40px">Hover</button>
+            </body>
+        "#,
+    );
+    let output = run_session_script(&format!(
+        "set viewport 640 100\nopen {url}\nsnapshot -i\nclick @e1\ncheck #terms\nhover #hover\nis focused @e1\nis checked #terms\nis hovered #hover\nevents\nget box @e1\nget text @e1\nexit\n"
+    ));
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stdout.contains("focused ref=@e1 value=false"));
+    assert!(stdout.contains("\nfalse\nfalse\nevents=0"));
+    assert!(stdout.contains("events=0"));
+    assert!(stdout.contains("x:      0\ny:      200\nwidth:  120\nheight: 40"));
+    assert!(stdout.contains(r#"text ref=@e1 "Save""#));
+    assert!(
+        stderr.contains(
+            "browser.jr: cannot click @e1: receives events check failed: cover intercepts pointer events at (60, 80)"
+        ),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "browser.jr: cannot check CSS selector \"#terms\": receives events check blocked: cover intercepts pointer events at (10, 90)"
+        ),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "browser.jr: cannot hover CSS selector \"#hover\": receives events check blocked: cover intercepts pointer events at (60, 80)"
+        ),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
 fn session_mode_fills_text_and_reports_the_new_value() {
     let network_guard = network_test_guard();
     let (url, server) =

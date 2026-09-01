@@ -153,7 +153,7 @@ It does not sample motion frames or check event reception.
 - Define same-document fragment navigation.
 - Define redirects and response commit boundaries.
 - Define link event dispatch and JavaScript navigation.
-- Define motion frame sampling and receives-events checks.
+- Define motion frame sampling and complete receives-events hit testing.
 - Define whether a later one-shot client uses a daemon, socket, or another retained-session transport.
 
 Drafted from Rust implementation and package boundary tests on 2026-09-01.

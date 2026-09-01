@@ -14,6 +14,8 @@ A changed state records `click`, `input`, and `change` in the native event trans
 
 A changed state reveals an off-screen target when browser.jr has complete box geometry.
 
+Supported static hit-test scenes reject a changed state when an outside element owns the action point.
+
 ## The simple case
 
 The caller opens a page and captures an interactive snapshot. It selects a checkbox or radio reference.
@@ -34,7 +36,7 @@ stateDiagram-v2
     checking_control --> unsupported : not a native checked control
     checking_control --> reported : requested state already stored
     checking_control --> checking_actionability : state change required
-    checking_actionability --> blocked : disabled, hidden, unstable, or unsupported target
+    checking_actionability --> blocked : disabled, hidden, unstable, covered, or unsupported target
     checking_actionability --> scrolling : mutable checkbox or radio
     scrolling --> storing
     storing --> recording
@@ -67,6 +69,14 @@ Changed states require supported visible and static stability evidence. Disabled
 
 Inline animation or transition declarations on the target or its ancestors block changed requests.
 
+Supported target geometry enables a bounded `ReceivesEvents` check at the prospective post-scroll action point.
+
+The check accepts target descendants and ignores boxes with `pointer-events:none`.
+
+Overlapping unsupported hit-test evidence blocks the changed request.
+
+Unsupported target geometry keeps the earlier checked-state behavior without claiming a complete document hit test.
+
 Explicit ARIA checked roles do not create mutable native state.
 
 Unsupported box geometry leaves offsets unchanged. It does not block a valid changed state.
@@ -74,6 +84,8 @@ Unsupported box geometry leaves offsets unchanged. It does not block a valid cha
 ### While running
 
 Changed checkbox actions reveal supported target boxes before replacing the stored Boolean state.
+
+They commit the same prospective scroll used to choose the action point.
 
 Rejected changes preserve page offsets and checked state.
 
@@ -148,6 +160,12 @@ Controlled Playwright 1.62.1 Chromium, Firefox, and WebKit runs matched changed 
 
 Playwright requires stable geometry for changed checked-state actions.
 
+Playwright also requires the target to receive pointer events.
+
+Controlled Playwright 1.62.1 Chromium, Firefox, and WebKit rejected a fixed blocker.
+
+They ignored a `pointer-events:none` blocker. `agent-browser` Lightpanda rejected it. See [BJR-011](../bug-triage.md#bjr-011).
+
 **Isolation.** Checked state belongs to one session and document.
 
 **Accessibility inspection.** The accessible name remains separate from checked state.
@@ -161,6 +179,8 @@ Playwright requires stable geometry for changed checked-state actions.
 - Idempotent checked-state requests record no events.
 - Changed checkbox and radio requests record `click`, `input`, and `change`.
 - Inline animation or transition declarations block changed requests before mutation.
+- A supported outside blocker preserves offsets, checked state, references, and events.
+- A target with `pointer-events:none` rejects when another supported element owns the action point.
 - Repeated state requests return without changing page offsets.
 - Changed state reveals an off-screen supported target before mutation.
 - Unsupported target geometry leaves offsets unchanged and still commits a valid change.
@@ -182,5 +202,6 @@ Playwright requires stable geometry for changed checked-state actions.
 - Define keyboard activation records separately from direct checked-state actions.
 - Define ARIA state observation separately from native checked state.
 - Add form submission after scripts and activation behavior exist.
+- Complete stacking, clipping, transformed geometry, and unsupported-scene hit testing.
 
 Drafted from Rust package and compiled-process tests on 2026-09-01.

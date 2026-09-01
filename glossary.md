@@ -130,7 +130,17 @@ References use document-wide ordinals. Scoped snapshots may contain gaps. Anothe
 
 **Stable state.** Supported static evidence that target geometry cannot change during one synchronous action. Motion declarations block this evidence.
 
-Successful pointer actions apply automatic action scrolling after their checks.
+**Action point.** The center of the target's supported viewport intersection after prospective automatic scrolling.
+
+**Receives-events check.** A static hit test over supported normal-flow and fixed boxes at the action point.
+
+The check accepts the target or its descendant. It rejects a known outside blocker and ignores `pointer-events:none` boxes.
+
+An overlapping box with unsupported stacking, clipping, or pointer-event evidence blocks the check.
+
+Unsupported target geometry keeps the earlier action boundary. It does not claim complete document hit-test evidence.
+
+Successful pointer actions commit automatic action scrolling after their checks.
 
 **Click.** An action that navigates a same-context link, submits a supported form, or applies a native control effect.
 

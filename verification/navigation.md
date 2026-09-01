@@ -18,4 +18,4 @@ Run package checks through one `Session`. Run CLI checks through one session-mod
 Not checkable yet:
 
 - JavaScript events and broader POST, reset, and event-driven form behavior do not exist.
-- Reference click does not enforce motion frame sampling or hit-testing actionability checks.
+- Reference click does not enforce motion frame sampling or complete hit-testing actionability checks.

@@ -6066,6 +6066,58 @@ fn page_scroll_moves_document_boxes_keeps_fixed_boxes_and_resets_on_reload() {
 }
 
 #[test]
+fn descendants_of_fixed_boxes_keep_viewport_coordinates_during_scroll() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body>
+                <div style="width:1800px;height:1000px"></div>
+                <div id="fixed" style="position:fixed;left:20px;top:30px;width:100px;height:40px">
+                    <div id="child" style="display:block;width:40px;height:20px">Child</div>
+                </div>
+            </body>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let before = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("#child").unwrap()),
+        })
+        .unwrap();
+    session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Down,
+            distance: 300,
+        })
+        .unwrap();
+    session
+        .execute(ScrollPage {
+            direction: ScrollDirection::Right,
+            distance: 300,
+        })
+        .unwrap();
+    let after = session
+        .execute(GetBoundingBoxByLocator {
+            locator: Locator::from(CssLocator::new("#child").unwrap()),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(before.value, after.value);
+    assert_eq!(
+        after.value,
+        Some(BoundingBox {
+            x: 20,
+            y: 30,
+            width: 40,
+            height: 20,
+        })
+    );
+}
+
+#[test]
 fn scroll_into_view_resolves_references_and_locators_without_replacing_state() {
     let network_guard = network_test_guard();
     let (url, server) = serve_page(
@@ -6268,6 +6320,194 @@ fn pointer_actions_auto_scroll_after_checks_and_keep_failed_actions_transactiona
         })
     ));
     assert_eq!(after_failure, before_failure);
+}
+
+#[test]
+fn pointer_actions_block_when_a_fixed_element_intercepts_the_action_point() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body style="margin-left:0;margin-right:0;margin-top:0;margin-bottom:0">
+                <div id="cover" style="position:fixed;left:0;top:0;width:120px;height:100px">Cover</div>
+                <div style="height:200px"></div>
+                <button id="click" style="display:block;box-sizing:border-box;width:120px;height:40px">Click</button>
+                <input id="check" type="checkbox" style="display:block;box-sizing:border-box;width:20px;height:20px">
+                <button id="hover" style="display:block;box-sizing:border-box;width:120px;height:40px">Hover</button>
+            </body>
+        "#,
+    );
+    let mut session = Session::new();
+    session
+        .execute(SetViewportSize {
+            width: 640,
+            height: 100,
+        })
+        .unwrap();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let snapshot = session.execute(CaptureInteractiveSnapshot).unwrap();
+    let click = snapshot.elements[0].reference;
+    let check = snapshot.elements[1].reference;
+    let hover = snapshot.elements[2].reference;
+    let before = session
+        .execute(GetElementBoundingBox { reference: click })
+        .unwrap();
+
+    let reference_click = session.execute(ClickElement { reference: click });
+    let locator_click = session.execute(ClickByLocator {
+        locator: Locator::from(CssLocator::new("#click").unwrap()),
+    });
+    let reference_check = session.execute(SetElementChecked {
+        reference: check,
+        checked: true,
+    });
+    let locator_check = session.execute(SetCheckedByLocator {
+        locator: Locator::from(CssLocator::new("#check").unwrap()),
+        checked: true,
+    });
+    let reference_hover = session.execute(HoverElement { reference: hover });
+    let locator_hover = session.execute(HoverByLocator {
+        locator: Locator::from(CssLocator::new("#hover").unwrap()),
+    });
+    let focused = session
+        .execute(GetElementFocused { reference: click })
+        .unwrap();
+    let checked = session
+        .execute(GetElementChecked { reference: check })
+        .unwrap();
+    let hovered = session
+        .execute(GetElementHovered { reference: hover })
+        .unwrap();
+    let events = session.execute(TakeDomEvents).unwrap();
+    let after = session
+        .execute(GetElementBoundingBox { reference: click })
+        .unwrap();
+    drop(network_guard);
+
+    assert!(matches!(
+        reference_click,
+        Err(SessionError::UnsupportedClick { reason, .. })
+            if reason == "receives events check failed: cover intercepts pointer events at (60, 80)"
+    ));
+    assert!(matches!(
+        locator_click,
+        Err(SessionError::LocatorActionBlocked {
+            action: LocatorAction::Click,
+            check: ActionabilityCheck::ReceivesEvents,
+            reason,
+            ..
+        }) if reason == "cover intercepts pointer events at (60, 80)"
+    ));
+    assert!(matches!(
+        reference_check,
+        Err(SessionError::UnsupportedCheck { reason, .. })
+            if reason == "receives events check failed: cover intercepts pointer events at (10, 90)"
+    ));
+    assert!(matches!(
+        locator_check,
+        Err(SessionError::LocatorActionBlocked {
+            action: LocatorAction::Check,
+            check: ActionabilityCheck::ReceivesEvents,
+            reason,
+            ..
+        }) if reason == "cover intercepts pointer events at (10, 90)"
+    ));
+    assert!(matches!(
+        reference_hover,
+        Err(SessionError::UnsupportedHover { reason, .. })
+            if reason == "receives events check failed: cover intercepts pointer events at (60, 80)"
+    ));
+    assert!(matches!(
+        locator_hover,
+        Err(SessionError::LocatorActionBlocked {
+            action: LocatorAction::Hover,
+            check: ActionabilityCheck::ReceivesEvents,
+            reason,
+            ..
+        }) if reason == "cover intercepts pointer events at (60, 80)"
+    ));
+    assert!(!focused.focused);
+    assert!(!checked.checked);
+    assert!(!hovered.hovered);
+    assert!(events.is_empty());
+    assert_eq!(after, before);
+}
+
+#[test]
+fn hit_testing_accepts_target_descendants_and_ignores_pointer_events_none() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body style="margin-left:0;margin-right:0;margin-top:0;margin-bottom:0">
+                <button id="target" style="display:block;box-sizing:border-box;width:120px;height:40px;padding-left:0;padding-right:0;padding-top:0;padding-bottom:0">
+                    <div style="display:block;width:120px;height:40px">Child</div>
+                </button>
+                <div id="cover" style="position:fixed;left:0;top:0;width:120px;height:40px;pointer-events:none">Cover</div>
+                <div hidden style="position:fixed;left:0;top:0;width:120px;height:40px;pointer-events:painted">Hidden</div>
+                <button id="ignored" style="position:fixed;left:200px;top:0;width:120px;height:40px;pointer-events:none">Ignored</button>
+            </body>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let clicked = session
+        .execute(ClickByLocator {
+            locator: Locator::from(CssLocator::new("#target").unwrap()),
+        })
+        .unwrap();
+    let focused = session
+        .execute(GetFocusedByLocator {
+            locator: Locator::from(CssLocator::new("#target").unwrap()),
+        })
+        .unwrap();
+    let ignored = session.execute(ClickByLocator {
+        locator: Locator::from(CssLocator::new("#ignored").unwrap()),
+    });
+    drop(network_guard);
+
+    assert!(matches!(clicked, ClickByLocatorResult::Activated { .. }));
+    assert!(focused.focused);
+    assert!(matches!(
+        ignored,
+        Err(SessionError::LocatorActionBlocked {
+            action: LocatorAction::Click,
+            check: ActionabilityCheck::ReceivesEvents,
+            reason,
+            ..
+        }) if reason == "body[1] intercepts pointer events at (260, 20)"
+    ));
+}
+
+#[test]
+fn overlapping_unsupported_hit_test_evidence_blocks_pointer_actions() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"
+            <body style="margin-left:0;margin-right:0;margin-top:0;margin-bottom:0">
+                <button id="target" style="display:block;box-sizing:border-box;width:120px;height:40px">Target</button>
+                <div id="far" style="position:fixed;left:0;top:100px;width:120px;height:40px;opacity:0.5">Far</div>
+                <div id="overlay" style="position:fixed;left:0;top:0;width:120px;height:40px;opacity:0.5">Overlay</div>
+            </body>
+        "#,
+    );
+    let mut session = Session::new();
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let result = session.execute(ClickByLocator {
+        locator: Locator::from(CssLocator::new("#target").unwrap()),
+    });
+    drop(network_guard);
+
+    assert!(matches!(
+        result,
+        Err(SessionError::LocatorActionBlocked {
+            action: LocatorAction::Click,
+            check: ActionabilityCheck::ReceivesEvents,
+            reason,
+            ..
+        }) if reason == "hit-test evidence for overlay is not implemented: stacking-context hit testing is not implemented for overlay"
+    ));
 }
 
 #[test]

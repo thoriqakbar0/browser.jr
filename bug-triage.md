@@ -2,7 +2,7 @@
 
 Evidence date: 1 September 2026.
 
-Three open compatibility defects affect Lightpanda comparisons. The current browser.jr runtime slice passes its automated checks.
+Four open compatibility defects affect Lightpanda comparisons. The current browser.jr runtime slice passes its automated checks.
 
 Missing behavior belongs in the coverage table. A live-page result that conflicts with decided behavior becomes a triage entry.
 
@@ -13,6 +13,7 @@ Missing behavior belongs in the coverage table. A live-page result that conflict
 | BJR-005 | Lightpanda closes its CDP response channel during event-observed fill | medium | `agent-browser` compatibility | Confirm upstream scope, then decide whether to file. | not filed |
 | BJR-009 | Playwright and Lightpanda compute several accessible names differently | medium | locator compatibility | Define the remaining name subset or add compatibility profiles. | not filed |
 | BJR-010 | Lightpanda clicks continuously moving controls without waiting for stability | medium | actionability compatibility | Keep Playwright stability semantics and confirm Lightpanda's intended boundary. | not filed |
+| BJR-011 | Lightpanda treats a `pointer-events:none` overlay as a click blocker | medium | actionability compatibility | Keep Playwright pointer-event semantics and confirm Lightpanda's intended boundary. | not filed |
 
 ## Open suspected conflicts
 
@@ -59,6 +60,18 @@ Playwright 1.62.1 Chromium, Firefox, and WebKit each reached `TimeoutError` afte
 Its batch click completed immediately on the same moving control.
 
 browser.jr follows Playwright here. It blocks inline motion declarations because it cannot sample animation frames yet.
+
+### BJR-011
+
+A controlled static page placed a fixed overlay above one button and set `pointer-events:none` on the overlay.
+
+Playwright 1.62.1 Chromium, Firefox, and WebKit clicked the button.
+
+`agent-browser` 0.32.4 used the configured Lightpanda backend on the same shape.
+
+It rejected the click and named the overlay as the covering element.
+
+browser.jr follows Playwright here. Its supported hit-test slice ignores `pointer-events:none` boxes.
 
 ## Resolved conflicts
 

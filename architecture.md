@@ -143,6 +143,10 @@ Its content-name walk preserves descendant order and substitutes supported non-p
 
 Its static stability evidence rejects inline animation and transition declarations in the target ancestry.
 
+Its bounded hit-test evidence orders supported fixed boxes above normal-flow boxes, then uses document order.
+
+Pointer actions test the prospective post-scroll action point before committing scroll or native state.
+
 The tokenizer preserves ordered element and direct-text children for accessibility projection.
 
 The implemented `page::visibility` module owns actionability and accessibility visibility evidence. `page` keeps tokenization and layout extraction.
@@ -673,4 +677,4 @@ The clean-layout, typed overflow, field store, dirty index, priority queue, and 
 
 The next Spineless Traversal layer needs generational layout identities and ordered insertion or removal. A live mutation adapter can follow after those invariants have differential tests.
 
-The next locator layer needs auto-waiting, receives-events checks, pointer dispatch, configurable test ID attributes, and complete accessibility computation.
+The next locator layer needs auto-waiting, complete hit-test stacking, pointer dispatch, configurable test ID attributes, and complete accessibility computation.

@@ -10,6 +10,8 @@ A successful hover stores one visible element as the current pointer target.
 
 It reveals an off-screen target when browser.jr has complete box geometry.
 
+Supported static hit-test scenes reject an outside element that owns the action point.
+
 Hover does not dispatch pointer or mouse events. It does not apply CSS `:hover` rules.
 
 ## The simple case
@@ -27,7 +29,7 @@ stateDiagram-v2
     [*] --> resolving
     resolving --> rejected : missing, stale, or ambiguous target
     resolving --> checking : one current target
-    checking --> blocked : hidden, unstable, or unsupported evidence
+    checking --> blocked : hidden, unstable, covered, or unsupported evidence
     checking --> scrolling : visible stable target
     scrolling --> storing
     storing --> reporting
@@ -64,13 +66,25 @@ Hover requires supported static stability evidence.
 
 Inline animation or transition declarations on the target or its ancestors block that evidence.
 
-browser.jr does not sample animation frames or check event receipt.
+When target geometry is supported, browser.jr computes the post-scroll action point without changing offsets.
+
+It accepts the target or its descendant and ignores boxes with `pointer-events:none`.
+
+A known outside blocker reports the `ReceivesEvents` actionability check and its element identity.
+
+Overlapping unsupported hit-test evidence also blocks instead of becoming a pass.
+
+Unsupported target geometry keeps the earlier hover behavior without claiming a complete document hit test.
+
+browser.jr does not sample animation frames or model complete stacking, clipping, or transformed hit geometry.
 
 Unsupported box geometry leaves offsets unchanged. It does not block a visible hover target.
 
 ### While running
 
 A successful hover reveals its supported target box before replacing the previous pointer target.
+
+It commits the same prospective scroll used to choose the action point.
 
 A rejected hover preserves page offsets and the previous pointer target.
 
@@ -127,9 +141,9 @@ Session output reports target identity. It does not claim event dispatch.
 
 **Rendering compatibility.** Playwright hover checks visibility, stability, and event receipt.
 
-browser.jr checks strict resolution, supported static visibility, and static stability.
+browser.jr checks strict resolution, supported static visibility, static stability, and bounded event receipt.
 
-It auto-scrolls supported target boxes. It does not calculate pointer coordinates or dispatch browser events.
+It auto-scrolls supported target boxes. It does not dispatch browser events.
 
 See Playwright's [`locator.hover()`](https://playwright.dev/docs/api/class-locator#locator-hover) and [actionability table](https://playwright.dev/docs/actionability).
 
@@ -139,6 +153,10 @@ Its next command did not observe a persistent DOM `:hover` match.
 
 This evidence does not prove browser.jr event or CSS parity.
 
+Controlled Playwright 1.62.1 Chromium, Firefox, and WebKit rejected a fixed blocker and accepted a target descendant.
+
+They ignored a `pointer-events:none` blocker. `agent-browser` Lightpanda rejected it. See [BJR-011](../bug-triage.md#bjr-011).
+
 **Isolation.** Hover state belongs to one session and document.
 
 **Accessibility inspection.** Semantic locators use the implemented role and accessible-name subset.
@@ -147,6 +165,9 @@ This evidence does not prove browser.jr event or CSS parity.
 
 - Hovering the current target again is idempotent.
 - Inline animation or transition declarations block without replacing the current target.
+- A supported outside blocker preserves offsets and the previous pointer target.
+- A supported target descendant may own the action point.
+- A `pointer-events:none` box does not block a supported target.
 - Hovering an off-screen supported box reveals it before storing pointer state.
 - Unsupported target geometry leaves offsets unchanged and still stores a visible target.
 - Hovering another target removes current-target state from the previous element.
@@ -161,7 +182,8 @@ This evidence does not prove browser.jr event or CSS parity.
 
 ## Open questions and verification
 
-- Implement receives-events evidence and frame sampling for supported motion.
+- Complete stacking, clipping, transformed geometry, and unsupported-scene hit testing.
+- Implement frame sampling for supported motion.
 - Define pointer coordinates, nested scrolling, modifiers, force, trial, and timeouts.
 - Implement pointer and mouse event order.
 - Apply dynamic CSS `:hover` matching and style invalidation.

@@ -455,11 +455,11 @@ Blocked actionability, unsupported actions, and missing pages use status three.
 
 XPath drops HTML namespaces when it mirrors the document. Namespace-aware XPath is not implemented.
 
-Actionability covers supported visibility, static stability, enabled, and editable evidence.
+Actionability covers supported visibility, static stability, bounded receives-events, enabled, and editable evidence.
 
 Focus intentionally performs no actionability check after strict resolution.
 
-Motion frame sampling and receives-events checks remain unavailable.
+Motion frame sampling and complete stacking, clipping, and transformed hit testing remain unavailable.
 
 **Isolation.** Locators and replies belong to one session. They do not identify live targets across processes.
 
@@ -532,7 +532,7 @@ Role actions still apply supported actionability checks after strict resolution.
 
 - Define full ARIA role, state, and accessible-name computation.
 - Add auto-waiting and action timeouts.
-- Add receives-events evidence and frame sampling for supported motion.
+- Add complete receives-events evidence and frame sampling for supported motion.
 - Add pointer and remaining native event records, page-script delivery, remaining form defaults, and dynamic CSS `:hover`.
 - Define regular-expression name matching.
 - Define complete CSS and XPath conformance boundaries.

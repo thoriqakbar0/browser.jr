@@ -21,9 +21,9 @@ mod visibility;
 use style::computed_styles;
 
 pub(crate) use interactive::{
-    AccessibilityNodeSource, ControlState, InteractiveAction, InteractiveElementSource,
-    LocatorElementSource, RadioGroup, SelectValueError, SequentialFocusSource, TextValueError,
-    page_semantics_from_html_with_viewport,
+    AccessibilityNodeSource, ControlState, HitTestCandidate, HitTestLayer, InteractiveAction,
+    InteractiveElementSource, LocatorElementSource, RadioGroup, SelectValueError,
+    SequentialFocusSource, TextValueError, page_semantics_from_html_with_viewport,
 };
 #[cfg(test)]
 pub(crate) use interactive::{
