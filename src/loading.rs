@@ -1,16 +1,21 @@
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
-use std::time::Duration;
-
-use ureq::unversioned::resolver::{ResolvedSocketAddrs, Resolver};
-use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use http::Uri;
 use url::{Host, Url};
 
+mod hyper_transport;
+
+use hyper_transport::HyperNetworkTransport;
+
 const MAX_HTML_BYTES: u64 = 1024 * 1024;
 const MAX_REDIRECTS: u32 = 5;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_DNS_ANSWERS: usize = 16;
+const MAX_RESPONSE_HEADERS: usize = 64;
+const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LoadedHtml {
@@ -70,7 +75,7 @@ enum NetworkMode {
 }
 
 trait NetworkResolver {
-    fn resolve_url(&self, url: &Url) -> Result<Vec<SocketAddr>, LoadError>;
+    fn resolve_url(&self, url: &Url, timeout: Duration) -> Result<Vec<SocketAddr>, LoadError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,6 +91,7 @@ trait NetworkTransport {
         &self,
         url: &Url,
         approved_endpoints: &[SocketAddr],
+        timeout: Duration,
     ) -> Result<NetworkResponse, LoadError>;
 }
 
@@ -105,61 +111,118 @@ impl<R: NetworkResolver, T: NetworkTransport> FetchEngine<R, T> {
     }
 
     fn fetch(&self, value: &str) -> Result<LoadedHtml, LoadError> {
-        let mut url = parse_network_url(value)?;
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let mut current_url = parse_network_url(value)?;
         let mut visited = Vec::new();
+
         for redirect_count in 0..=MAX_REDIRECTS {
-            if visited.contains(&url) {
-                return Err(LoadError::TooManyRedirects(MAX_REDIRECTS));
+            reject_redirect_loop(&visited, &current_url)?;
+            visited.push(current_url.clone());
+            let endpoints = self.resolve_approved_endpoints(&current_url, deadline)?;
+            let response = self.send_with_deadline(&current_url, &endpoints, deadline)?;
+            match process_network_response(&current_url, response, redirect_count)? {
+                FetchStep::Redirect(next_url) => current_url = next_url,
+                FetchStep::Complete(loaded) => return Ok(loaded),
             }
-            visited.push(url.clone());
-
-            let endpoints = self.resolver.resolve_url(&url)?;
-            if endpoints.is_empty() {
-                return Err(LoadError::Request("DNS returned no addresses".into()));
-            }
-            for endpoint in &endpoints {
-                if !address_is_allowed_for_mode(endpoint.ip(), self.mode) {
-                    return Err(LoadError::BlockedAddress(endpoint.ip()));
-                }
-            }
-
-            let response = self.transport.send_get(&url, &endpoints)?;
-            if is_redirect_status(response.status) {
-                if redirect_count == MAX_REDIRECTS {
-                    return Err(LoadError::TooManyRedirects(MAX_REDIRECTS));
-                }
-                let location = response.redirect_location.ok_or_else(|| {
-                    LoadError::Request("redirect response has no Location header".into())
-                })?;
-                let next_url = url
-                    .join(&location)
-                    .map_err(|error| LoadError::InvalidUrl(error.to_string()))?;
-                validate_parsed_network_url(&next_url)?;
-                if url.scheme() == "https" && next_url.scheme() == "http" {
-                    return Err(LoadError::RedirectDowngrade);
-                }
-                url = next_url;
-                continue;
-            }
-            if !(200..300).contains(&response.status) {
-                return Err(LoadError::UnexpectedStatus(response.status));
-            }
-            validate_html_content_type(response.content_type.as_deref())?;
-            let html = response
-                .body
-                .ok_or_else(|| LoadError::InvalidBody("response body is missing".into()))?;
-            return Ok(LoadedHtml {
-                final_url: url.to_string(),
-                html,
-            });
         }
+
         Err(LoadError::TooManyRedirects(MAX_REDIRECTS))
+    }
+
+    fn resolve_approved_endpoints(
+        &self,
+        url: &Url,
+        deadline: Instant,
+    ) -> Result<Vec<SocketAddr>, LoadError> {
+        let remaining = remaining_request_time(deadline)?;
+        let endpoints = self.resolver.resolve_url(url, remaining)?;
+        if endpoints.is_empty() {
+            return Err(LoadError::Request("DNS returned no addresses".into()));
+        }
+        for endpoint in &endpoints {
+            if !address_is_allowed_for_mode(endpoint.ip(), self.mode) {
+                return Err(LoadError::BlockedAddress(endpoint.ip()));
+            }
+        }
+        Ok(endpoints)
+    }
+
+    fn send_with_deadline(
+        &self,
+        url: &Url,
+        endpoints: &[SocketAddr],
+        deadline: Instant,
+    ) -> Result<NetworkResponse, LoadError> {
+        self.transport
+            .send_get(url, endpoints, remaining_request_time(deadline)?)
     }
 
     #[cfg(test)]
     fn transport(&self) -> &T {
         &self.transport
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum FetchStep {
+    Redirect(Url),
+    Complete(LoadedHtml),
+}
+
+fn remaining_request_time(deadline: Instant) -> Result<Duration, LoadError> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(|| LoadError::Request("request timed out".into()))
+}
+
+fn reject_redirect_loop(visited: &[Url], url: &Url) -> Result<(), LoadError> {
+    if visited.contains(url) {
+        Err(LoadError::TooManyRedirects(MAX_REDIRECTS))
+    } else {
+        Ok(())
+    }
+}
+
+fn process_network_response(
+    current_url: &Url,
+    response: NetworkResponse,
+    redirect_count: u32,
+) -> Result<FetchStep, LoadError> {
+    if is_redirect_status(response.status) {
+        return next_redirect_url(current_url, response.redirect_location, redirect_count)
+            .map(FetchStep::Redirect);
+    }
+    if !(200..300).contains(&response.status) {
+        return Err(LoadError::UnexpectedStatus(response.status));
+    }
+    validate_html_content_type(response.content_type.as_deref())?;
+    let html = response
+        .body
+        .ok_or_else(|| LoadError::InvalidBody("response body is missing".into()))?;
+    Ok(FetchStep::Complete(LoadedHtml {
+        final_url: current_url.to_string(),
+        html,
+    }))
+}
+
+fn next_redirect_url(
+    current_url: &Url,
+    location: Option<String>,
+    redirect_count: u32,
+) -> Result<Url, LoadError> {
+    if redirect_count == MAX_REDIRECTS {
+        return Err(LoadError::TooManyRedirects(MAX_REDIRECTS));
+    }
+    let location = location
+        .ok_or_else(|| LoadError::Request("redirect response has no Location header".into()))?;
+    let next_url = current_url
+        .join(&location)
+        .map_err(|error| LoadError::InvalidUrl(error.to_string()))?;
+    validate_parsed_network_url(&next_url)?;
+    if current_url.scheme() == "https" && next_url.scheme() == "http" {
+        return Err(LoadError::RedirectDowngrade);
+    }
+    Ok(next_url)
 }
 
 fn address_is_allowed_for_mode(address: IpAddr, mode: NetworkMode) -> bool {
@@ -172,7 +235,7 @@ fn address_is_allowed_for_mode(address: IpAddr, mode: NetworkMode) -> bool {
 pub(crate) fn load_html(value: &str) -> Result<LoadedHtml, LoadError> {
     let url = parse_network_url(value)?;
     let mode = network_mode_for_url(&url);
-    FetchEngine::new(SystemNetworkResolver, UreqNetworkTransport, mode).fetch(value)
+    FetchEngine::new(SystemNetworkResolver, HyperNetworkTransport::new()?, mode).fetch(value)
 }
 
 fn parse_network_url(value: &str) -> Result<Url, LoadError> {
@@ -332,99 +395,30 @@ fn normalize_path(path: &str) -> String {
 struct SystemNetworkResolver;
 
 impl NetworkResolver for SystemNetworkResolver {
-    fn resolve_url(&self, url: &Url) -> Result<Vec<SocketAddr>, LoadError> {
+    fn resolve_url(&self, url: &Url, timeout: Duration) -> Result<Vec<SocketAddr>, LoadError> {
         let host = url
             .host_str()
-            .ok_or_else(|| LoadError::InvalidUrl("the URL has no host".into()))?;
+            .ok_or_else(|| LoadError::InvalidUrl("the URL has no host".into()))?
+            .to_owned();
         let port = url
             .port_or_known_default()
             .ok_or_else(|| LoadError::InvalidUrl("the URL has no port".into()))?;
-        (host, port)
-            .to_socket_addrs()
-            .map(|addresses| addresses.collect())
+        let (sender, receiver) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let result = (host.as_str(), port)
+                .to_socket_addrs()
+                .map(|addresses| addresses.take(MAX_DNS_ANSWERS).collect::<Vec<_>>());
+            let _ = sender.send(result);
+        });
+        receiver
+            .recv_timeout(timeout)
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => LoadError::Request("DNS timed out".into()),
+                mpsc::RecvTimeoutError::Disconnected => {
+                    LoadError::Request("DNS resolver stopped".into())
+                }
+            })?
             .map_err(|error| LoadError::Request(error.to_string()))
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ApprovedEndpointResolver {
-    approved_endpoints: Vec<SocketAddr>,
-}
-
-impl Resolver for ApprovedEndpointResolver {
-    fn resolve(
-        &self,
-        _uri: &Uri,
-        _config: &ureq::config::Config,
-        _timeout: NextTimeout,
-    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
-        let mut resolved = self.empty();
-        for endpoint in &self.approved_endpoints {
-            resolved.push(*endpoint);
-        }
-        if resolved.is_empty() {
-            Err(ureq::Error::HostNotFound)
-        } else {
-            Ok(resolved)
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct UreqNetworkTransport;
-
-impl NetworkTransport for UreqNetworkTransport {
-    fn send_get(
-        &self,
-        url: &Url,
-        approved_endpoints: &[SocketAddr],
-    ) -> Result<NetworkResponse, LoadError> {
-        let config = ureq::Agent::config_builder()
-            .max_redirects(0)
-            .timeout_global(Some(REQUEST_TIMEOUT))
-            .no_delay(false)
-            .proxy(None)
-            .build();
-        let agent = ureq::Agent::with_parts(
-            config,
-            DefaultConnector::default(),
-            ApprovedEndpointResolver {
-                approved_endpoints: approved_endpoints.to_vec(),
-            },
-        );
-        let mut response = agent
-            .get(url.as_str())
-            .call()
-            .map_err(|error| LoadError::Request(error.to_string()))?;
-        let status = response.status().as_u16();
-        let redirect_location = response
-            .headers()
-            .get("location")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let body = if is_redirect_status(status) {
-            None
-        } else {
-            Some(
-                response
-                    .body_mut()
-                    .with_config()
-                    .limit(MAX_HTML_BYTES)
-                    .read_to_string()
-                    .map_err(|error| LoadError::InvalidBody(error.to_string()))?,
-            )
-        };
-        Ok(NetworkResponse {
-            status,
-            redirect_location,
-            content_type,
-            body,
-        })
     }
 }
 
@@ -479,12 +473,14 @@ mod tests {
     use std::net::IpAddr;
 
     use super::{
-        FetchEngine, LoadError, NetworkMode, NetworkResolver, NetworkResponse, NetworkTransport,
-        is_permitted_address, parse_network_url, resolve_url_reference,
+        FetchEngine, HyperNetworkTransport, LoadError, MAX_HTML_BYTES, NetworkMode,
+        NetworkResolver, NetworkResponse, NetworkTransport, REQUEST_TIMEOUT, is_permitted_address,
+        parse_network_url, resolve_url_reference,
     };
     use std::cell::Cell;
     use std::collections::HashMap;
     use std::net::SocketAddr;
+    use std::time::Duration;
     use url::Url;
 
     struct FakeResolver {
@@ -510,7 +506,7 @@ mod tests {
     }
 
     impl NetworkResolver for FakeResolver {
-        fn resolve_url(&self, url: &Url) -> Result<Vec<SocketAddr>, LoadError> {
+        fn resolve_url(&self, url: &Url, _timeout: Duration) -> Result<Vec<SocketAddr>, LoadError> {
             self.endpoints_by_host
                 .get(url.host_str().unwrap_or_default())
                 .cloned()
@@ -543,6 +539,7 @@ mod tests {
             &self,
             url: &Url,
             _approved_endpoints: &[SocketAddr],
+            _timeout: Duration,
         ) -> Result<NetworkResponse, LoadError> {
             self.request_count.set(self.request_count.get() + 1);
             if url.as_str() == self.source_url {
@@ -677,5 +674,86 @@ mod tests {
 
         assert_eq!(result, Err(LoadError::RedirectDowngrade));
         assert_eq!(engine.transport().request_count(), 1);
+    }
+
+    #[test]
+    fn hyper_transport_uses_the_approved_endpoint() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, peer) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).unwrap();
+                if header == "\r\n" || header.is_empty() {
+                    break;
+                }
+            }
+            let body = "<p>approved</p>";
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            (peer.ip(), request_line)
+        });
+        let url = Url::parse("http://public.example/test").unwrap();
+
+        let response = HyperNetworkTransport::new()
+            .unwrap()
+            .send_get(&url, &[endpoint], REQUEST_TIMEOUT)
+            .unwrap();
+        let (peer, request_line) = server.join().unwrap();
+
+        assert!(peer.is_loopback());
+        assert_eq!(request_line, "GET /test HTTP/1.1\r\n");
+        assert_eq!(response.body.as_deref(), Some("<p>approved</p>"));
+    }
+
+    #[test]
+    fn hyper_transport_rejects_oversized_content_length_before_body_read() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                MAX_HTML_BYTES + 1
+            )
+            .unwrap();
+        });
+        let url = Url::parse("http://public.example/").unwrap();
+
+        let result =
+            HyperNetworkTransport::new()
+                .unwrap()
+                .send_get(&url, &[endpoint], REQUEST_TIMEOUT);
+        server.join().unwrap();
+
+        assert!(matches!(
+            result,
+            Err(LoadError::InvalidBody(reason)) if reason.contains("exceeds")
+        ));
     }
 }

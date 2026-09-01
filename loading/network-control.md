@@ -33,11 +33,11 @@ Unsupported schemes, credentials, and blocked literal addresses fail before a re
 
 ### Begin running
 
-The loader resolves the target through its own resolver and does not use an environment proxy.
+The loader resolves the target through its own resolver. It passes only the approved socket addresses to its Hyper transport and does not use an environment proxy.
 
 ### While running
 
-Every resolved address must be public unless the URL explicitly names `localhost` or a loopback IP. The request has a 15-second limit, a one MiB body limit, and a five-redirect limit. Redirect destinations pass through the same resolver policy.
+Every resolved address must be public unless the initial URL explicitly names `localhost` or a loopback IP. The transport verifies the connected peer before sending HTTP bytes. One 15-second deadline covers DNS, connections, TLS, redirects, and body reads. The body limit is one MiB and the redirect limit is five. Redirect destinations pass through the same resolver policy.
 
 ### Finish
 
@@ -72,9 +72,9 @@ A successful open installs the final response URL. Failures preserve the previou
 
 **Output and exit status.** Invalid targets are input failures. Runtime network failures are unavailable failures.
 
-**Resource limits.** Responses are limited to one MiB, five redirects, and 15 seconds per load operation.
+**Resource limits.** Responses are limited to one MiB, 64 headers, 64 KiB of header buffering, 16 DNS answers, five redirects, and 15 seconds per load operation. Compressed response bodies are rejected.
 
-**Network and storage.** Proxies are disabled. DNS results are checked before their socket addresses are passed to the connector. No page data is persisted by the loader.
+**Network and storage.** Proxies are absent from the direct Hyper transport. DNS results are checked before their socket addresses are passed to the connector. The transport connects to an approved address, verifies the peer, and uses the original hostname for TLS. No page data is persisted by the loader.
 
 **Rendering compatibility.** Only HTML and XHTML response media types are accepted when a content type is present.
 
@@ -93,7 +93,6 @@ A successful open installs the final response URL. Failures preserve the previou
 ## Open questions and verification
 
 - Decide whether private-network access needs an explicit opt-in mode.
-- Verify redirect failures and final-URL history through compiled-process checks.
 - Verify TLS certificate failures through a deterministic local fixture.
 
 Drafted from the Rust implementation and focused tests on 2026-09-01.

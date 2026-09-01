@@ -101,6 +101,7 @@ Each successful retained open adds an entry to [navigation history](history-navi
 
 - Missing content type is accepted as HTML.
 - Non-HTML content types fail.
+- Compressed response bodies fail until bounded decompression exists.
 - More than five redirects fail.
 - Invalid UTF-8 fails.
 - HTTP errors fail.

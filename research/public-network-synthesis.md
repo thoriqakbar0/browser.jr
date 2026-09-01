@@ -168,6 +168,12 @@ The prototype should remain uncommitted or clearly labeled experimental until th
 - Helper-process or WASI sandboxing until the in-process authorization path is correct.
 - Record/replay after the fetch trace format and privacy rules are designed.
 
+## Implementation status
+
+As of 2026-09-01, browser.jr uses the recommended `url` + policy + approved endpoints + Hyper + rustls path. The transport connects to exact approved socket addresses, verifies the peer before the HTTP handshake, preserves the hostname for TLS, owns redirects, rejects downgrade, and streams an uncompressed body through its byte limit.
+
+Remaining hardening includes registry-derived exhaustive address tables, deterministic TLS fixtures, explicit public versus loopback configuration, richer phase errors, and deployment egress controls.
+
 ## Bottom line
 
 The Rust-world solution is not one crate. It is a narrow, browser-owned authorization and navigation state machine with mature crates underneath it:
