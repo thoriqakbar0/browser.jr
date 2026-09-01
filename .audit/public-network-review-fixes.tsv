@@ -1,0 +1,7 @@
+ts	phase	decision	why	evidence	result
+2026-09-01T15:00:00Z	frame	fix review findings as separate verified commits	the security and runtime defects have different failure modes and rollback boundaries	PR #16 review	planned
+2026-09-01T15:08:00Z	security	recomputed destination policy for every redirect and blocked fec0::/10	the initial URL must not lend loopback authority to later hosts	commit 5bed638	tests green
+2026-09-01T15:14:00Z	transport	moved each private Tokio runtime onto a joined worker thread and parsed literal IP hosts structurally	synchronous package callers inside Tokio must return instead of panic	commit 6d31713	tests green
+2026-09-01T15:24:00Z	resources	added atomic fetch and DNS permits plus DNS, connection, and idle limits	uncancellable system DNS work and slow responses need fixed process bounds	commit 3f317b2	all gates green
+2026-09-01T15:28:00Z	documentation	updated loopback examples, timeout claims, and session denial coverage	the public instructions and executable behavior must agree	commit d1cdf0a	all gates green
+2026-09-01T15:29:00Z	documentation	superseded the prior documentation evidence pointer	the amend replaced commit d1cdf0a before push	HEAD	all gates green

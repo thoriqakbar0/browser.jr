@@ -398,7 +398,6 @@ impl Session {
         Self::with_network_access(NetworkAccess::PublicOnly)
     }
 
-    /// Creates a session with explicit network access capabilities.
     pub fn with_network_access(network_access: NetworkAccess) -> Self {
         Self {
             layout: LayoutKernel::new(LayoutProgram::initial()),

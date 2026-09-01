@@ -115,7 +115,7 @@ Help and version exit with status zero. Invalid input exits with status two.
 - `--json session` writes one envelope for each lifecycle event and command.
 - `session --json` selects the same line-oriented output.
 - Session help lists viewport sizing, screenshots, page text, history, actions, event records, keyboard text, held keys, boxes, reads, HTML, and selections.
-- Session rejects invocation arguments other than one `--json` flag.
+- Session rejects invocation arguments other than one `--json` flag and one global `--allow-loopback` flag.
 - A missing or unsupported width target blocks `max-element-width`.
 - Extra or unknown arguments report invalid input.
 - A closed stdout prevents successful help delivery.

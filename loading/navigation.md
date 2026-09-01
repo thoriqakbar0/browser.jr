@@ -124,7 +124,7 @@ Successful native link `Enter` navigation records the same history entry.
 
 **Output and exit status.** The package returns `ClickResult` or `SessionError`. Session mode reports results and accumulates its final exit status.
 
-**Resource limits.** The body limit is one MiB. A wall-clock request timeout is not implemented yet.
+**Resource limits.** The body limit is one MiB. The shared 15-second navigation deadline covers the request and redirects.
 
 **Network and storage.** The resolved target must remain within the session network policy. Navigation writes no persistent state.
 

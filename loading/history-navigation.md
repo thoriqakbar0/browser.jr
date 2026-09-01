@@ -112,7 +112,7 @@ Session output reports the command, URL, and `navigated` state. Successful moves
 
 **Output and exit status.** A history bound is a successful result. Missing pages and failed loads report normal errors.
 
-**Resource limits.** Each move uses the one MiB body limit. A wall-clock timeout is not implemented.
+**Resource limits.** Each move uses the one MiB body limit and the shared 15-second navigation deadline.
 
 **Network and storage.** Every successful move loads through the session network policy. History remains in memory.
 

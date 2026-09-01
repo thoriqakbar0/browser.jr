@@ -113,6 +113,57 @@ fn loopback_cli_requires_allow_loopback() {
 }
 
 #[test]
+fn human_session_rejects_loopback_without_allow_loopback() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+        .arg("session")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"open http://127.0.0.1:1/\nexit\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("loopback URLs require explicit network access")
+    );
+}
+
+#[test]
+fn json_session_rejects_loopback_without_allow_loopback() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_browser-jr"))
+        .args(["--json", "session"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"open http://127.0.0.1:1/\nexit\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("loopback URLs require explicit network access")
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn help_runs_through_the_binary_boundary() {
     let output = browser_command().arg("--help").output().unwrap();
 

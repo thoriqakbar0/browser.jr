@@ -29,7 +29,7 @@ Project the tree to agent-oriented reference targets:
 Pipe one full snapshot as JSON:
 
 ```sh
-./browser.jr --json snapshot http://localhost:3000
+./browser.jr --allow-loopback --json snapshot http://localhost:3000
 ```
 
 Keep one page alive across commands:

@@ -72,7 +72,7 @@ A successful open installs the final response URL. Failures preserve the previou
 
 **Output and exit status.** Invalid targets are input failures. Runtime network failures are unavailable failures. Errors identify DNS, connection, TLS, timeout, HTTP response, and body phases without including response bodies.
 
-**Resource limits.** Responses are limited to one MiB, 64 headers, 64 KiB of header buffering, 16 DNS answers, five redirects, and 15 seconds per load operation. Compressed response bodies are rejected.
+**Resource limits.** Responses are limited to one MiB, 64 headers, 64 KiB of header buffering, 16 DNS answers, four connection attempts, five redirects, five seconds of body-read inactivity, and 15 seconds per load operation. At most 16 loads and four DNS lookups run concurrently. Compressed response bodies are rejected.
 
 **Network and storage.** Proxies are absent from the direct Hyper transport. DNS results are checked before their socket addresses are passed to the connector. The transport connects to an approved address, verifies the peer, and uses the original hostname for TLS. No page data is persisted by the loader.
 
