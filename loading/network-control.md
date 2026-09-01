@@ -89,10 +89,10 @@ A successful open installs the final response URL. Failures preserve the previou
 - The public policy blocks the IANA IPv4 and IPv6 special-purpose ranges, including carrier-grade NAT, translation, tunneling, link-local, multicast, documentation, benchmarking, and reserved ranges.
 - Explicit loopback URLs remain supported for local fixtures.
 - Redirects receive the same DNS and address checks as the initial request.
+- TLS certificates must chain to a trusted root and match the original URL hostname.
 
 ## Open questions and verification
 
 - Decide whether private-network access needs an explicit opt-in mode.
-- Verify TLS certificate failures through a deterministic local fixture.
 
 Drafted from the Rust implementation and focused tests on 2026-09-01.

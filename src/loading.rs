@@ -589,6 +589,93 @@ mod tests {
         }
     }
 
+    fn serve_tls_page() -> (
+        SocketAddr,
+        rustls::pki_types::CertificateDer<'static>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use rcgen::{CertifiedKey, generate_simple_self_signed};
+        use rustls::ServerConfig;
+        use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener as TokioTcpListener;
+        use tokio_rustls::TlsAcceptor;
+
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let certificate = cert.der().clone();
+        let private_key =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
+        let server_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![certificate.clone()], private_key)
+            .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let handle = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let listener = TokioTcpListener::from_std(listener).unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let Ok(mut stream) = TlsAcceptor::from(Arc::new(server_config))
+                    .accept(stream)
+                    .await
+                else {
+                    return;
+                };
+                let mut request = Vec::new();
+                let mut byte = [0_u8; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                }
+                let body = "<p>secure</p>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+                stream.shutdown().await.unwrap();
+            });
+        });
+        (endpoint, certificate, handle)
+    }
+
+    #[test]
+    fn hyper_transport_accepts_a_trusted_tls_hostname() {
+        let (endpoint, certificate, server) = serve_tls_page();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(certificate).unwrap();
+        let transport = HyperNetworkTransport::with_root_store(roots).unwrap();
+        let url = Url::parse(&format!("https://localhost:{}/", endpoint.port())).unwrap();
+
+        let response = transport
+            .send_get(&url, &[endpoint], REQUEST_TIMEOUT)
+            .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(response.body.as_deref(), Some("<p>secure</p>"));
+    }
+
+    #[test]
+    fn hyper_transport_rejects_a_tls_hostname_mismatch() {
+        let (endpoint, certificate, server) = serve_tls_page();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(certificate).unwrap();
+        let transport = HyperNetworkTransport::with_root_store(roots).unwrap();
+        let url = Url::parse(&format!("https://example.test:{}/", endpoint.port())).unwrap();
+
+        let result = transport.send_get(&url, &[endpoint], REQUEST_TIMEOUT);
+        server.join().unwrap();
+
+        assert!(matches!(result, Err(LoadError::Request(_))));
+    }
+
     #[test]
     fn accepts_public_and_loopback_http_urls() {
         for value in [

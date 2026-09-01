@@ -20,6 +20,7 @@ use super::{
 
 pub(super) struct HyperNetworkTransport {
     runtime: tokio::runtime::Runtime,
+    tls_config: Arc<ClientConfig>,
 }
 
 impl HyperNetworkTransport {
@@ -28,7 +29,23 @@ impl HyperNetworkTransport {
             .enable_all()
             .build()
             .map_err(|error| LoadError::Request(error.to_string()))?;
-        Ok(Self { runtime })
+        let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        Ok(Self {
+            runtime,
+            tls_config: Arc::new(build_tls_client_config(roots)),
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_root_store(roots: RootCertStore) -> Result<Self, LoadError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| LoadError::Request(error.to_string()))?;
+        Ok(Self {
+            runtime,
+            tls_config: Arc::new(build_tls_client_config(roots)),
+        })
     }
 }
 
@@ -40,20 +57,30 @@ impl NetworkTransport for HyperNetworkTransport {
         timeout: Duration,
     ) -> Result<NetworkResponse, LoadError> {
         self.runtime.block_on(async {
-            tokio::time::timeout(timeout, send_hyper_request(url, approved_endpoints))
-                .await
-                .map_err(|_| LoadError::Request("request timed out".into()))?
+            tokio::time::timeout(
+                timeout,
+                send_hyper_request(url, approved_endpoints, self.tls_config.clone()),
+            )
+            .await
+            .map_err(|_| LoadError::Request("request timed out".into()))?
         })
     }
+}
+
+fn build_tls_client_config(roots: RootCertStore) -> ClientConfig {
+    ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth()
 }
 
 async fn send_hyper_request(
     url: &Url,
     approved_endpoints: &[SocketAddr],
+    tls_config: Arc<ClientConfig>,
 ) -> Result<NetworkResponse, LoadError> {
     let mut last_error = None;
     for endpoint in approved_endpoints {
-        match send_hyper_request_to_endpoint(url, *endpoint).await {
+        match send_hyper_request_to_endpoint(url, *endpoint, tls_config.clone()).await {
             Ok(response) => return Ok(response),
             Err(error) => last_error = Some(error),
         }
@@ -64,6 +91,7 @@ async fn send_hyper_request(
 async fn send_hyper_request_to_endpoint(
     url: &Url,
     endpoint: SocketAddr,
+    tls_config: Arc<ClientConfig>,
 ) -> Result<NetworkResponse, LoadError> {
     let stream = TcpStream::connect(endpoint)
         .await
@@ -83,11 +111,7 @@ async fn send_hyper_request_to_endpoint(
             .ok_or_else(|| LoadError::InvalidUrl("the URL has no host".into()))?;
         let server_name = rustls::pki_types::ServerName::try_from(host.to_owned())
             .map_err(|error| LoadError::Request(error.to_string()))?;
-        let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        let tls = TlsConnector::from(Arc::new(config))
+        let tls = TlsConnector::from(tls_config)
             .connect(server_name, stream)
             .await
             .map_err(|error| LoadError::Request(error.to_string()))?;

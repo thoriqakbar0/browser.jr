@@ -172,7 +172,7 @@ The prototype should remain uncommitted or clearly labeled experimental until th
 
 As of 2026-09-01, browser.jr uses the recommended `url` + policy + approved endpoints + Hyper + rustls path. The transport connects to exact approved socket addresses, verifies the peer before the HTTP handshake, preserves the hostname for TLS, owns redirects, rejects downgrade, and streams an uncompressed body through its byte limit.
 
-Remaining hardening includes registry-derived exhaustive address tables, deterministic TLS fixtures, explicit public versus loopback configuration, richer phase errors, and deployment egress controls.
+Remaining hardening includes explicit public versus loopback configuration, richer phase errors, and deployment egress controls.
 
 ## Bottom line
 
