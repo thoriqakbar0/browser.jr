@@ -7,7 +7,7 @@ use crate::layout::{
     BoundingBox, LayoutError, LayoutInput, LayoutKernel, LayoutMutation, LayoutProgram,
     LayoutSnapshot,
 };
-use crate::loading::{LoadError, load_local_html, resolve_url_reference};
+use crate::loading::{LoadError, NetworkAccess, load_html, resolve_url_reference};
 use crate::locator::{Locator, LocatorMatch, LocatorPosition, RoleLocator, RoleMatch};
 use crate::non_empty::NonEmpty;
 use crate::page::{
@@ -51,6 +51,7 @@ pub struct Session {
     viewport: ViewportSize,
     keyboard: KeyboardState,
     dom_events: Vec<DomEvent>,
+    network_access: NetworkAccess,
 }
 
 /// One supported native DOM event type recorded by a browser.jr action.
@@ -394,6 +395,10 @@ enum LocatorOperationError {
 
 impl Session {
     pub fn new() -> Self {
+        Self::with_network_access(NetworkAccess::PublicOnly)
+    }
+
+    pub fn with_network_access(network_access: NetworkAccess) -> Self {
         Self {
             layout: LayoutKernel::new(LayoutProgram::initial()),
             identities: IdentityCounters {
@@ -407,6 +412,7 @@ impl Session {
             viewport: ViewportSize::default(),
             keyboard: KeyboardState::default(),
             dom_events: Vec::new(),
+            network_access,
         }
     }
 
@@ -418,7 +424,9 @@ impl Session {
     }
 
     fn load_page(&mut self, url: String) -> Result<OpenedPage, LoadError> {
-        let html = load_local_html(&url)?;
+        let loaded = load_html(&url, self.network_access)?;
+        let url = loaded.final_url;
+        let html = loaded.html;
         let semantics = page_semantics_from_html_with_viewport(
             &html,
             self.viewport.width,
@@ -459,8 +467,8 @@ impl Session {
     }
 
     fn navigate_to(&mut self, url: String) -> Result<OpenedPage, LoadError> {
-        let page = self.load_page(url.clone())?;
-        self.history.record(url);
+        let page = self.load_page(url)?;
+        self.history.record(page.url.clone());
         Ok(page)
     }
 

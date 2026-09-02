@@ -1,5 +1,6 @@
 use std::io::{BufRead, Write};
 
+use crate::NetworkAccess;
 use crate::cli::{ExitStatus, combine_status};
 use crate::cli_output::{write_session_command_json, write_session_lifecycle_json};
 use crate::cli_session::{CliSession, SessionStep};
@@ -8,12 +9,13 @@ pub(crate) fn run_json_session(
     input: &mut impl BufRead,
     output: &mut impl Write,
     errors: &mut impl Write,
+    network_access: NetworkAccess,
 ) -> ExitStatus {
     if write_session_lifecycle_json(output, "ready").is_err() || output.flush().is_err() {
         return ExitStatus::Unavailable;
     }
 
-    let mut session = CliSession::new();
+    let mut session = CliSession::with_network_access(network_access);
     let commands_status = run_json_commands(&mut session, input, output, errors);
     let close_status = if write_session_lifecycle_json(output, "closed").is_ok() {
         ExitStatus::Success

@@ -96,7 +96,7 @@ Help and version exit with status zero. Invalid input exits with status two.
 
 - No arguments shows help.
 - `lint` without a URL reports invalid input.
-- `lint <url>` loads a loopback HTTP page with a 1280 CSS pixel viewport.
+- `lint <url>` loads a public HTTP or HTTPS page. `--allow-loopback` also permits an explicit loopback page with a 1280 CSS pixel viewport.
 - `read <url>` prints normalized static document text.
 - `lint <url> --viewport <css-px>` sets a positive viewport width.
 - `lint <url> --max-width <element> <css-px>` checks one semantic element against a non-negative project limit.
@@ -115,7 +115,7 @@ Help and version exit with status zero. Invalid input exits with status two.
 - `--json session` writes one envelope for each lifecycle event and command.
 - `session --json` selects the same line-oriented output.
 - Session help lists viewport sizing, screenshots, page text, history, actions, event records, keyboard text, held keys, boxes, reads, HTML, and selections.
-- Session rejects invocation arguments other than one `--json` flag.
+- Session rejects invocation arguments other than one `--json` flag and one global `--allow-loopback` flag.
 - A missing or unsupported width target blocks `max-element-width`.
 - Extra or unknown arguments report invalid input.
 - A closed stdout prevents successful help delivery.

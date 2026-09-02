@@ -2,7 +2,7 @@
 
 Status: proposed internal architecture, 28 August 2026. Implementation evidence updated 1 September 2026.
 
-The current source loads loopback HTML. It computes horizontal and static block-flow layout subsets.
+The current source loads public HTTP and HTTPS HTML, plus explicit loopback targets, through a browser-owned redirect policy and a Hyper/rustls transport that connects only to approved socket addresses. It computes horizontal and static block-flow layout subsets.
 
 html5ever builds normalized ancestry. Descendant and child selectors traverse that tree.
 

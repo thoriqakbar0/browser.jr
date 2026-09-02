@@ -8,54 +8,54 @@ Playwright and `agent-browser` compatibility are goals. Neither protocol is comp
 
 ## Try it
 
-Start a local web server, then run:
+Open a public or local web page:
 
 ```sh
-./browser.jr lint http://localhost:3000
+./browser.jr lint https://example.com
 ```
 
 Inspect the supported accessibility tree:
 
 ```sh
-./browser.jr snapshot http://localhost:3000
+./browser.jr --allow-loopback snapshot http://localhost:3000
 ```
 
 Project the tree to agent-oriented reference targets:
 
 ```sh
-./browser.jr snapshot http://localhost:3000 --interactive
+./browser.jr --allow-loopback snapshot http://localhost:3000 --interactive
 ```
 
 Pipe one full snapshot as JSON:
 
 ```sh
-./browser.jr --json snapshot http://localhost:3000
+./browser.jr --allow-loopback --json snapshot http://localhost:3000
 ```
 
 Keep one page alive across commands:
 
 ```sh
 printf 'open http://localhost:3000\nsnapshot\nget title\nexit\n' \
-  | ./browser.jr session
+  | ./browser.jr --allow-loopback session
 ```
 
 Stream identified JSON results for the same commands:
 
 ```sh
 printf 'open http://localhost:3000\nget title\nexit\n' \
-  | ./browser.jr --json session
+  | ./browser.jr --allow-loopback --json session
 ```
 
 Capture its current viewport as a PNG:
 
 ```sh
 printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
-  | ./browser.jr session
+  | ./browser.jr --allow-loopback session
 ```
 
 ## What works
 
-- bounded loopback HTTP loading
+- bounded public HTTP and HTTPS loading, with explicit loopback access and private-network blocking
 - static HTML parsing with normalized ancestry
 - a small inline and embedded CSS cascade with horizontal and static block-flow layout subsets
 - role locators with current HTML roles, non-presentational descendant image `alt` text, description, state, level, and accessibility-hidden filters
@@ -92,7 +92,6 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - text, image, native-control, stylesheet, clip, effect, or complete browser paint
 - a separate screenshot helper process or complete browser compositor
 - Playwright or `agent-browser` protocol compatibility
-- remote websites or HTTPS
 - a browser window
 
 Unsupported evidence blocks a check. browser.jr does not turn missing evidence into a pass.
@@ -227,7 +226,7 @@ Evidence date: 1 September 2026.
 | `loading/navigation.md` | drafted |
 | `loading/history-navigation.md` | drafted |
 | `loading/reload-page.md` | drafted |
-| `loading/network-control.md` | not started |
+| `loading/network-control.md` | drafted |
 | `interaction/fill-text.md` | drafted |
 | `interaction/type-text.md` | drafted |
 | `interaction/focus-element.md` | drafted |

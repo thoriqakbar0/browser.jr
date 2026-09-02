@@ -69,7 +69,7 @@ CLI output, exit status, and saved machine-readable results can be checked by sc
 
 ## Results so far
 
-Automated tests cover CLI discovery, loopback loading, static HTML geometry, typed requests, transactional `x` and `width` invalidation, and explicit project width limits. DLINT-01 through DLINT-04 and DLINT-12 have partial automated evidence from 2026-08-29. DLINT-11 and DLINT-13 have partial automated evidence from 2026-08-31.
+Automated tests cover CLI discovery, explicit loopback loading, static HTML geometry, typed requests, transactional `x` and `width` invalidation, and explicit project width limits. DLINT-01 through DLINT-04 and DLINT-12 have partial automated evidence from 2026-08-29. DLINT-11 and DLINT-13 have partial automated evidence from 2026-08-31.
 
 Snapshot tests cover full trees, interactive projections, list markers, state, scopes, document refs, URLs, depth, compact output, JSON, and replacement. SNAP-01 through SNAP-23 have partial automated evidence from 2026-08-31.
 
