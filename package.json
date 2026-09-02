@@ -1,0 +1,46 @@
+{
+  "name": "agent-browser-plugin-browser-jr",
+  "version": "0.1.0",
+  "description": "Run browser.jr through the agent-browser plugin protocol",
+  "type": "module",
+  "bin": {
+    "agent-browser-plugin-browser-jr": "plugin/cli.mjs"
+  },
+  "files": [
+    "plugin/cli.mjs",
+    "plugin/test",
+    "src",
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "browser.jr",
+    "scripts/check-versions.mjs"
+  ],
+  "scripts": {
+    "build:native": "cargo build --release --bin browser-jr",
+    "test": "node --test plugin/test/*.test.mjs",
+    "pack:check": "npm pack --dry-run",
+    "check:versions": "node scripts/check-versions.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thoriqakbar0/browser.jr.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thoriqakbar0/browser.jr/issues"
+  },
+  "homepage": "https://github.com/thoriqakbar0/browser.jr#readme",
+  "keywords": [
+    "agent-browser",
+    "browser",
+    "rust",
+    "automation",
+    "plugin"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

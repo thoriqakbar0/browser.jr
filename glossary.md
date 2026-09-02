@@ -292,6 +292,12 @@ These terms describe decided but unimplemented REPL behavior.
 
 **Invocation.** One execution of the browser.jr CLI with its arguments, configuration, output, and exit status.
 
+**agent-browser plugin.** An external executable that receives one `agent-browser.plugin.v1` JSON request on stdin and returns one JSON response on stdout. browser.jr uses a namespaced command plugin, not an agent-browser engine provider.
+
+**Plugin session batch.** One `browserjr.session` request that runs a bounded ordered command list in one browser.jr JSON session.
+
+**Plugin relay.** An authenticated loopback process that keeps one browser.jr JSON session warm and forwards one serialized command per `browserjr.command` request.
+
 **Invoke.** The shell starts browser.jr. The CLI parses arguments and resolves project configuration.
 
 **Exit immediately.** The invocation ends before loading a page because it completed locally or rejected its input.

@@ -21,6 +21,7 @@ This directory checks product claims against the running browser.jr CLI. Feature
 | [navigation.md](navigation.md) | `loading/navigation.md` |
 | [history-navigation.md](history-navigation.md) | `loading/history-navigation.md` |
 | [ai-session.md](ai-session.md) | `automation/ai-session.md` |
+| [agent-browser-plugin.md](agent-browser-plugin.md) | `automation/agent-browser-plugin.md` |
 | [fill-text.md](fill-text.md) | `interaction/fill-text.md` |
 | [type-text.md](type-text.md) | `interaction/type-text.md` |
 | [focus-element.md](focus-element.md) | `interaction/focus-element.md` |
@@ -130,3 +131,5 @@ Reload tests cover replacement, stale references, failed-load recovery, and miss
 Locator tests cover semantic, state, CSS, and XPath matching over normalized ancestry. They also cover pointer transitions, actionability, reads, geometry, native controls, image alternatives, and references. QUERY-01 through QUERY-63 have partial evidence through 2026-09-01.
 
 TTY conditions, interactive cancellation, and broader screenshot paint remain unverified.
+
+Agent-browser plugin tests cover manifest discovery, bounded session batches, line-injection rejection, authenticated warm relay sequencing, packed-tarball execution, and one complete benchmark matrix. ABPLUGIN-01 through ABPLUGIN-05 passed on 2026-09-02.
