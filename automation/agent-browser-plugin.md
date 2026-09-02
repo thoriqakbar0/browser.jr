@@ -10,10 +10,15 @@ The plugin supports one bounded session batch and one authenticated local relay 
 
 ## The simple case
 
-The caller builds browser.jr, adds the npm package or local tarball to agent-browser, and supplies the native binary through `BROWSER_JR_BIN` when it is not on `PATH`.
+The caller builds browser.jr, packs the local npm artifact, and supplies the native binary through `BROWSER_JR_BIN`.
 
 ```sh
-agent-browser plugin add agent-browser-plugin-browser-jr@0.1.0
+cargo build --release --bin browser-jr
+npm pack --pack-destination /tmp
+export BROWSER_JR_BIN="$PWD/target/release/browser-jr"
+
+agent-browser plugin add \
+  file:/tmp/agent-browser-plugin-browser-jr-0.1.0.tgz
 
 agent-browser plugin run browser-jr browserjr.session \
   --payload '{"commands":["open https://example.com","snapshot -i","get title"]}'
@@ -119,6 +124,8 @@ Implemented and verified on 2 September 2026:
 
 Open:
 
-- publish the npm package after the owner selects a license and a native binary distribution policy
+- bound relay startup, command execution, and forced shutdown under BJR-014
+- block npm publication until the owner selects a license and a native binary distribution policy under BJR-015
+- reject malformed relay port tokens under BJR-016
 - test protocol compatibility against older agent-browser releases
 - decide whether future CDP support should introduce a separate `browser.provider` capability

@@ -76,7 +76,7 @@ Actions validate current evidence before committing focus, scroll, pointer, cont
 
 The session resolves a locator or reference, checks the relevant visibility, stability, geometry, and receives-events evidence, computes prospective scrolling, then commits state only after all required checks pass.
 
-Text controls, checkboxes, radios, selects, links, GET forms, focus, hover, and the bounded keyboard model each keep their live state in the session-owned current page. Failed actions preserve current state and snapshot references.
+Text controls, checkboxes, radios, selects, links, GET forms, focus, hover, and the bounded keyboard model each keep their live state in the session-owned current page. Failed local actions preserve current state and snapshot references. A navigation load failure preserves the installed document and history position, but earlier scroll, focus, and event phases can remain.
 
 ## Native event transcript
 
@@ -101,3 +101,22 @@ The npm package is a namespaced command plugin, not a replacement browser engine
 [`runBrowserJrSession`](../plugin/cli.mjs) runs a bounded command batch in one native JSON session. [`serve`](../plugin/cli.mjs) exposes an authenticated loopback relay, and [`exchangeWithRelay`](../plugin/cli.mjs) sends one serialized command to that warm session.
 
 The plugin resolves the native executable from an explicit request, `BROWSER_JR_BIN`, a packaged release binary, or `browser-jr` on `PATH`. Native binary distribution remains a release concern outside the Rust session model.
+
+## Detailed maps
+
+These pages trace each architecture boundary through its primary source path.
+
+- [[runtime-flow]] follows a request from adapter input to presentation.
+- [[session-state]] maps mutable ownership and identity lifetime.
+- [[network-loading]] maps URL authority and bounded fetching.
+- [[page-pipeline]] maps normalized HTML to supported evidence.
+- [[locator-resolution]] maps queries to current-document identities.
+- [[interaction-pipeline]] and [[action-transactions]] map stateful commands.
+- [[keyboard-state]] maps held keys, selection, and activation.
+- [[evidence-and-snapshots]] maps support state, snapshots, and references.
+- [[screenshot-pipeline]] maps capture preparation and rasterization.
+- [[session-wire]] maps the human and JSON session adapters.
+- [[plugin-protocol]] maps the agent-browser integration boundary.
+- [[benchmark-harness]] maps correctness checks and timed work.
+- [[release-and-packaging]] maps the npm artifact and native dependency.
+- [[verification-map]] maps claims to runtime evidence and triage.

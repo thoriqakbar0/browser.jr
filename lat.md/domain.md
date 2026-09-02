@@ -91,3 +91,14 @@ A plugin session batch starts one bounded native session for an ordered list, wh
 [`runBrowserJrSession`](../plugin/cli.mjs) owns the batch boundary. [`serve`](../plugin/cli.mjs) owns relay lifecycle, loopback binding, token authentication, command serialization, and idle shutdown.
 
 Both are transport adapters around the same browser.jr JSON session protocol. Neither adds CDP or a second browser state model.
+
+## Deeper concept maps
+
+These pages expand the state and identity concepts used by the domain model.
+
+- [[session-state]] connects page installation, history, focus, and identity counters.
+- [[locator-resolution]] separates reusable locators from capture-scoped references.
+- [[action-transactions]] describes the boundary between local action state and navigation.
+- [[keyboard-state]] describes held-key and selection state.
+- [[evidence-and-snapshots]] describes support state and immutable captures.
+- [[plugin-protocol]] describes transport state that remains outside the browser domain.

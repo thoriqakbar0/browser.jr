@@ -1,8 +1,8 @@
 # Bug triage
 
-Evidence date: 1 September 2026.
+Evidence date: 2 September 2026.
 
-Six open compatibility defects affect controller comparisons. The current browser.jr runtime slice passes its automated checks.
+Six open compatibility defects affect controller comparisons. Three open plugin defects affect relay lifecycle, publication safety, and CLI validation.
 
 Missing behavior belongs in the coverage table. A live-page result that conflicts with decided behavior becomes a triage entry.
 
@@ -16,6 +16,9 @@ Missing behavior belongs in the coverage table. A live-page result that conflict
 | BJR-011 | Lightpanda treats a `pointer-events:none` overlay as a click blocker | medium | actionability compatibility | Keep Playwright pointer-event semantics and confirm Lightpanda's intended boundary. | not filed |
 | BJR-012 | Lightpanda omits PointerEvents and hover exit records | medium | event compatibility | Keep Playwright event families and confirm Lightpanda's intended boundary. | not filed |
 | BJR-013 | Playwright engines order pointer transitions differently | low | event compatibility | Keep one explicit target-level order until user-agent profiles exist. | not filed |
+| BJR-014 | The agent-browser relay can hang or retain its native child | high | plugin lifecycle | Add one bounded lifecycle owner for startup, commands, and shutdown. | not filed |
+| BJR-015 | npm publication gates are not enforced | high | package release | Block publication until license and native binary policy are complete. | not filed |
+| BJR-016 | Relay port parsing accepts a numeric prefix with trailing text | low | plugin CLI | Validate the complete port token before conversion. | not filed |
 
 ## Open suspected conflicts
 
@@ -98,6 +101,32 @@ WebKit interleaved pointer and mouse enter records. It did not focus the static 
 The engines also interleaved pointer and mouse hover transitions differently.
 
 browser.jr uses Chrome's target-level transition order. Complete user-agent event profiles remain open.
+
+### BJR-014
+
+Controlled native processes exposed three unbounded relay paths.
+
+A process that started but never emitted `ready` left `serve` waiting without a response. A process that emitted `ready` but ignored stdin and `SIGTERM` kept the relay alive during shutdown. A listener bind failure returned an `EADDRINUSE` plugin error but left the spawned native process waiting on stdin.
+
+The relay command queue also has no native-operation deadline. A client timeout closes only the socket, so its queued command can execute later. One stalled native response blocks every later command.
+
+This conflicts with ABPLUGIN-07 and the documented bounded lifecycle claim.
+
+### BJR-015
+
+`RELEASING.md` says that the owner must select a license and native binary distribution policy before publication.
+
+`package.json` does not enforce that gate. It sets `publishConfig.access` to `public`, and `npm publish --dry-run --ignore-scripts` reaches the public registry publication step.
+
+The package needs a structural publication block until the release decisions are complete. Automation must use a local tarball during that period.
+
+### BJR-016
+
+The relay CLI parses `--port` with `Number.parseInt` and checks only the resulting number.
+
+A value such as `54321junk` becomes port `54321` and proceeds to native process startup. The edge-case documentation says invalid ports return one unsuccessful response.
+
+The parser must reject any token that is not a complete decimal port.
 
 ## Resolved conflicts
 

@@ -20,11 +20,11 @@ Wire commands stay in adapters. They must become typed requests before they can 
 
 ## State changes are transactional
 
-A failed operation preserves the last committed state rather than leaving partial layout, scrolling, control, history, or document changes.
+Local mutations compute and validate their candidate state before commit. Document installation also preserves the current document and history position when loading fails.
 
-[[src/layout.rs#LayoutKernel#apply_mutations]] computes a candidate field state before commit. Session actions similarly validate actionability and prospective scrolling before they mutate the page.
+[[src/layout.rs#LayoutKernel#apply_mutations]] computes a candidate field state before commit. Local control actions validate their complete effect before they mutate the page.
 
-This rule makes failures inspectable and keeps retries predictable.
+Navigation actions are narrower. Scroll, focus, and native event phases can commit before a later load fails. [[action-transactions]] records that boundary so callers do not treat every failed navigation as a complete rollback.
 
 ## One session owns mutable browser state
 
@@ -81,3 +81,16 @@ browser.jr integrates through `agent-browser.plugin.v1` command capabilities bec
 [`pluginMain`](../plugin/cli.mjs) advertises `browserjr.session` and `browserjr.command`. It does not register a `browser.provider`, and it does not replace standard `agent-browser` commands.
 
 The warm relay exists to reuse one browser.jr session while preserving an authenticated, loopback-only boundary. It serializes commands because the native JSON session has one ordered stdin/stdout stream.
+
+## Decision consequences
+
+These maps show where the decisions above constrain current implementation work.
+
+- [[runtime-flow]] keeps wire parsing and presentation outside typed requests.
+- [[network-loading]] applies explicit authority to each address and redirect.
+- [[page-pipeline]] carries unsupported source evidence into later projections.
+- [[action-transactions]] applies transactional checks with a narrower navigation invariant.
+- [[evidence-and-snapshots]] makes support state and reference expiry visible to callers.
+- [[screenshot-pipeline]] delays bounded raster work until capture.
+- [[plugin-protocol]] keeps CDP outside the command integration and records lifecycle gaps.
+- [[release-and-packaging]] separates the source package from native binary distribution.
