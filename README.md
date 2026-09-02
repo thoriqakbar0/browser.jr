@@ -191,6 +191,7 @@ These numbers measure browser-control latency, not rendering-engine speed or bro
 
 ## Project notes
 
+- [`lat.md/`](lat.md/lat.md) maps implemented architecture, design decisions, and domain invariants to source code.
 - [`architecture.md`](architecture.md) describes the proposed engine design.
 - [`glossary.md`](glossary.md) defines shared terms.
 - [`goal.md`](goal.md) explains how to maintain the product description.
