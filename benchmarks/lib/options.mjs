@@ -4,6 +4,7 @@ import { SCENARIO_IDS } from "./scenarios.mjs";
 
 export const ADAPTER_IDS = Object.freeze([
   "browser-jr",
+  "agent-browser-browser-jr",
   "chrome",
   "firefox",
   "webkit",

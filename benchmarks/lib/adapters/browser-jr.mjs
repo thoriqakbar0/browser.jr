@@ -5,11 +5,11 @@ import { LineProcess } from "../line-process.mjs";
 import { runChecked } from "../process.mjs";
 
 const INDEX_REFS = Object.freeze({
-  continue: "@e1",
-  name: "@e2",
-  terms: "@e3",
-  color: "@e4",
-  save: "@e5",
+  continue: "@e2",
+  name: "@e3",
+  terms: "@e4",
+  color: "@e5",
+  save: "@e6",
 });
 
 export class BrowserJrAdapter {
@@ -44,7 +44,9 @@ export class BrowserJrAdapter {
       timeoutMs: 120_000,
     });
     const version = await runChecked(this.#binary, ["--version"]);
-    this.#process = new LineProcess(this.#binary, ["session"], { cwd: this.#repoRoot });
+    this.#process = new LineProcess(this.#binary, ["--allow-loopback", "session"], {
+      cwd: this.#repoRoot,
+    });
     const ready = await this.#process.readLine();
     assertIncludes(ready, "session ready", "browser.jr startup");
     return { version: version.stdout.trim() };
@@ -140,9 +142,9 @@ export class BrowserJrAdapter {
         assertIncludes(sample.output, 'link "Back"', scenario);
         break;
       case "full-workflow":
-        assertIncludes(sample.output, 'value ref=@e2 "Benchmark User"', scenario);
-        assertIncludes(sample.output, "checked ref=@e3 value=true", scenario);
-        assertIncludes(sample.output, 'value ref=@e4 "blue"', scenario);
+        assertIncludes(sample.output, 'value ref=@e3 "Benchmark User"', scenario);
+        assertIncludes(sample.output, "checked ref=@e4 value=true", scenario);
+        assertIncludes(sample.output, 'value ref=@e5 "blue"', scenario);
         assertIncludes(sample.output, 'title="Benchmark destination"', scenario);
         break;
       default:

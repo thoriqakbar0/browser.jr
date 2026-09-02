@@ -22,7 +22,7 @@ test("parseOptions accepts focused engine and scenario selections", () => {
       "--warmup",
       "0",
       "--engines",
-      "browser-jr,webkit",
+      "browser-jr,agent-browser-browser-jr,webkit",
       "--scenarios",
       "snapshot,full-workflow",
       "--output",
@@ -32,7 +32,7 @@ test("parseOptions accepts focused engine and scenario selections", () => {
   );
   assert.equal(options.iterations, 3);
   assert.equal(options.warmup, 0);
-  assert.deepEqual(options.adapters, ["browser-jr", "webkit"]);
+  assert.deepEqual(options.adapters, ["browser-jr", "agent-browser-browser-jr", "webkit"]);
   assert.deepEqual(options.scenarios, ["snapshot", "full-workflow"]);
   assert.equal(options.output, "/tmp/bench/results/focused.json");
 });

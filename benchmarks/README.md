@@ -1,6 +1,6 @@
 # Browser control benchmarks
 
-This suite compares browser.jr with Chrome, Firefox Gecko, WebKit, Lightpanda, and agent-browser.
+This suite compares browser.jr with Chrome, Firefox Gecko, WebKit, Lightpanda, agent-browser, and browser.jr through the agent-browser plugin protocol.
 
 It measures browser-control workflows, not rendering-engine internals.
 
@@ -12,12 +12,14 @@ Lightpanda uses Puppeteer over CDP, matching Lightpanda's published benchmark.
 
 agent-browser scenarios include CLI and daemon overhead.
 
+The browser.jr plugin scenarios include agent-browser CLI startup, the plugin process, one authenticated loopback relay request, and one command against a warm browser.jr JSON session.
+
 Direct engine scenarios include their controller library overhead.
 
 ## Fairness rules
 
 - Every engine loads the same loopback fixture.
-- Every engine uses one warm browser session.
+- Every engine uses one warm browser session. The browser.jr plugin adapter keeps its native session warm through the plugin relay.
 - Setup runs outside each timed sample.
 - Correctness checks run after every sample.
 - Raw samples stay in the JSON result.
@@ -59,7 +61,7 @@ The direct Chrome adapter prefers `BROWSER_JR_BENCH_CHROME_PATH`.
 
 It otherwise checks system Chrome and agent-browser's Chrome for Testing cache.
 
-Install `lightpanda` and `agent-browser` separately before running their adapters.
+Install `lightpanda` and `agent-browser` separately before running their adapters. The browser.jr plugin adapter requires agent-browser plugin commands; it is verified with agent-browser 0.32.4 and newer.
 
 ## Run
 
@@ -78,7 +80,7 @@ Focus the matrix when debugging:
 
 ```sh
 pnpm bench -- --iterations 20 --warmup 2 \
-  --engines browser-jr,chrome,firefox,webkit,lightpanda \
+  --engines browser-jr,agent-browser-browser-jr,chrome,firefox,webkit,lightpanda \
   --scenarios snapshot,agent-loop,full-workflow
 ```
 
@@ -113,6 +115,8 @@ Use p95 and standard deviation to identify unstable control paths.
 Snapshot bytes measure returned evidence size, not semantic quality or token count.
 
 Snapshot shapes follow each controller API and may contain different evidence breadth.
+
+The direct browser.jr and agent-browser plugin rows use the same native engine and fixture. Their difference measures the added control-path overhead, not a rendering difference.
 
 Do not use these numbers to claim complete web compatibility.
 

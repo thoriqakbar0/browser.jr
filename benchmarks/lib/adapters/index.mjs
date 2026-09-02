@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { chromium, firefox, webkit } from "playwright";
 
 import { AgentBrowserAdapter } from "./agent-browser.mjs";
+import { AgentBrowserBrowserJrAdapter } from "./agent-browser-browser-jr.mjs";
 import { BrowserJrAdapter } from "./browser-jr.mjs";
 import { LightpandaAdapter } from "./lightpanda.mjs";
 import { PlaywrightAdapter } from "./playwright.mjs";
@@ -49,6 +50,7 @@ export async function createAdapters(repoRoot) {
   const chromeExecutable = await findChromeExecutable();
   return new Map([
     ["browser-jr", () => new BrowserJrAdapter(repoRoot)],
+    ["agent-browser-browser-jr", () => new AgentBrowserBrowserJrAdapter(repoRoot)],
     [
       "chrome",
       () => {

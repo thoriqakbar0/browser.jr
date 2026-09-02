@@ -4,7 +4,7 @@ A small browser for agents, built in Rust.
 
 browser.jr is a proof of concept. It explores how agents can inspect a page, control it, and verify their work without a full consumer browser.
 
-Playwright and `agent-browser` compatibility are goals. Neither protocol is complete today.
+Playwright compatibility remains a goal. The `agent-browser.plugin.v1` command-plugin path is implemented; browser.jr does not expose the CDP endpoint required by an agent-browser browser provider.
 
 ## Try it
 
@@ -53,6 +53,30 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
   | ./browser.jr --allow-loopback session
 ```
 
+### Use it as an agent-browser plugin
+
+Build the native binary and pack the local plugin:
+
+```sh
+cargo build --release --bin browser-jr
+npm pack --pack-destination /tmp
+```
+
+Add the generated tarball. Keep `BROWSER_JR_BIN` set when the native binary is not on `PATH`:
+
+```sh
+export BROWSER_JR_BIN="$PWD/target/release/browser-jr"
+agent-browser plugin add \
+  file:/tmp/agent-browser-plugin-browser-jr-0.1.0.tgz
+
+agent-browser plugin run browser-jr browserjr.session \
+  --payload '{"commands":["open https://example.com","snapshot -i","get title"]}'
+```
+
+The plugin runs namespaced browser.jr commands. It does not replace normal `agent-browser open`, `snapshot`, or MCP commands.
+
+[`automation/agent-browser-plugin.md`](automation/agent-browser-plugin.md) defines the request limits, relay mode, failures, and compatibility boundary.
+
 ## What works
 
 - bounded public HTTP and HTTPS loading, with explicit loopback access and private-network blocking
@@ -82,6 +106,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - viewport, full-page, and strict-locator screenshots through session mode
 - bounded solid-box paint lists, source-over RGBA compositing, and PNG output
 - lazy software-rasterizer activation with image and clipped-paint work limits
+- an `agent-browser.plugin.v1` command plugin with bounded session batches and an authenticated warm-session relay
 
 ## What does not work
 
@@ -91,7 +116,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - complete stacking, clipping, transformed geometry, or dynamic receives-events hit testing
 - text, image, native-control, stylesheet, clip, effect, or complete browser paint
 - a separate screenshot helper process or complete browser compositor
-- Playwright or `agent-browser` protocol compatibility
+- Playwright compatibility or an agent-browser `browser.provider` integration over CDP
 - a browser window
 
 Unsupported evidence blocks a check. browser.jr does not turn missing evidence into a pass.
@@ -121,9 +146,10 @@ pnpm bench
 
 ## Benchmark snapshot
 
-This benchmark compares browser.jr with six other browser-control paths over the same local two-page fixture:
+This benchmark compares browser.jr with seven other browser-control paths over the same local two-page fixture:
 
 - browser.jr through one persistent release CLI session
+- browser.jr through the agent-browser plugin protocol and a warm authenticated relay
 - Chrome, Firefox, and WebKit through Playwright
 - Lightpanda through Puppeteer over CDP
 - agent-browser through its CLI and daemon, using either Chrome or Lightpanda
@@ -136,17 +162,18 @@ The harness discards one warmup, then records 10 samples. It sorts them and repo
 
 Every supported sample must return its expected title, snapshot content, or control value. Unsupported scenarios receive no timing.
 
-A clean Apple M3 run produced these full-workflow medians:
+An Apple M3 working-tree run on 2 September 2026 produced these full-workflow medians:
 
 | Adapter | Full-workflow median |
 | --- | ---: |
-| browser.jr | 22.55 ms |
-| Chrome | 375.36 ms |
-| Firefox | 643.46 ms |
-| WebKit | 681.95 ms |
-| Lightpanda | 492.45 ms |
-| agent-browser with Chrome | 7,366.00 ms |
-| agent-browser with Lightpanda | 1,693.90 ms |
+| browser.jr | 0.82 ms |
+| agent-browser plugin with browser.jr | 651.56 ms |
+| Chrome | 162.27 ms |
+| Firefox | 126.61 ms |
+| WebKit | 82.06 ms |
+| Lightpanda | 25.92 ms |
+| agent-browser with Chrome | 445.53 ms |
+| agent-browser with Lightpanda | 357.35 ms |
 
 The timed workflow opens the fixture, snapshots its controls, fills text, checks a checkbox, and selects `blue`.
 
@@ -154,7 +181,9 @@ It then reads all three values, follows a link, and reads the destination title.
 
 browser.jr ran this workflow within its current static HTML boundary. It did not run the JavaScript evaluation or screenshot scenarios.
 
-These numbers measure browser-control latency, not rendering-engine speed or browser compatibility. agent-browser timings include its CLI and daemon overhead.
+The plugin row uses the same browser.jr engine. Its difference from the direct row measures agent-browser CLI, plugin-process, protocol, and relay overhead.
+
+These numbers measure browser-control latency, not rendering-engine speed or browser compatibility. Other agent-browser rows include their CLI and daemon overhead.
 
 [Read the benchmark method](benchmarks/README.md) for every scenario and fairness rule.
 
@@ -168,8 +197,10 @@ These numbers measure browser-control latency, not rendering-engine speed or bro
 - [`verification/`](verification/README.md) holds runtime checklists.
 - [`bug-triage.md`](bug-triage.md) records confirmed conflicts.
 - [`benchmarks/README.md`](benchmarks/README.md) defines cross-engine correctness and latency checks.
+- [`automation/agent-browser-plugin.md`](automation/agent-browser-plugin.md) defines the agent-browser plugin behavior.
+- [`RELEASING.md`](RELEASING.md) records the remaining publication gates.
 
-Evidence date: 1 September 2026.
+Evidence date: 2 September 2026.
 
 ## Coverage
 
@@ -188,6 +219,7 @@ Evidence date: 1 September 2026.
 | `verification/navigation.md` | drafted |
 | `verification/history-navigation.md` | drafted |
 | `verification/ai-session.md` | drafted |
+| `verification/agent-browser-plugin.md` | drafted |
 | `verification/fill-text.md` | drafted |
 | `verification/type-text.md` | drafted |
 | `verification/focus-element.md` | drafted |
@@ -261,6 +293,7 @@ Evidence date: 1 September 2026.
 | `verification-features/batch-checks.md` | not started |
 | `automation/package-session.md` | not started |
 | `automation/ai-session.md` | drafted |
+| `automation/agent-browser-plugin.md` | drafted |
 | `automation/reproducible-script.md` | not started |
 | `cross-cutting/determinism.md` | not started |
 | `cross-cutting/resource-limits.md` | not started |

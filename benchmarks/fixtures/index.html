@@ -4,31 +4,21 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Browser control benchmark</title>
-    <style>
-      body { width: 640px; margin: 24px; }
-      label { display: block; width: 320px; margin: 8px 0; }
-      input, select, button { width: 240px; }
-    </style>
   </head>
-  <body>
-    <h1>Browser control benchmark</h1>
-    <a id="continue" href="/next.html">Continue</a>
-    <label for="agent-name">Agent name</label>
-    <input id="agent-name" name="agent-name" type="text" value="">
-    <label>
-      <input id="terms" name="terms" type="checkbox">
-      Accept terms
-    </label>
-    <label for="color">Color</label>
-    <select id="color" name="color">
-      <option value="red">Red</option>
-      <option value="blue">Blue</option>
+  <body style="width:640px;margin-top:24px;margin-right:24px;margin-bottom:24px;margin-left:24px">
+    <h1 style="display:block;box-sizing:border-box;width:320px;height:40px">Browser control benchmark</h1>
+    <a id="continue" href="/next.html" style="display:block;box-sizing:border-box;width:20px;height:10px">Continue</a>
+    <input id="agent-name" name="agent-name" type="text" value="" aria-label="Agent name" style="display:block;box-sizing:border-box;width:240px;height:32px">
+    <input id="terms" name="terms" type="checkbox" aria-label="Accept terms" style="display:block;box-sizing:border-box;width:10px;height:10px">
+    <select id="color" name="color" aria-label="Color" style="display:block;box-sizing:border-box;width:240px;height:32px">
+      <option value="red" hidden>Red</option>
+      <option value="blue" hidden>Blue</option>
     </select>
-    <button id="save" type="button">Save</button>
-    <ul>
-      <li>Alpha</li>
-      <li>Beta</li>
-      <li>Gamma</li>
+    <button id="save" type="button" style="display:block;box-sizing:border-box;width:240px;height:32px">Save</button>
+    <ul style="display:block;box-sizing:border-box;width:320px;height:80px">
+      <li style="display:block;box-sizing:border-box;width:120px;height:20px">Alpha</li>
+      <li style="display:block;box-sizing:border-box;width:120px;height:20px">Beta</li>
+      <li style="display:block;box-sizing:border-box;width:120px;height:20px">Gamma</li>
     </ul>
   </body>
 </html>
