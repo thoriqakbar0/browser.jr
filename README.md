@@ -61,6 +61,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - role locators with current HTML roles, non-presentational descendant image `alt` text, description, state, level, and accessibility-hidden filters
 - text, label, attribute, CSS, and XPath locators
 - direct CSS and XPath targets for implemented session actions, reads, and counts
+- typed verified actions with one target path, passed checks, effects, and document generations
 - text fill, append, focused keyboard insertion, held-key modifiers, phase-correct native `Space`, sequential focus, bounded caret editing, native activation, link navigation, and visible-target hover state
 - a data-minimized native event transcript for supported text, keyboard, select, pointer, mouse, focus, click, check, and uncheck action phases
 - bounded same-context native GET form submission through submitters and implicit text-control `Enter`
@@ -169,7 +170,7 @@ These numbers measure browser-control latency, not rendering-engine speed or bro
 - [`bug-triage.md`](bug-triage.md) records confirmed conflicts.
 - [`benchmarks/README.md`](benchmarks/README.md) defines cross-engine correctness and latency checks.
 
-Evidence date: 1 September 2026.
+Evidence date: 3 September 2026.
 
 ## Coverage
 

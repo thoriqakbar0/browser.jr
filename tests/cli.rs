@@ -1493,10 +1493,11 @@ fn session_mode_preserves_refs_after_an_unsupported_click() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains(&format!("navigated ref=@e2 url={url}next elements=1")));
     assert!(stdout.contains(r#"- button "Arrived" [ref=@e1]"#));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("cannot click @e1:"));
     assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("cannot click @e1: click execution for role button is not implemented")
+        stderr.contains("enabled check failed:"),
+        "unexpected stderr: {stderr}"
     );
 }
 
@@ -2222,7 +2223,8 @@ fn session_mode_sets_viewport_before_open_and_reflows_current_state() {
     let (url, server) = serve_page(
         r#"
             <body style="height:900px">
-                <input id="email" aria-label="Email" value="before">
+                <input id="email" aria-label="Email" value="before"
+                    style="display:block;box-sizing:border-box;width:200px;height:24px">
             </body>
         "#,
     );

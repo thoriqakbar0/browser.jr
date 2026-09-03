@@ -57,7 +57,7 @@ browser.jr checks the target's supported text-control capability.
 
 [Value inspection](../inspection/read-value.md) defines the supported input and textarea subset.
 
-Direct locators also require supported visible evidence. Disabled and read-only controls reject type.
+Every reference and locator target requires supported visible evidence. Disabled and read-only controls reject type.
 
 ### While running
 

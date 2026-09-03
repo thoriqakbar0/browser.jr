@@ -423,6 +423,13 @@ impl Session {
         request.execute(self)
     }
 
+    fn current_document_generation(&self) -> u64 {
+        self.current_page
+            .as_ref()
+            .expect("an action requires a current page")
+            .epoch
+    }
+
     fn load_page(&mut self, url: String) -> Result<OpenedPage, LoadError> {
         let loaded = load_html(&url, self.network_access)?;
         let url = loaded.final_url;
@@ -512,6 +519,29 @@ impl Session {
             .ok_or(SessionError::StaleElementReference { reference })
     }
 
+    fn resolved_reference(
+        &self,
+        reference: InteractiveElementRef,
+    ) -> Result<ResolvedLocator, SessionError> {
+        let interactive_index = self.element_index_for(reference)?;
+        let page = self
+            .current_page
+            .as_ref()
+            .expect("validated reference requires a current page");
+        let source_index = page.source_index_for_interactive(interactive_index);
+        let element = &page.locator_elements[source_index];
+        Ok(ResolvedLocator {
+            matched: LocatorMatch::new(
+                &element.element,
+                element.role(),
+                element.name(),
+                element.text(),
+            ),
+            source_index,
+            interactive_index: Some(interactive_index),
+        })
+    }
+
     fn locator_matches_for(
         &self,
         locator: &Locator,
@@ -595,6 +625,17 @@ impl Session {
             });
         }
         Ok(matches.pop().expect("one locator match remains"))
+    }
+
+    fn action_match_for(
+        &self,
+        locator: &Locator,
+    ) -> Result<ResolvedLocator, LocatorOperationError> {
+        let locator = match locator {
+            Locator::Role(role) => Locator::Role(role.clone().with_include_hidden(true)),
+            locator => locator.clone(),
+        };
+        self.locator_match_for(&locator)
     }
 
     fn locator_interactive_index(
@@ -2219,6 +2260,93 @@ pub enum LocatorAction {
 
 pub type RoleAction = LocatorAction;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionTarget {
+    Reference(InteractiveElementRef),
+    Locator(Locator),
+    Role(RoleLocator),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BrowserAction {
+    Click,
+    Fill(String),
+    Type(String),
+    Focus,
+    Press(KeyboardKey),
+    Select(NonEmpty<SelectOptionTarget>),
+    SetChecked(bool),
+    Hover,
+    ScrollIntoView,
+}
+
+impl BrowserAction {
+    pub const fn kind(&self) -> LocatorAction {
+        match self {
+            Self::Click => LocatorAction::Click,
+            Self::Fill(_) => LocatorAction::Fill,
+            Self::Type(_) => LocatorAction::Type,
+            Self::Focus => LocatorAction::Focus,
+            Self::Press(_) => LocatorAction::Press,
+            Self::Select(_) => LocatorAction::Select,
+            Self::SetChecked(true) => LocatorAction::Check,
+            Self::SetChecked(false) => LocatorAction::Uncheck,
+            Self::Hover => LocatorAction::Hover,
+            Self::ScrollIntoView => LocatorAction::ScrollIntoView,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedActionTarget {
+    pub requested: ActionTarget,
+    pub matched: LocatorMatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActionDocumentGeneration {
+    pub before: u64,
+    pub after: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionEffect {
+    Navigated(OpenedPage),
+    Activated,
+    Filled { value: String },
+    Typed { value: String },
+    Focused,
+    Pressed(PressResult),
+    Selected { values: NonEmpty<String> },
+    Checked { checked: bool, changed: bool },
+    Hovered,
+    Scrolled(PageScroll),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActionResult {
+    pub target: ResolvedActionTarget,
+    pub checks: Vec<ActionabilityCheck>,
+    pub effect: ActionEffect,
+    pub document_generation: ActionDocumentGeneration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActionFailure {
+    pub target: ResolvedActionTarget,
+    pub action: LocatorAction,
+    pub checks: Vec<ActionabilityCheck>,
+    pub blocked_by: Option<ActionabilityCheck>,
+    pub reason: String,
+    pub document_generation: ActionDocumentGeneration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PerformAction {
+    pub target: ActionTarget,
+    pub action: BrowserAction,
+}
+
 impl std::fmt::Display for LocatorAction {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
@@ -2233,6 +2361,138 @@ impl std::fmt::Display for LocatorAction {
             Self::Hover => "hover",
             Self::ScrollIntoView => "scroll into view",
         })
+    }
+}
+
+impl private::Sealed for PerformAction {}
+
+impl SessionRequest for PerformAction {
+    type Reply = ActionResult;
+
+    fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
+        let requested = self.target;
+        let resolved = match &requested {
+            ActionTarget::Reference(reference) => session.resolved_reference(*reference)?,
+            ActionTarget::Locator(locator) => session
+                .action_match_for(locator)
+                .map_err(|error| locator_session_error(locator.clone(), error))?,
+            ActionTarget::Role(role) => {
+                let locator = Locator::from(role.clone());
+                session
+                    .action_match_for(&locator)
+                    .map_err(|error| role_session_error(role.clone(), error))?
+            }
+        };
+        let target = ResolvedActionTarget {
+            requested,
+            matched: resolved.matched.clone(),
+        };
+        let before = session.current_document_generation();
+        let before_checked = resolved.interactive_index.and_then(|index| {
+            session
+                .current_page
+                .as_ref()
+                .expect("resolved action requires a current page")
+                .interactive_elements[index]
+                .checked()
+        });
+        let kind = self.action.kind();
+        let effect =
+            match self.action {
+                BrowserAction::Click => match execute_click_for_resolved(session, resolved) {
+                    Ok(ClickByLocatorResult::Navigated { page, .. }) => {
+                        Ok(ActionEffect::Navigated(page))
+                    }
+                    Ok(ClickByLocatorResult::Activated { .. }) => Ok(ActionEffect::Activated),
+                    Ok(ClickByLocatorResult::Checked { checked, .. }) => {
+                        Ok(ActionEffect::Checked {
+                            checked,
+                            changed: before_checked != Some(checked),
+                        })
+                    }
+                    Err(error) => Err(error),
+                },
+                BrowserAction::Fill(value) => execute_fill_for_resolved(session, resolved, value)
+                    .map(|result| ActionEffect::Filled {
+                        value: result.value,
+                    }),
+                BrowserAction::Type(text) => execute_type_for_resolved(session, resolved, &text)
+                    .map(|result| ActionEffect::Typed {
+                        value: result.value,
+                    }),
+                BrowserAction::Focus => {
+                    execute_focus_for_resolved(session, resolved).map(|_| ActionEffect::Focused)
+                }
+                BrowserAction::Press(key) => execute_press_for_resolved(session, resolved, key)
+                    .map(|result| ActionEffect::Pressed(result.press)),
+                BrowserAction::Select(options) => {
+                    execute_select_options_for_resolved(session, resolved, options).map(|result| {
+                        ActionEffect::Selected {
+                            values: result.selected,
+                        }
+                    })
+                }
+                BrowserAction::SetChecked(checked) => {
+                    execute_set_checked_for_resolved(session, resolved, checked).map(|result| {
+                        ActionEffect::Checked {
+                            checked: result.checked,
+                            changed: before_checked != Some(result.checked),
+                        }
+                    })
+                }
+                BrowserAction::Hover => {
+                    execute_hover_for_resolved(session, resolved).map(|_| ActionEffect::Hovered)
+                }
+                BrowserAction::ScrollIntoView => {
+                    execute_scroll_into_view_for_resolved(session, resolved)
+                        .map(|result| ActionEffect::Scrolled(result.scroll))
+                }
+            }
+            .map_err(|error| action_failure(session, target.clone(), kind, before, error))?;
+        let after = session.current_document_generation();
+        let checks = successful_action_checks(kind, &effect);
+        Ok(ActionResult {
+            target,
+            checks,
+            effect,
+            document_generation: ActionDocumentGeneration { before, after },
+        })
+    }
+}
+
+fn successful_action_checks(
+    action: LocatorAction,
+    effect: &ActionEffect,
+) -> Vec<ActionabilityCheck> {
+    match action {
+        LocatorAction::Click => vec![
+            ActionabilityCheck::Visible,
+            ActionabilityCheck::Enabled,
+            ActionabilityCheck::Stable,
+            ActionabilityCheck::ReceivesEvents,
+        ],
+        LocatorAction::Fill | LocatorAction::Type => {
+            vec![ActionabilityCheck::Visible, ActionabilityCheck::Editable]
+        }
+        LocatorAction::Select => {
+            vec![ActionabilityCheck::Visible, ActionabilityCheck::Enabled]
+        }
+        LocatorAction::Check | LocatorAction::Uncheck => match effect {
+            ActionEffect::Checked { changed: true, .. } => vec![
+                ActionabilityCheck::Enabled,
+                ActionabilityCheck::Visible,
+                ActionabilityCheck::Stable,
+                ActionabilityCheck::ReceivesEvents,
+            ],
+            ActionEffect::Checked { changed: false, .. } => Vec::new(),
+            _ => unreachable!("checked actions always return a checked effect"),
+        },
+        LocatorAction::Hover => vec![
+            ActionabilityCheck::Visible,
+            ActionabilityCheck::Stable,
+            ActionabilityCheck::ReceivesEvents,
+        ],
+        LocatorAction::Focus | LocatorAction::Press | LocatorAction::ScrollIntoView => Vec::new(),
     }
 }
 
@@ -3332,7 +3592,14 @@ fn execute_scroll_into_view_by_locator(
     session: &mut Session,
     locator: &Locator,
 ) -> Result<LocatorScroll, LocatorOperationError> {
-    let resolved = session.locator_match_for(locator)?;
+    let resolved = session.action_match_for(locator)?;
+    execute_scroll_into_view_for_resolved(session, resolved)
+}
+
+fn execute_scroll_into_view_for_resolved(
+    session: &mut Session,
+    resolved: ResolvedLocator,
+) -> Result<LocatorScroll, LocatorOperationError> {
     let viewport = session.viewport;
     let page = session
         .current_page
@@ -3445,7 +3712,14 @@ fn execute_click_by_locator(
     session: &mut Session,
     locator: &Locator,
 ) -> Result<ClickByLocatorResult, LocatorOperationError> {
-    let resolved = session.locator_match_for(locator)?;
+    let resolved = session.action_match_for(locator)?;
+    execute_click_for_resolved(session, resolved)
+}
+
+fn execute_click_for_resolved(
+    session: &mut Session,
+    resolved: ResolvedLocator,
+) -> Result<ClickByLocatorResult, LocatorOperationError> {
     let index = session.locator_interactive_index(&resolved, LocatorAction::Click)?;
     let element = &session
         .current_page
@@ -3605,7 +3879,15 @@ fn execute_fill_by_locator(
     locator: &Locator,
     replacement: String,
 ) -> Result<FillByLocatorResult, LocatorOperationError> {
-    let resolved = session.locator_match_for(locator)?;
+    let resolved = session.action_match_for(locator)?;
+    execute_fill_for_resolved(session, resolved, replacement)
+}
+
+fn execute_fill_for_resolved(
+    session: &mut Session,
+    resolved: ResolvedLocator,
+    replacement: String,
+) -> Result<FillByLocatorResult, LocatorOperationError> {
     let index = session.locator_interactive_index(&resolved, LocatorAction::Fill)?;
     let event_target = session.dom_event_target(index);
     let result = {
@@ -3649,7 +3931,15 @@ fn execute_type_by_locator(
     locator: &Locator,
     text: &str,
 ) -> Result<TypeByLocatorResult, LocatorOperationError> {
-    let resolved = session.locator_match_for(locator)?;
+    let resolved = session.action_match_for(locator)?;
+    execute_type_for_resolved(session, resolved, text)
+}
+
+fn execute_type_for_resolved(
+    session: &mut Session,
+    resolved: ResolvedLocator,
+    text: &str,
+) -> Result<TypeByLocatorResult, LocatorOperationError> {
     let index = session.locator_interactive_index(&resolved, LocatorAction::Type)?;
     let page = session
         .current_page
@@ -3680,7 +3970,14 @@ fn execute_focus_by_locator(
     session: &mut Session,
     locator: &Locator,
 ) -> Result<FocusByLocatorResult, LocatorOperationError> {
-    let resolved = session.locator_match_for(locator)?;
+    let resolved = session.action_match_for(locator)?;
+    execute_focus_for_resolved(session, resolved)
+}
+
+fn execute_focus_for_resolved(
+    session: &mut Session,
+    resolved: ResolvedLocator,
+) -> Result<FocusByLocatorResult, LocatorOperationError> {
     let index = session.locator_interactive_index(&resolved, LocatorAction::Focus)?;
     let page = session
         .current_page
@@ -3804,7 +4101,15 @@ fn execute_press_by_locator(
     locator: &Locator,
     key: KeyboardKey,
 ) -> Result<PressByLocatorResult, LocatorOperationError> {
-    let resolved = session.locator_match_for(locator)?;
+    let resolved = session.action_match_for(locator)?;
+    execute_press_for_resolved(session, resolved, key)
+}
+
+fn execute_press_for_resolved(
+    session: &mut Session,
+    resolved: ResolvedLocator,
+    key: KeyboardKey,
+) -> Result<PressByLocatorResult, LocatorOperationError> {
     let index = session.locator_interactive_index(&resolved, LocatorAction::Press)?;
     let key = key
         .with_modifiers(&session.keyboard.modifiers())
@@ -3877,7 +4182,15 @@ fn execute_select_options_by_locator(
     locator: &Locator,
     options: NonEmpty<SelectOptionTarget>,
 ) -> Result<SelectOptionsByLocatorResult, LocatorOperationError> {
-    let resolved = session.locator_match_for(locator)?;
+    let resolved = session.action_match_for(locator)?;
+    execute_select_options_for_resolved(session, resolved, options)
+}
+
+fn execute_select_options_for_resolved(
+    session: &mut Session,
+    resolved: ResolvedLocator,
+    options: NonEmpty<SelectOptionTarget>,
+) -> Result<SelectOptionsByLocatorResult, LocatorOperationError> {
     let index = session.locator_interactive_index(&resolved, LocatorAction::Select)?;
     let event_target = session.dom_event_target(index);
     let result = {
@@ -3922,12 +4235,20 @@ fn execute_set_checked_by_locator(
     locator: &Locator,
     replacement: bool,
 ) -> Result<SetCheckedByLocatorResult, LocatorOperationError> {
+    let resolved = session.action_match_for(locator)?;
+    execute_set_checked_for_resolved(session, resolved, replacement)
+}
+
+fn execute_set_checked_for_resolved(
+    session: &mut Session,
+    resolved: ResolvedLocator,
+    replacement: bool,
+) -> Result<SetCheckedByLocatorResult, LocatorOperationError> {
     let action = if replacement {
         LocatorAction::Check
     } else {
         LocatorAction::Uncheck
     };
-    let resolved = session.locator_match_for(locator)?;
     let index = session.locator_interactive_index(&resolved, action)?;
     let viewport = session.viewport;
     let page = session
@@ -3995,7 +4316,14 @@ fn execute_hover_by_locator(
     session: &mut Session,
     locator: &Locator,
 ) -> Result<HoverByLocatorResult, LocatorOperationError> {
-    let resolved = session.locator_match_for(locator)?;
+    let resolved = session.action_match_for(locator)?;
+    execute_hover_for_resolved(session, resolved)
+}
+
+fn execute_hover_for_resolved(
+    session: &mut Session,
+    resolved: ResolvedLocator,
+) -> Result<HoverByLocatorResult, LocatorOperationError> {
     let viewport = session.viewport;
     session
         .current_page
@@ -4040,190 +4368,20 @@ impl SessionRequest for ClickElement {
     type Reply = ClickResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let index = session.element_index_for(self.reference)?;
-        let element = &session
-            .current_page
-            .as_ref()
-            .expect("validated reference requires a current page")
-            .interactive_elements[index];
-        let visible = element
-            .visible()
-            .map_err(|reason| SessionError::UnsupportedClick {
+        let resolved = session.resolved_reference(self.reference)?;
+        match execute_click_for_resolved(session, resolved) {
+            Ok(ClickByLocatorResult::Navigated { page, .. }) => Ok(ClickResult::Navigated {
                 reference: self.reference,
-                reason: reason.into(),
-            })?;
-        if !visible {
-            return Err(SessionError::UnsupportedClick {
-                reference: self.reference,
-                reason: "hidden elements cannot be clicked".into(),
-            });
-        }
-        if element.enabled() == Some(false) {
-            return Err(SessionError::UnsupportedClick {
-                reference: self.reference,
-                reason: "disabled controls cannot be clicked".into(),
-            });
-        }
-        let source_index = element.source_index;
-        session
-            .current_page
-            .as_ref()
-            .expect("validated reference requires a current page")
-            .locator_elements[source_index]
-            .stable()
-            .map_err(|reason| SessionError::UnsupportedClick {
-                reference: self.reference,
-                reason: format!("stable check failed: {reason}"),
-            })?;
-        session
-            .current_page
-            .as_ref()
-            .expect("validated reference requires a current page")
-            .receives_events(source_index, session.viewport)
-            .map_err(|reason| SessionError::UnsupportedClick {
-                reference: self.reference,
-                reason: format!("receives events check failed: {reason}"),
-            })?;
-        let action = element.action.clone();
-        let viewport = session.viewport;
-        match action {
-            InteractiveAction::Navigate { href } => {
-                let current_url = session
-                    .current_page
-                    .as_ref()
-                    .expect("validated reference requires a current page")
-                    .url
-                    .clone();
-                let target = resolve_navigation_url(&current_url, &href).map_err(|error| {
-                    SessionError::Navigation {
-                        reference: self.reference,
-                        error,
-                    }
-                })?;
-                session
-                    .current_page
-                    .as_mut()
-                    .expect("validated reference requires a current page")
-                    .auto_scroll_into_view(source_index, viewport);
-                let context = session.pointer_action_context(source_index);
-                session
-                    .current_page
-                    .as_mut()
-                    .expect("validated reference requires a current page")
-                    .focused_interactive_index = Some(index);
-                session.finish_pointer_click(&context, &[]);
-                let page =
-                    session
-                        .navigate_to(target)
-                        .map_err(|error| SessionError::Navigation {
-                            reference: self.reference,
-                            error,
-                        })?;
-                Ok(ClickResult::Navigated {
-                    reference: self.reference,
-                    page,
-                })
-            }
-            InteractiveAction::SubmitForm { form_owner } => {
-                session
-                    .current_page
-                    .as_mut()
-                    .expect("validated reference requires a current page")
-                    .auto_scroll_into_view(source_index, viewport);
-                let context = session.pointer_action_context(source_index);
-                session
-                    .current_page
-                    .as_mut()
-                    .expect("validated reference requires a current page")
-                    .focused_interactive_index = Some(index);
-                session.finish_pointer_click(&context, &[]);
-                let target = session
-                    .current_page
-                    .as_ref()
-                    .expect("validated reference requires a current page")
-                    .form_submission_url(Some(index), form_owner)
-                    .map_err(|error| match error {
-                        FormSubmissionError::Unsupported(reason) => {
-                            SessionError::UnsupportedClick {
-                                reference: self.reference,
-                                reason,
-                            }
-                        }
-                        FormSubmissionError::Navigation(error) => SessionError::Navigation {
-                            reference: self.reference,
-                            error,
-                        },
-                    })?;
-                let page =
-                    session
-                        .navigate_to(target)
-                        .map_err(|error| SessionError::Navigation {
-                            reference: self.reference,
-                            error,
-                        })?;
-                Ok(ClickResult::Navigated {
-                    reference: self.reference,
-                    page,
-                })
-            }
-            action @ (InteractiveAction::Activate
-            | InteractiveAction::ToggleCheckbox
-            | InteractiveAction::SelectRadio) => {
-                validate_native_click(
-                    session
-                        .current_page
-                        .as_ref()
-                        .expect("validated reference requires a current page"),
-                    index,
-                    &action,
-                )
-                .map_err(|reason| SessionError::UnsupportedClick {
-                    reference: self.reference,
-                    reason,
-                })?;
-                session
-                    .current_page
-                    .as_mut()
-                    .expect("validated reference requires a current page")
-                    .auto_scroll_into_view(source_index, viewport);
-                let context = session.pointer_action_context(source_index);
-                let effect = {
-                    let page = session
-                        .current_page
-                        .as_mut()
-                        .expect("validated reference requires a current page");
-                    apply_native_click(page, index, action).map_err(|reason| {
-                        SessionError::UnsupportedClick {
-                            reference: self.reference,
-                            reason,
-                        }
-                    })?
-                };
-                match effect {
-                    NativeClickEffect::Activated => {
-                        session.finish_pointer_click(&context, &[]);
-                        Ok(ClickResult::Activated {
-                            reference: self.reference,
-                        })
-                    }
-                    NativeClickEffect::Checked { checked, changed } => {
-                        let events = if changed {
-                            &[DomEventType::Input, DomEventType::Change][..]
-                        } else {
-                            &[][..]
-                        };
-                        session.finish_pointer_click(&context, events);
-                        Ok(ClickResult::Checked {
-                            reference: self.reference,
-                            checked,
-                        })
-                    }
-                }
-            }
-            InteractiveAction::Unsupported { reason } => Err(SessionError::UnsupportedClick {
-                reference: self.reference,
-                reason,
+                page,
             }),
+            Ok(ClickByLocatorResult::Activated { .. }) => Ok(ClickResult::Activated {
+                reference: self.reference,
+            }),
+            Ok(ClickByLocatorResult::Checked { checked, .. }) => Ok(ClickResult::Checked {
+                reference: self.reference,
+                checked,
+            }),
+            Err(error) => Err(reference_action_error(self.reference, error)),
         }
     }
 }
@@ -4407,36 +4565,14 @@ impl SessionRequest for FillElement {
     type Reply = FillResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let index = session.element_index_for(self.reference)?;
-        let event_target = session.dom_event_target(index);
-        let result = {
-            let page = session
-                .current_page
-                .as_mut()
-                .expect("validated reference requires a current page");
-            let element = &mut page.interactive_elements[index];
-            match element.replace_text(self.value) {
-                Ok(value) => {
-                    let value = value.into();
-                    page.focused_interactive_index = Some(index);
-                    Ok(FillResult {
-                        reference: self.reference,
-                        value,
-                    })
-                }
-                Err(
-                    TextValueError::Blocked { reason } | TextValueError::Unsupported { reason },
-                ) => Err(SessionError::UnsupportedFill {
-                    reference: self.reference,
-                    reason,
-                }),
-            }
-        }?;
-        session.record_dom_events(
-            &event_target,
-            &[DomEventType::BeforeInput, DomEventType::Input],
-        );
-        Ok(result)
+        let resolved = session.resolved_reference(self.reference)?;
+        match execute_fill_for_resolved(session, resolved, self.value) {
+            Ok(result) => Ok(FillResult {
+                reference: self.reference,
+                value: result.value,
+            }),
+            Err(error) => Err(reference_action_error(self.reference, error)),
+        }
     }
 }
 
@@ -4446,23 +4582,13 @@ impl SessionRequest for TypeElement {
     type Reply = TypeResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let index = session.element_index_for(self.reference)?;
-        let page = session
-            .current_page
-            .as_mut()
-            .expect("validated reference requires a current page");
-        let element = &mut page.interactive_elements[index];
-        match element.append_text(&self.text) {
-            Ok(value) => Ok(TypeResult {
+        let resolved = session.resolved_reference(self.reference)?;
+        match execute_type_for_resolved(session, resolved, &self.text) {
+            Ok(result) => Ok(TypeResult {
                 reference: self.reference,
-                value: value.into(),
+                value: result.value,
             }),
-            Err(TextValueError::Blocked { reason } | TextValueError::Unsupported { reason }) => {
-                Err(SessionError::UnsupportedType {
-                    reference: self.reference,
-                    reason,
-                })
-            }
+            Err(error) => Err(reference_action_error(self.reference, error)),
         }
     }
 }
@@ -4473,24 +4599,14 @@ impl SessionRequest for FocusElement {
     type Reply = FocusResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let index = session.element_index_for(self.reference)?;
-        let page = session
-            .current_page
-            .as_mut()
-            .expect("validated reference requires a current page");
-        let element = &page.interactive_elements[index];
-        if let Some(reason) = element.focus_block_reason() {
-            return Err(SessionError::UnsupportedFocus {
+        let resolved = session.resolved_reference(self.reference)?;
+        match execute_focus_for_resolved(session, resolved) {
+            Ok(result) => Ok(FocusResult {
                 reference: self.reference,
-                reason,
-            });
+                element: result.matched.element,
+            }),
+            Err(error) => Err(reference_action_error(self.reference, error)),
         }
-        let element = element.element().into();
-        page.focused_interactive_index = Some(index);
-        Ok(FocusResult {
-            reference: self.reference,
-            element,
-        })
     }
 }
 
@@ -4500,27 +4616,12 @@ impl SessionRequest for HoverElement {
     type Reply = HoverResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let interactive_index = session.element_index_for(self.reference)?;
-        let viewport = session.viewport;
-        let source_index = session
-            .current_page
-            .as_ref()
-            .expect("validated reference requires a current page")
-            .source_index_for_interactive(interactive_index);
-        session
-            .current_page
-            .as_mut()
-            .expect("validated reference requires a current page")
-            .prepare_hover(source_index, viewport)
-            .map_err(|(check, reason)| SessionError::UnsupportedHover {
+        let resolved = session.resolved_reference(self.reference)?;
+        execute_hover_for_resolved(session, resolved)
+            .map(|_| HoverResult {
                 reference: self.reference,
-                reason: format!("{check} check failed: {reason}"),
-            })?;
-        let context = session.pointer_action_context(source_index);
-        session.finish_pointer_move(&context);
-        Ok(HoverResult {
-            reference: self.reference,
-        })
+            })
+            .map_err(|error| reference_action_error(self.reference, error))
     }
 }
 
@@ -5070,35 +5171,18 @@ impl SessionRequest for SelectElement {
     type Reply = SelectResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let index = session.element_index_for(self.reference)?;
-        let event_target = session.dom_event_target(index);
-        let result = {
-            let element = &mut session
-                .current_page
-                .as_mut()
-                .expect("validated reference requires a current page")
-                .interactive_elements[index];
-            match element.select_value(&self.value) {
-                Ok(value) => Ok(SelectResult {
-                    reference: self.reference,
-                    value: value.into(),
-                }),
-                Err(
-                    SelectValueError::Blocked { reason } | SelectValueError::Unsupported { reason },
-                ) => Err(SessionError::UnsupportedSelect {
-                    reference: self.reference,
-                    reason,
-                }),
-                Err(SelectValueError::OptionNotFound { target }) => {
-                    Err(reference_option_not_found(self.reference, target))
-                }
-                Err(SelectValueError::OptionDisabled { target }) => {
-                    Err(reference_option_disabled(self.reference, target))
-                }
-            }
-        }?;
-        session.record_dom_events(&event_target, &[DomEventType::Input, DomEventType::Change]);
-        Ok(result)
+        let resolved = session.resolved_reference(self.reference)?;
+        match execute_select_options_for_resolved(
+            session,
+            resolved,
+            NonEmpty::one(SelectOptionTarget::Value(self.value)),
+        ) {
+            Ok(result) => Ok(SelectResult {
+                reference: self.reference,
+                value: result.selected[0].clone(),
+            }),
+            Err(error) => Err(reference_action_error(self.reference, error)),
+        }
     }
 }
 
@@ -5108,35 +5192,14 @@ impl SessionRequest for SelectOptions {
     type Reply = SelectOptionsResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let index = session.element_index_for(self.reference)?;
-        let event_target = session.dom_event_target(index);
-        let result = {
-            let element = &mut session
-                .current_page
-                .as_mut()
-                .expect("validated reference requires a current page")
-                .interactive_elements[index];
-            match element.select_options(&self.options) {
-                Ok(selected) => Ok(SelectOptionsResult {
-                    reference: self.reference,
-                    selected,
-                }),
-                Err(
-                    SelectValueError::Blocked { reason } | SelectValueError::Unsupported { reason },
-                ) => Err(SessionError::UnsupportedSelect {
-                    reference: self.reference,
-                    reason,
-                }),
-                Err(SelectValueError::OptionNotFound { target }) => {
-                    Err(reference_option_not_found(self.reference, target))
-                }
-                Err(SelectValueError::OptionDisabled { target }) => {
-                    Err(reference_option_disabled(self.reference, target))
-                }
-            }
-        }?;
-        session.record_dom_events(&event_target, &[DomEventType::Input, DomEventType::Change]);
-        Ok(result)
+        let resolved = session.resolved_reference(self.reference)?;
+        match execute_select_options_for_resolved(session, resolved, self.options) {
+            Ok(result) => Ok(SelectOptionsResult {
+                reference: self.reference,
+                selected: result.selected,
+            }),
+            Err(error) => Err(reference_action_error(self.reference, error)),
+        }
     }
 }
 
@@ -5187,23 +5250,14 @@ impl SessionRequest for ScrollElementIntoView {
     type Reply = ElementScroll;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let interactive_index = session.element_index_for(self.reference)?;
-        let viewport = session.viewport;
-        let page = session
-            .current_page
-            .as_mut()
-            .expect("validated reference requires a current page");
-        let source_index = page.source_index_for_interactive(interactive_index);
-        let scroll = page
-            .scroll_into_view(source_index, viewport)
-            .map_err(|reason| SessionError::UnsupportedScrollIntoView {
+        let resolved = session.resolved_reference(self.reference)?;
+        match execute_scroll_into_view_for_resolved(session, resolved) {
+            Ok(result) => Ok(ElementScroll {
                 reference: self.reference,
-                reason,
-            })?;
-        Ok(ElementScroll {
-            reference: self.reference,
-            scroll,
-        })
+                scroll: result.scroll,
+            }),
+            Err(error) => Err(reference_action_error(self.reference, error)),
+        }
     }
 }
 
@@ -5606,75 +5660,14 @@ impl SessionRequest for SetElementChecked {
     type Reply = SetCheckedResult;
 
     fn execute(self, session: &mut Session) -> Result<Self::Reply, SessionError> {
-        let index = session.element_index_for(self.reference)?;
-        let viewport = session.viewport;
-        let page = session
-            .current_page
-            .as_mut()
-            .expect("validated reference requires a current page");
-        let current = page.interactive_elements[index].checked().ok_or_else(|| {
-            SessionError::UnsupportedCheck {
+        let resolved = session.resolved_reference(self.reference)?;
+        match execute_set_checked_for_resolved(session, resolved, self.checked) {
+            Ok(result) => Ok(SetCheckedResult {
                 reference: self.reference,
-                reason: format!(
-                    "checked-state mutation for role {} is not implemented",
-                    page.interactive_elements[index].role()
-                ),
-            }
-        })?;
-        if current == self.checked {
-            return Ok(SetCheckedResult {
-                reference: self.reference,
-                checked: current,
-            });
-        }
-        page.validate_set_checked(index, self.checked)
-            .map_err(|error| SessionError::UnsupportedCheck {
-                reference: self.reference,
-                reason: error.reason(),
-            })?;
-        let visible = page.interactive_elements[index]
-            .visible()
-            .map_err(|reason| SessionError::UnsupportedCheck {
-                reference: self.reference,
-                reason: reason.into(),
-            })?;
-        if !visible {
-            return Err(SessionError::UnsupportedCheck {
-                reference: self.reference,
-                reason: "element is hidden or has an empty box".into(),
-            });
-        }
-        let source_index = page.source_index_for_interactive(index);
-        page.locator_elements[source_index]
-            .stable()
-            .map_err(|reason| SessionError::UnsupportedCheck {
-                reference: self.reference,
-                reason: format!("stable check failed: {reason}"),
-            })?;
-        page.receives_events(source_index, viewport)
-            .map_err(|reason| SessionError::UnsupportedCheck {
-                reference: self.reference,
-                reason: format!("receives events check failed: {reason}"),
-            })?;
-        page.auto_scroll_into_view(source_index, viewport);
-        let result = match page.set_checked(index, self.checked) {
-            Ok(checked) => Ok(SetCheckedResult {
-                reference: self.reference,
-                checked,
+                checked: result.checked,
             }),
-            Err(error) => Err(SessionError::UnsupportedCheck {
-                reference: self.reference,
-                reason: error.reason(),
-            }),
-        }?;
-        let context = session.pointer_action_context(source_index);
-        session
-            .current_page
-            .as_mut()
-            .expect("validated reference requires a current page")
-            .focused_interactive_index = Some(index);
-        session.finish_pointer_click(&context, &[DomEventType::Input, DomEventType::Change]);
-        Ok(result)
+            Err(error) => Err(reference_action_error(self.reference, error)),
+        }
     }
 }
 
@@ -5987,6 +5980,7 @@ pub enum SessionError {
         action: LocatorAction,
         reason: String,
     },
+    ActionFailed(Box<ActionFailure>),
     UnsupportedClick {
         reference: InteractiveElementRef,
         reason: String,
@@ -6171,6 +6165,168 @@ fn role_session_error(locator: RoleLocator, error: LocatorOperationError) -> Ses
     }
 }
 
+fn action_failure(
+    session: &Session,
+    target: ResolvedActionTarget,
+    action: LocatorAction,
+    before: u64,
+    error: LocatorOperationError,
+) -> SessionError {
+    let (checks, blocked_by, reason) = match error {
+        LocatorOperationError::ActionBlocked { check, reason, .. } => {
+            (checks_before(action, check), Some(check), reason)
+        }
+        LocatorOperationError::UnsupportedAction { reason, .. } => {
+            (checks_before_unsupported(action), None, reason)
+        }
+        LocatorOperationError::SelectOptionNotFound { target } => (
+            vec![ActionabilityCheck::Visible],
+            None,
+            format!("option {target} was not found"),
+        ),
+        LocatorOperationError::SelectOptionDisabled { target } => (
+            vec![ActionabilityCheck::Visible],
+            Some(ActionabilityCheck::Enabled),
+            format!("option {target} is disabled"),
+        ),
+        LocatorOperationError::Navigation(error) => (
+            checks_before_unsupported(action),
+            None,
+            format!("navigation failed: {error:?}"),
+        ),
+        LocatorOperationError::NoPage
+        | LocatorOperationError::NotFound
+        | LocatorOperationError::Ambiguous { .. }
+        | LocatorOperationError::Query { .. }
+        | LocatorOperationError::InspectionBlocked { .. }
+        | LocatorOperationError::SensitiveAttribute { .. } => {
+            unreachable!("a resolved action target cannot fail during resolution or inspection")
+        }
+    };
+    SessionError::ActionFailed(Box::new(ActionFailure {
+        target,
+        action,
+        checks,
+        blocked_by,
+        reason,
+        document_generation: ActionDocumentGeneration {
+            before,
+            after: session.current_document_generation(),
+        },
+    }))
+}
+
+fn checks_before(action: LocatorAction, blocked_by: ActionabilityCheck) -> Vec<ActionabilityCheck> {
+    let ordered = match action {
+        LocatorAction::Click => &[
+            ActionabilityCheck::Visible,
+            ActionabilityCheck::Enabled,
+            ActionabilityCheck::Stable,
+            ActionabilityCheck::ReceivesEvents,
+        ][..],
+        LocatorAction::Fill | LocatorAction::Type => {
+            &[ActionabilityCheck::Visible, ActionabilityCheck::Editable][..]
+        }
+        LocatorAction::Select => &[ActionabilityCheck::Visible, ActionabilityCheck::Enabled][..],
+        LocatorAction::Check | LocatorAction::Uncheck => &[
+            ActionabilityCheck::Enabled,
+            ActionabilityCheck::Visible,
+            ActionabilityCheck::Stable,
+            ActionabilityCheck::ReceivesEvents,
+        ][..],
+        LocatorAction::Hover => &[
+            ActionabilityCheck::Visible,
+            ActionabilityCheck::Stable,
+            ActionabilityCheck::ReceivesEvents,
+        ][..],
+        LocatorAction::Focus | LocatorAction::Press | LocatorAction::ScrollIntoView => &[],
+    };
+    ordered
+        .iter()
+        .copied()
+        .take_while(|check| *check != blocked_by)
+        .collect()
+}
+
+fn checks_before_unsupported(action: LocatorAction) -> Vec<ActionabilityCheck> {
+    match action {
+        LocatorAction::Click => vec![
+            ActionabilityCheck::Visible,
+            ActionabilityCheck::Enabled,
+            ActionabilityCheck::Stable,
+            ActionabilityCheck::ReceivesEvents,
+        ],
+        LocatorAction::Fill | LocatorAction::Type | LocatorAction::Select => {
+            vec![ActionabilityCheck::Visible]
+        }
+        LocatorAction::Check
+        | LocatorAction::Uncheck
+        | LocatorAction::Focus
+        | LocatorAction::Press
+        | LocatorAction::Hover
+        | LocatorAction::ScrollIntoView => Vec::new(),
+    }
+}
+
+fn reference_action_error(
+    reference: InteractiveElementRef,
+    error: LocatorOperationError,
+) -> SessionError {
+    match error {
+        LocatorOperationError::Navigation(error) => SessionError::Navigation { reference, error },
+        LocatorOperationError::ActionBlocked {
+            action,
+            check,
+            reason,
+        } => reference_unsupported_action(
+            reference,
+            action,
+            format!("{check} check failed: {reason}"),
+        ),
+        LocatorOperationError::UnsupportedAction { action, reason } => {
+            reference_unsupported_action(reference, action, reason)
+        }
+        LocatorOperationError::SelectOptionNotFound { target } => {
+            reference_option_not_found(reference, target)
+        }
+        LocatorOperationError::SelectOptionDisabled { target } => {
+            reference_option_disabled(reference, target)
+        }
+        LocatorOperationError::NoPage
+        | LocatorOperationError::NotFound
+        | LocatorOperationError::Ambiguous { .. }
+        | LocatorOperationError::Query { .. }
+        | LocatorOperationError::InspectionBlocked { .. }
+        | LocatorOperationError::SensitiveAttribute { .. } => {
+            unreachable!("a validated reference bypasses locator resolution and inspection")
+        }
+    }
+}
+
+fn reference_unsupported_action(
+    reference: InteractiveElementRef,
+    action: LocatorAction,
+    reason: String,
+) -> SessionError {
+    match action {
+        LocatorAction::Click => SessionError::UnsupportedClick { reference, reason },
+        LocatorAction::Fill => SessionError::UnsupportedFill { reference, reason },
+        LocatorAction::Type => SessionError::UnsupportedType { reference, reason },
+        LocatorAction::Focus => SessionError::UnsupportedFocus { reference, reason },
+        LocatorAction::Select => SessionError::UnsupportedSelect { reference, reason },
+        LocatorAction::Check | LocatorAction::Uncheck => {
+            SessionError::UnsupportedCheck { reference, reason }
+        }
+        LocatorAction::Hover => SessionError::UnsupportedHover { reference, reason },
+        LocatorAction::ScrollIntoView => {
+            SessionError::UnsupportedScrollIntoView { reference, reason }
+        }
+        LocatorAction::Press => {
+            unreachable!("reference actions do not apply a target-scoped press")
+        }
+    }
+}
+
 impl From<SelectorQueryError> for LocatorOperationError {
     fn from(error: SelectorQueryError) -> Self {
         Self::Query {
@@ -6236,8 +6392,9 @@ fn require_locator_enabled(
             check: ActionabilityCheck::Enabled,
             reason: "element is disabled".into(),
         }),
-        None => Err(LocatorOperationError::UnsupportedAction {
+        None => Err(LocatorOperationError::ActionBlocked {
             action,
+            check: ActionabilityCheck::Enabled,
             reason: format!(
                 "enabled-state evidence for role {} is not implemented",
                 element.role()

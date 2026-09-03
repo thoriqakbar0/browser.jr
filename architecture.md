@@ -272,6 +272,10 @@ pub(crate) struct FieldGroupId(u16);
 
 A live target binds a durable semantic element identifier to its page and document generation. `NodeId` remains an internal generational DOM identity.
 
+The implemented action boundary resolves references and locators into one internal target before checking or mutating page state.
+
+`PerformAction` exposes that boundary through one result containing target evidence, checks, effect, and document generations.
+
 ```rust
 pub(crate) struct TargetRef {
 	page: PageId,

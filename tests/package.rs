@@ -1,29 +1,29 @@
 use browser_jr::{
-    AccessibilitySnapshotOptions, ActionabilityCheck, AltLocator, ApplyMutation, ApplyMutations,
-    BoundingBox, CaptureAccessibilitySnapshot, CaptureAccessibilitySnapshotWithin,
-    CaptureInteractiveSnapshot, CaptureInteractiveSnapshotWithin, CaptureTarget, CheckElementWidth,
-    ClickByLocator, ClickByLocatorResult, ClickByRole, ClickByRoleResult, ClickElement,
-    ClickResult, Comparison, CountByLocator, CssLocator, DomEventType, ElementBoundingBox,
-    ElementInput, ElementVisible, FillByLocator, FillByRole, FillElement, FillResult,
-    FindAllByLocator, FindByLocator, FindByRole, FocusByLocator, FocusElement, FocusResult,
-    GetAttributeByLocator, GetBoundingBoxByLocator, GetCheckedByLocator, GetEditableByLocator,
-    GetElementAttribute, GetElementBoundingBox, GetElementChecked, GetElementEditable,
-    GetElementEnabled, GetElementFocused, GetElementHovered, GetElementHtml, GetElementText,
-    GetElementValue, GetElementVisible, GetEnabledByLocator, GetFocusedByLocator,
-    GetHoveredByLocator, GetHtmlByLocator, GetPageText, GetPageTitle, GetPageUrl,
-    GetValueByLocator, GetViewportSize, GetVisibleByLocator, GoBack, GoForward,
-    HistoryNavigationResult, HoverByLocator, HoverByRole, HoverElement, InteractiveElementState,
-    KeyDown, KeyUp, KeyboardEventKey, KeyboardInsertText, KeyboardKey, KeyboardModifier,
-    KeyboardTextEffect, KeyboardType, LabelLocator, LayoutInput, LayoutMutation, LintLayout,
-    Locator, LocatorAction, LocatorInspection, NetworkAccess, NonEmpty, OnDemandRasterProcess,
-    OpenPage, PageScroll, PageText, PlaceholderLocator, PrepareScreenshot, PressByLocator,
-    PressKey, PressResult, ReloadPage, RoleAction, RoleLocator, RuleConstraint, RuleResult,
-    ScrollDirection, ScrollElementIntoView, ScrollIntoViewByLocator, ScrollPage, SelectByLocator,
-    SelectElement, SelectOptionTarget, SelectOptions, SelectOptionsByLocator, SelectOptionsResult,
-    SelectResult, Session, SessionError, SetCheckedByLocator, SetCheckedByRole, SetElementChecked,
-    SetViewportSize, SoftwareRasterProcessFactory, TakeDomEvents, TestIdLocator, TextLocator,
-    TextPressEffect, TitleLocator, TypeByLocator, TypeElement, TypeResult, ViewportSize,
-    XPathLocator,
+    AccessibilitySnapshotOptions, ActionEffect, ActionTarget, ActionabilityCheck, AltLocator,
+    ApplyMutation, ApplyMutations, BoundingBox, BrowserAction, CaptureAccessibilitySnapshot,
+    CaptureAccessibilitySnapshotWithin, CaptureInteractiveSnapshot,
+    CaptureInteractiveSnapshotWithin, CaptureTarget, CheckElementWidth, ClickByLocator,
+    ClickByLocatorResult, ClickByRole, ClickByRoleResult, ClickElement, ClickResult, Comparison,
+    CountByLocator, CssLocator, DomEventType, ElementBoundingBox, ElementInput, ElementVisible,
+    FillByLocator, FillByRole, FillElement, FillResult, FindAllByLocator, FindByLocator,
+    FindByRole, FocusByLocator, FocusElement, FocusResult, GetAttributeByLocator,
+    GetBoundingBoxByLocator, GetCheckedByLocator, GetEditableByLocator, GetElementAttribute,
+    GetElementBoundingBox, GetElementChecked, GetElementEditable, GetElementEnabled,
+    GetElementFocused, GetElementHovered, GetElementHtml, GetElementText, GetElementValue,
+    GetElementVisible, GetEnabledByLocator, GetFocusedByLocator, GetHoveredByLocator,
+    GetHtmlByLocator, GetPageText, GetPageTitle, GetPageUrl, GetValueByLocator, GetViewportSize,
+    GetVisibleByLocator, GoBack, GoForward, HistoryNavigationResult, HoverByLocator, HoverByRole,
+    HoverElement, InteractiveElementState, KeyDown, KeyUp, KeyboardEventKey, KeyboardInsertText,
+    KeyboardKey, KeyboardModifier, KeyboardTextEffect, KeyboardType, LabelLocator, LayoutInput,
+    LayoutMutation, LintLayout, Locator, LocatorAction, LocatorInspection, NetworkAccess, NonEmpty,
+    OnDemandRasterProcess, OpenPage, PageScroll, PageText, PerformAction, PlaceholderLocator,
+    PrepareScreenshot, PressByLocator, PressKey, PressResult, ReloadPage, RoleAction, RoleLocator,
+    RuleConstraint, RuleResult, ScrollDirection, ScrollElementIntoView, ScrollIntoViewByLocator,
+    ScrollPage, SelectByLocator, SelectElement, SelectOptionTarget, SelectOptions,
+    SelectOptionsByLocator, SelectOptionsResult, SelectResult, Session, SessionError,
+    SetCheckedByLocator, SetCheckedByRole, SetElementChecked, SetViewportSize,
+    SoftwareRasterProcessFactory, TakeDomEvents, TestIdLocator, TextLocator, TextPressEffect,
+    TitleLocator, TypeByLocator, TypeElement, TypeResult, ViewportSize, XPathLocator,
 };
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -1279,9 +1279,10 @@ fn role_actions_report_actionability_and_unsupported_behavior() {
     ));
     assert!(matches!(
         heading,
-        Err(SessionError::UnsupportedRoleAction {
+        Err(SessionError::RoleActionBlocked {
             locator,
             action: RoleAction::Click,
+            check: ActionabilityCheck::Enabled,
             ..
         }) if locator == heading_locator
     ));
@@ -1557,6 +1558,143 @@ fn role_actions_block_when_visibility_evidence_is_unavailable() {
             check: ActionabilityCheck::Visible,
             reason: "linked stylesheet loading is not implemented".into(),
         })
+    );
+}
+
+#[test]
+// @lat: [[lat#Verified action result#Shared target path]]
+fn verified_actions_apply_one_policy_to_references_and_semantic_locators() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(include_str!("../benchmarks/fixtures/index.html"));
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+    let reference = session
+        .execute(CaptureInteractiveSnapshot)
+        .unwrap()
+        .elements
+        .into_iter()
+        .find(|element| element.name == "Agent name")
+        .unwrap()
+        .reference;
+    let role = RoleLocator::new("textbox")
+        .unwrap()
+        .with_exact_name("Agent name");
+
+    let by_reference = session.execute(PerformAction {
+        target: ActionTarget::Reference(reference),
+        action: BrowserAction::Fill("changed".into()),
+    });
+    let by_role = session.execute(PerformAction {
+        target: ActionTarget::Role(role),
+        action: BrowserAction::Fill("changed".into()),
+    });
+    let by_locator = session.execute(PerformAction {
+        target: ActionTarget::Locator(Locator::from(
+            LabelLocator::new("Agent name").unwrap().exact(),
+        )),
+        action: BrowserAction::Fill("changed".into()),
+    });
+    drop(network_guard);
+
+    let evidence = |result| match result {
+        Err(SessionError::ActionFailed(failure)) => (
+            failure.target.matched,
+            failure.action,
+            failure.checks,
+            failure.blocked_by,
+            failure.reason,
+            failure.document_generation,
+        ),
+        other => panic!("expected a verified action failure, got {other:?}"),
+    };
+    let reference_evidence = evidence(by_reference);
+    let role_evidence = evidence(by_role);
+    let locator_evidence = evidence(by_locator);
+    assert_eq!(reference_evidence.0, role_evidence.0);
+    assert_eq!(reference_evidence.0, locator_evidence.0);
+    assert_eq!(reference_evidence.1, LocatorAction::Fill);
+    assert_eq!(reference_evidence.1, role_evidence.1);
+    assert!(reference_evidence.2.is_empty());
+    assert_eq!(reference_evidence.2, role_evidence.2);
+    assert_eq!(reference_evidence.2, locator_evidence.2);
+    assert_eq!(reference_evidence.3, Some(ActionabilityCheck::Visible));
+    assert_eq!(reference_evidence.3, role_evidence.3);
+    assert_eq!(reference_evidence.3, locator_evidence.3);
+    assert!(!reference_evidence.4.is_empty());
+    assert_eq!(reference_evidence.4, role_evidence.4);
+    assert_eq!(reference_evidence.4, locator_evidence.4);
+    assert_eq!(reference_evidence.5.before, reference_evidence.5.after);
+    assert_eq!(reference_evidence.5, role_evidence.5);
+    assert_eq!(reference_evidence.5, locator_evidence.5);
+}
+
+#[test]
+// @lat: [[lat#Verified action result#Successful receipt]]
+fn verified_action_returns_target_checks_effect_and_document_generation() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_page(
+        r#"<label for="agent-name">Agent name</label><input id="agent-name" value="old">"#,
+    );
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
+    session.execute(OpenPage { url }).unwrap();
+    server.join().unwrap();
+
+    let result = session
+        .execute(PerformAction {
+            target: ActionTarget::Locator(Locator::from(
+                LabelLocator::new("Agent name").unwrap().exact(),
+            )),
+            action: BrowserAction::Fill("changed".into()),
+        })
+        .unwrap();
+    drop(network_guard);
+
+    assert_eq!(result.target.matched.element, "agent-name");
+    assert_eq!(
+        result.checks,
+        vec![ActionabilityCheck::Visible, ActionabilityCheck::Editable]
+    );
+    assert_eq!(
+        result.effect,
+        ActionEffect::Filled {
+            value: "changed".into()
+        }
+    );
+    assert_eq!(
+        result.document_generation.before,
+        result.document_generation.after
+    );
+}
+
+#[test]
+// @lat: [[lat#Verified action result#Navigation generation]]
+fn verified_navigation_reports_the_replacement_document_generation() {
+    let network_guard = network_test_guard();
+    let (url, server) = serve_pages(vec![
+        r#"<a href="/next">Continue</a>"#,
+        r#"<title>Next</title><p>Done</p>"#,
+    ]);
+    let mut session = Session::with_network_access(NetworkAccess::PublicAndLoopback);
+    session.execute(OpenPage { url }).unwrap();
+
+    let result = session
+        .execute(PerformAction {
+            target: ActionTarget::Role(
+                RoleLocator::new("link")
+                    .unwrap()
+                    .with_exact_name("Continue"),
+            ),
+            action: BrowserAction::Click,
+        })
+        .unwrap();
+    server.join().unwrap();
+    drop(network_guard);
+
+    assert!(matches!(result.effect, ActionEffect::Navigated(_)));
+    assert_eq!(
+        result.document_generation.before + 1,
+        result.document_generation.after
     );
 }
 
@@ -6618,7 +6756,8 @@ fn viewport_resize_reflows_geometry_and_preserves_live_page_state() {
     let (url, server) = serve_page(
         r#"
             <body style="height:900px">
-                <input id="email" aria-label="Email" value="before">
+                <input id="email" aria-label="Email" value="before"
+                    style="display:block;box-sizing:border-box;width:200px;height:24px">
             </body>
         "#,
     );
