@@ -1,6 +1,7 @@
 ---
 title: 'CLI test flake can leave cargo test hanging'
 severity: 'minor'
+issue: 'thoriqakbar0/browser.jr#7'
 ---
 
 ## Expected Behavior
