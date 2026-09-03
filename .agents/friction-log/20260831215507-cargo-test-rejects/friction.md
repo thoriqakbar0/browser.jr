@@ -1,6 +1,7 @@
 ---
 title: 'cargo test rejects multiple test filters'
 severity: 'minor'
+issue: 'thoriqakbar0/browser.jr#11'
 ---
 
 ### Expected Behavior

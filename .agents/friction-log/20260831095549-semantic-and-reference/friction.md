@@ -1,6 +1,7 @@
 ---
 title: 'Semantic and reference actions disagree on stylesheet visibility'
 severity: 'major'
+issue: 'thoriqakbar0/browser.jr#4'
 ---
 
 ## Expected Behavior

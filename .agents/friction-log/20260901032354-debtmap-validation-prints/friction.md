@@ -1,6 +1,7 @@
 ---
 title: 'Debtmap validation prints FAIL before passing'
 severity: 'minor'
+issue: 'thoriqakbar0/browser.jr#14'
 ---
 
 ## Expected Behavior

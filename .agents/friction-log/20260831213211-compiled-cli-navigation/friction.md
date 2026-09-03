@@ -1,6 +1,7 @@
 ---
 title: 'compiled CLI navigation test hangs'
 severity: 'major'
+issue: 'thoriqakbar0/browser.jr#10'
 ---
 
 ## Expected Behavior

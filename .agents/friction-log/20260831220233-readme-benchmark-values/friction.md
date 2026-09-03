@@ -1,6 +1,7 @@
 ---
 title: 'README benchmark values lack their measurement recipe'
 severity: 'minor'
+issue: 'thoriqakbar0/browser.jr#15'
 ---
 
 ## Expected Behavior

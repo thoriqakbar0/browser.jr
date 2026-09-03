@@ -1,6 +1,7 @@
 ---
 title: 'semantic role probes lack a reusable fixture'
 severity: 'minor'
+issue: 'thoriqakbar0/browser.jr#12'
 ---
 
 ## Expected Behavior
