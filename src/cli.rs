@@ -645,6 +645,20 @@ pub(crate) fn write_session_error(errors: &mut impl Write, error: SessionError) 
         | SessionError::LocatorActionBlocked { .. }
         | SessionError::UnsupportedRoleAction { .. }
         | SessionError::UnsupportedLocatorAction { .. }) => write_locator_error(errors, error),
+        SessionError::ActionFailed(failure) => write_line(
+            errors,
+            &format!(
+                "browser.jr: cannot {action} {:?}: checks={checks:?} blocked_by={blocked_by:?} reason={reason} document={}->{}",
+                failure.target.matched.element,
+                failure.document_generation.before,
+                failure.document_generation.after,
+                action = failure.action,
+                checks = failure.checks,
+                blocked_by = failure.blocked_by,
+                reason = failure.reason,
+            ),
+            ExitStatus::Unavailable,
+        ),
         SessionError::UnsupportedClick { reference, reason } => write_line(
             errors,
             &format!("browser.jr: cannot click {reference}: {reason}"),

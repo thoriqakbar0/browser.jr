@@ -127,6 +127,10 @@ Viewport tests cover defaults, pre-open sizing, current-page reflow, state prese
 
 Reload tests cover replacement, stale references, failed-load recovery, and missing pages. RELOAD-01 through RELOAD-04 have partial automated evidence from 2026-08-31.
 
-Locator tests cover semantic, state, CSS, and XPath matching over normalized ancestry. They also cover pointer transitions, actionability, reads, geometry, native controls, image alternatives, and references. QUERY-01 through QUERY-63 have partial evidence through 2026-09-01.
+Locator tests cover semantic, state, CSS, and XPath matching over normalized ancestry.
+
+They cover pointer transitions, actionability, reads, geometry, native controls, image alternatives, references, and verified action receipts.
+
+QUERY-01 through QUERY-66 have partial evidence through 2026-09-03.
 
 TTY conditions, interactive cancellation, and broader screenshot paint remain unverified.

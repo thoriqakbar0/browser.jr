@@ -42,7 +42,8 @@ pub use screenshot::{
 };
 pub use selection::SelectOptionTarget;
 pub use session::{
-    ActionabilityCheck, ApplyMutation, ApplyMutations, CaptureAccessibilitySnapshot,
+    ActionDocumentGeneration, ActionEffect, ActionFailure, ActionResult, ActionTarget,
+    ActionabilityCheck, ApplyMutation, ApplyMutations, BrowserAction, CaptureAccessibilitySnapshot,
     CaptureAccessibilitySnapshotWithin, CaptureInteractiveSnapshot,
     CaptureInteractiveSnapshotWithin, CheckElementWidth, ClickByLocator, ClickByLocatorResult,
     ClickByRole, ClickByRoleResult, ClickElement, ClickResult, CountByLocator, DomEvent,
@@ -62,10 +63,10 @@ pub use session::{
     LintLayout, LocatorAction, LocatorAttribute, LocatorBoundingBox, LocatorChecked, LocatorCount,
     LocatorEditable, LocatorEnabled, LocatorFocused, LocatorHovered, LocatorHtml,
     LocatorInspection, LocatorMatches, LocatorScroll, LocatorValue, LocatorVisible, OpenPage,
-    OpenedPage, PageScroll, PageText, PageTitle, PageUrl, PrepareScreenshot, PressByLocator,
-    PressByLocatorResult, PressKey, PressResult, ReloadPage, RoleAction, ScrollDirection,
-    ScrollElementIntoView, ScrollIntoViewByLocator, ScrollPage, SelectByLocator,
-    SelectByLocatorResult, SelectElement, SelectOptions, SelectOptionsByLocator,
+    OpenedPage, PageScroll, PageText, PageTitle, PageUrl, PerformAction, PrepareScreenshot,
+    PressByLocator, PressByLocatorResult, PressKey, PressResult, ReloadPage, ResolvedActionTarget,
+    RoleAction, ScrollDirection, ScrollElementIntoView, ScrollIntoViewByLocator, ScrollPage,
+    SelectByLocator, SelectByLocatorResult, SelectElement, SelectOptions, SelectOptionsByLocator,
     SelectOptionsByLocatorResult, SelectOptionsResult, SelectResult, Session, SessionError,
     SessionRequest, SetCheckedByLocator, SetCheckedByLocatorResult, SetCheckedByRole,
     SetCheckedByRoleResult, SetCheckedResult, SetElementChecked, SetViewportSize, TakeDomEvents,

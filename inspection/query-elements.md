@@ -8,6 +8,8 @@ Package callers create a `Locator` from a semantic, attribute, CSS, or XPath que
 
 Locator action requests share one strict resolution and action path.
 
+`PerformAction` accepts a reference, generic locator, or role target through one typed action contract.
+
 The existing role-specific request types remain available for callers that need a guaranteed semantic role.
 
 Session-mode callers use this form:
@@ -192,6 +194,10 @@ Role locators exclude accessibility-hidden matches by default.
 
 Unknown stylesheet visibility blocks a matching role query unless `--include-hidden` is set.
 
+Role actions resolve semantic identity before visibility checks.
+
+Unknown or hidden visibility then blocks through the same actionability path as references and other locators.
+
 Text, label, placeholder, alt, and title queries collapse HTML whitespace before matching.
 
 Their default matching uses a case-insensitive substring. `--exact` uses normalized, case-sensitive equality.
@@ -245,6 +251,8 @@ Positioned CSS locators apply their position before collection. Their collection
 ### While running
 
 Each action resolves again when its request executes. It does not retain a prior match.
+
+References, generic locators, and role targets become one `ResolvedActionTarget` before checks or effects run.
 
 Resolution and collection do not fetch, capture a snapshot, run scripts, wait, or retry.
 
@@ -379,6 +387,16 @@ Its effect contains text, traversal, navigation, ignored input Enter, native act
 Callers drain native event records separately through `TakeDomEvents` or session `events`.
 
 Role-specific action requests return the same state through role-specific reply types.
+
+`PerformAction` returns one `ActionResult` for every supported target and action kind.
+
+The result contains the requested and resolved target, passed checks, typed effect, and before-and-after document generations.
+
+Local effects keep both generations equal. Navigation returns the replacement document and advances the generation.
+
+After resolution, a blocked or unsupported verified action returns `SessionError::ActionFailed` with the target and passed checks.
+
+The error also returns the failed check when one exists, a precise reason, and before-and-after document generations.
 
 Session text actions print only normalized descendant text.
 

@@ -130,6 +130,12 @@ References use document-wide ordinals. Scoped snapshots may contain gaps. Anothe
 
 **Stable state.** Supported static evidence that target geometry cannot change during one synchronous action. Motion declarations block this evidence.
 
+**Verified action.** One typed request that resolves a reference, generic locator, or role target before applying an action.
+
+**Action result.** The resolved target, passed checks, committed effect, and document generation returned by a verified action.
+
+**Document generation.** A monotonically increasing identity for one loaded document. Navigation installs the next generation and invalidates older references.
+
 **Action point.** The center of the target's supported viewport intersection after prospective automatic scrolling.
 
 **Receives-events check.** A static hit test over supported normal-flow and fixed boxes at the action point.

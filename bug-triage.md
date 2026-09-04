@@ -1,6 +1,6 @@
 # Bug triage
 
-Evidence date: 1 September 2026.
+Evidence date: 3 September 2026.
 
 Six open compatibility defects affect controller comparisons. The current browser.jr runtime slice passes its automated checks.
 
@@ -110,3 +110,4 @@ browser.jr uses Chrome's target-level transition order. Complete user-agent even
 | BJR-006 | Playwright backends disagreed on read-only `keyboard.type()` input events. | browser.jr records only the measured shared sequence for read-only type. | Playwright 1.62.1 Chromium added `beforeinput` for printable ASCII. Firefox and WebKit omitted it. Non-ASCII events also differed, 2026-08-31. |
 | BJR-007 | Playwright backends disagreed after held radio or focus edge cases. | browser.jr records shared checked-radio key phases. It requires the original target to own focus at key-up. | Chromium and WebKit omitted checked-radio `click`; Firefox included it. Chromium canceled after focus left and returned; Firefox and WebKit activated, 2026-08-31. |
 | BJR-008 | `agent-browser` Lightpanda omitted held button `Space` activation. | browser.jr follows the shared Playwright native timing and keeps the Lightpanda difference visible. | `agent-browser` 0.32.4 recorded only `keydown` and `keyup`. Playwright Chromium, Firefox, and WebKit recorded keypress and key-up activation, 2026-08-31. |
+| BJR-014 | Semantic locators and snapshot references applied different actionability evidence. | Every action target now resolves into one internal target before using one check and mutation path. | Package tests matched target, check, reason, and generation across reference, generic locator, and role targets, 2026-09-03. |

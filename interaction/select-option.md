@@ -89,7 +89,7 @@ An option is disabled when it has `disabled`. A disabled ancestor `<optgroup>` a
 
 A disabled `<select>` remains readable but rejects selection changes.
 
-Locator selection also requires supported visible evidence before mutation.
+Every reference and locator selection requires supported visible evidence before mutation.
 
 The action keeps the current reference usable. It changes no other control.
 

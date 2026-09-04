@@ -1,14 +1,16 @@
 # browser.jr
 
-A small browser for agents, built in Rust.
+A Rust browser engine rethought around agents.
 
-browser.jr is a proof of concept. It explores how agents can inspect a page, control it, and verify their work without a full consumer browser.
+browser.jr is my attempt to build a browser that feels native to agents. Instead of wrapping a consumer browser, I'm rebuilding the stack in Rust: HTML parsing, CSS, layout, rasterization, interactions, and the evidence an agent needs to verify its work.
 
-Playwright and `agent-browser` compatibility are goals. Neither protocol is complete today.
+It's still a proof of concept. Today it handles a deliberate slice of the web with static HTML, a small CSS and layout engine, agent-oriented snapshots, typed actions, and software-rendered screenshots. It has no JavaScript runtime or browser window.
 
-## Try it
+Playwright and `agent-browser` compatibility remain goals. Neither protocol is complete today.
 
-Open a public or local web page:
+## Start with a page
+
+Run the design lint against a public or local page:
 
 ```sh
 ./browser.jr lint https://example.com
@@ -53,7 +55,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
   | ./browser.jr --allow-loopback session
 ```
 
-## What works
+## What works today
 
 - bounded public HTTP and HTTPS loading, with explicit loopback access and private-network blocking
 - static HTML parsing with normalized ancestry
@@ -61,6 +63,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - role locators with current HTML roles, non-presentational descendant image `alt` text, description, state, level, and accessibility-hidden filters
 - text, label, attribute, CSS, and XPath locators
 - direct CSS and XPath targets for implemented session actions, reads, and counts
+- typed verified actions with one target path, passed checks, effects, and document generations
 - text fill, append, focused keyboard insertion, held-key modifiers, phase-correct native `Space`, sequential focus, bounded caret editing, native activation, link navigation, and visible-target hover state
 - a data-minimized native event transcript for supported text, keyboard, select, pointer, mouse, focus, click, check, and uncheck action phases
 - bounded same-context native GET form submission through submitters and implicit text-control `Enter`
@@ -83,7 +86,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - bounded solid-box paint lists, source-over RGBA compositing, and PNG output
 - lazy software-rasterizer activation with image and clipped-paint work limits
 
-## What does not work
+## Current limits
 
 - JavaScript
 - DOM event delivery to page scripts, complete ancestor dispatch, or complete pointer, focus, and keyboard event metadata
@@ -95,6 +98,8 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - a browser window
 
 Unsupported evidence blocks a check. browser.jr does not turn missing evidence into a pass.
+
+When browser.jr cannot support a required check, it stops instead of guessing.
 
 ## Safety
 
@@ -119,9 +124,9 @@ pnpm browsers:install
 pnpm bench
 ```
 
-## Benchmark snapshot
+## What the benchmark measures
 
-This benchmark compares browser.jr with six other browser-control paths over the same local two-page fixture:
+browser.jr is fast inside its current static HTML boundary. This benchmark compares it with six other browser-control paths over the same local two-page fixture:
 
 - browser.jr through one persistent release CLI session
 - Chrome, Firefox, and WebKit through Playwright
@@ -169,7 +174,7 @@ These numbers measure browser-control latency, not rendering-engine speed or bro
 - [`bug-triage.md`](bug-triage.md) records confirmed conflicts.
 - [`benchmarks/README.md`](benchmarks/README.md) defines cross-engine correctness and latency checks.
 
-Evidence date: 1 September 2026.
+Evidence date: 3 September 2026.
 
 ## Coverage
 

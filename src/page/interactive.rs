@@ -639,21 +639,6 @@ impl InteractiveElementSource {
         })
     }
 
-    pub(crate) fn select_value(&mut self, value: &str) -> Result<&str, SelectValueError> {
-        match &mut self.control_state {
-            ControlState::Select(state) => state.select_value(value),
-            ControlState::Text(_)
-            | ControlState::Checkbox(_)
-            | ControlState::Radio(_)
-            | ControlState::Unavailable => Err(SelectValueError::Unsupported {
-                reason: format!(
-                    "select execution for role {} is not implemented",
-                    self.semantics.role
-                ),
-            }),
-        }
-    }
-
     pub(crate) fn select_options(
         &mut self,
         targets: &NonEmpty<SelectOptionTarget>,
@@ -953,15 +938,6 @@ impl SelectState {
         }
     }
 
-    fn select_value(&mut self, value: &str) -> Result<&str, SelectValueError> {
-        match self {
-            Self::Editable(select) => select.select_value(value),
-            Self::NonEditable { reason, .. } => Err(SelectValueError::Blocked {
-                reason: reason.clone(),
-            }),
-        }
-    }
-
     fn select_options(
         &mut self,
         targets: &NonEmpty<SelectOptionTarget>,
@@ -994,12 +970,6 @@ impl NativeSelect {
                 (!option.disabled).then(|| option.value.clone())
             })
             .collect()
-    }
-
-    fn select_value(&mut self, value: &str) -> Result<&str, SelectValueError> {
-        let targets = NonEmpty::one(SelectOptionTarget::Value(value.to_owned()));
-        self.select_options(&targets)?;
-        Ok(self.value())
     }
 
     fn select_options(

@@ -59,6 +59,8 @@ An unknown or stale session label reports invalid input. Neither path changes th
 
 browser.jr checks the referenced element's fill capability.
 
+Reference and locator fills require the same supported visible evidence before checking editability.
+
 [Value inspection](../inspection/read-value.md) defines supported text controls. Disabled and read-only controls expose values but reject fill.
 
 ### While running
