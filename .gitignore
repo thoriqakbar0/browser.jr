@@ -2,3 +2,6 @@
 /benchmarks/node_modules/
 /benchmarks/results/*
 !/benchmarks/results/README.md
+.pi
+.codex
+/lat.md/.cache/

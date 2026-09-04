@@ -1,5 +1,7 @@
 This directory defines the high-level concepts, business logic, and architecture of this project using markdown. It is managed by [lat.md](https://www.npmjs.com/package/lat.md) — a tool that anchors source code to these definitions. Install the `lat` command with `npm i -g lat.md` and run `lat --help`.
 
+- [[landing-page]] — The static product page and its evidence boundary.
+
 # Verified action result
 
 A verified action reports the resolved target, applied checks, committed effect, and document generation in one typed result.

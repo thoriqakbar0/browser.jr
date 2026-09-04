@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="browser.jr is a Rust browser engine proof of concept built around agent control and verifiable evidence."
+    />
+    <title>browser.jr — a browser engine for agents</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./script.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="hero" id="top">
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a class="wordmark" href="#top" aria-label="browser.jr home">browser.jr</a>
+        <div class="nav-meta" aria-label="Project metadata">
+          <span>Engine / 0.1.0</span>
+          <span>Rust / proof of concept</span>
+        </div>
+        <div class="nav-links">
+          <a href="https://github.com/thoriqakbar0/browser.jr">GitHub</a>
+          <a href="https://github.com/thoriqakbar0/browser.jr#browserjr">Documentation</a>
+          <a href="#benchmark">Benchmarks</a>
+        </div>
+      </nav>
+
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <h1>A browser engine<br />for agent swarm</h1>
+          <p>
+            Remaking a browser engine from first principles in Rust, built for small,
+            inspectable workers.
+          </p>
+          <div class="hero-actions">
+            <a class="button" href="https://github.com/thoriqakbar0/browser.jr">View on GitHub</a>
+            <a class="button" href="https://github.com/thoriqakbar0/browser.jr#start-with-a-page">Read the docs</a>
+          </div>
+        </div>
+
+        <div class="engine-map" aria-label="browser.jr engine path">
+          <div class="map-stage map-dom">
+            <span>DOM tree</span>
+            <div class="tree">
+              <b>&lt;html&gt;</b>
+              <div><b>&lt;head&gt;</b><b>&lt;body&gt;</b></div>
+              <div><b>&lt;nav&gt;</b><b>&lt;main&gt;</b></div>
+              <div><b>&lt;h1&gt;</b><b>&lt;p&gt;</b><b>&lt;a&gt;</b></div>
+            </div>
+          </div>
+          <div class="map-stage map-layout">
+            <span>Layout boxes</span>
+            <div class="wire-page">
+              <i></i><i></i><i></i><i></i>
+            </div>
+          </div>
+          <div class="map-stage map-paint">
+            <span>Paint order</span>
+            <ol>
+              <li>background</li>
+              <li>border</li>
+              <li>content</li>
+              <li>evidence</li>
+            </ol>
+          </div>
+          <div class="engine-status"><span>Engine status</span><i aria-hidden="true"></i></div>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="swarm-section" aria-labelledby="swarm-title">
+        <div class="swarm-heading">
+          <h2 id="swarm-title">One small engine for brave agents.</h2>
+          <p>One page per process. The swarm collects typed results.</p>
+        </div>
+
+        <div class="swarm-diagram" aria-label="Coordinator and browser worker architecture">
+          <div class="coordinator-node">
+            <span>Coordinator</span>
+            <strong>Task queue</strong>
+            <code>URL + action plan</code>
+          </div>
+          <div class="swarm-bus"><span>dispatch</span><i></i><span>collect</span></div>
+          <div class="worker-grid">
+            <article><span>Worker / 01</span><strong>browser.jr</strong><code>session stdin</code></article>
+            <article><span>Worker / 02</span><strong>browser.jr</strong><code>session stdin</code></article>
+            <article><span>Worker / 03</span><strong>browser.jr</strong><code>session stdin</code></article>
+          </div>
+          <div class="result-bus"><code>snapshot</code><code>typed effect</code><code>document generation</code></div>
+        </div>
+
+        <div class="swarm-facts">
+          <article><span>macOS arm64 release</span><strong>3.2 MiB</strong></article>
+          <article><span>Worker boundary</span><strong>1 process</strong></article>
+          <article><span>Evidence path</span><strong>Structured</strong></article>
+          <article><span>Current boundary</span><strong>Static web</strong></article>
+        </div>
+      </section>
+
+      <section class="pipeline-section" aria-labelledby="pipeline-title">
+        <h2 id="pipeline-title">How browser.jr builds a page.</h2>
+        <div class="engine-details">
+          <article>
+            <div><span>01 / source</span><h3>How the DOM tree is built</h3></div>
+            <p>
+              <code>html5ever</code> drives a custom <code>TreeSink</code>. Nodes keep children
+              and weak parent links, then flatten into ordered elements.
+            </p>
+            <a href="https://github.com/thoriqakbar0/browser.jr/blob/main/src/page/dom.rs">src/page/dom.rs ↗</a>
+          </article>
+          <article>
+            <div><span>02 / cascade</span><h3>How styles become computed values</h3></div>
+            <p>
+              Rules match each element. Specificity and source order resolve conflicts;
+              inline styles run last.
+            </p>
+            <a href="https://github.com/thoriqakbar0/browser.jr/blob/main/src/page/style.rs">src/page/style.rs ↗</a>
+          </article>
+          <article>
+            <div><span>03 / geometry</span><h3>How layout boxes are computed</h3></div>
+            <p>
+              Document-order flow resolves containing blocks, margins, borders, padding,
+              widths, and viewport-relative boxes.
+            </p>
+            <a href="https://github.com/thoriqakbar0/browser.jr/blob/main/src/page.rs#L537">src/page.rs ↗</a>
+          </article>
+          <article>
+            <div><span>04 / pixels</span><h3>How paint stays bounded</h3></div>
+            <p>
+              Supported boxes become clipped fill and border commands. Unsupported paint
+              blocks capture.
+            </p>
+            <a href="https://github.com/thoriqakbar0/browser.jr/blob/main/src/page/paint.rs">src/page/paint.rs ↗</a>
+          </article>
+          <article>
+            <div><span>05 / proof</span><h3>How actions return evidence</h3></div>
+            <p>
+              Snapshots bind references to a document epoch. Actions return checks, effects,
+              and before/after generations.
+            </p>
+            <a href="https://github.com/thoriqakbar0/browser.jr/blob/main/src/snapshot.rs">src/snapshot.rs ↗</a>
+          </article>
+        </div>
+        <div class="compatibility-strip" aria-label="Compatibility targets">
+          <div class="compatibility-intro">
+            <p>Compatibility targets</p>
+          </div>
+          <div class="compatibility-links">
+            <a href="https://playwright.dev/">
+              <span>01 / protocol target</span>
+              <strong>Playwright</strong>
+              <i aria-hidden="true">↗</i>
+            </a>
+            <a href="https://github.com/vercel-labs/agent-browser">
+              <span>02 / CLI target</span>
+              <strong>agent-browser</strong>
+              <i aria-hidden="true">↗</i>
+            </a>
+          </div>
+          <p class="compatibility-status"><i aria-hidden="true"></i>Adapters are not complete</p>
+        </div>
+      </section>
+
+      <section class="session-section" aria-labelledby="session-title">
+        <div class="section-heading-row">
+          <h2 id="session-title">One session. Typed actions. Visible proof.</h2>
+          <span>Line-oriented session / local page</span>
+        </div>
+        <div class="terminal" role="region" aria-label="Example browser.jr session" tabindex="0">
+          <div class="terminal-row"><span>01</span><code>printf 'open http://localhost:3000\nsnapshot\nget title\nexit\n' \</code><output>input queued</output></div>
+          <div class="terminal-row"><span>02</span><code>&nbsp;&nbsp;| ./browser.jr --allow-loopback session</code><output>session started</output></div>
+          <div class="terminal-row"><span>03</span><code>open http://localhost:3000</code><output>document loaded</output></div>
+          <div class="terminal-row"><span>04</span><code>snapshot</code><output>accessible tree returned</output></div>
+          <div class="terminal-row"><span>05</span><code>get title</code><output>title returned</output></div>
+          <div class="terminal-row"><span>06</span><code>exit</code><output>session closed</output></div>
+        </div>
+      </section>
+
+      <section class="benchmark-section" id="benchmark" aria-labelledby="benchmark-title">
+        <div class="benchmark-heading">
+          <h2 id="benchmark-title">Measured as a control path.</h2>
+          <p>
+            Apple M3, one warmup, ten measured samples. Every supported sample passed.
+          </p>
+        </div>
+
+        <div class="benchmark-table-wrap" tabindex="0" role="region" aria-label="Full workflow benchmark results">
+          <table class="benchmark-table">
+            <thead><tr><th>Adapter</th><th>Control path</th><th>Median</th><th>p95</th></tr></thead>
+            <tbody>
+              <tr class="benchmark-primary"><td>browser.jr</td><td>session stdin</td><td>22.55 ms</td><td>46.39 ms</td></tr>
+              <tr><td>Chrome</td><td>Playwright</td><td>375.36 ms</td><td>559.17 ms</td></tr>
+              <tr><td>Firefox</td><td>Playwright</td><td>643.46 ms</td><td>813.90 ms</td></tr>
+              <tr><td>WebKit</td><td>Playwright</td><td>681.95 ms</td><td>1,348.91 ms</td></tr>
+              <tr><td>Lightpanda</td><td>Puppeteer / CDP</td><td>492.45 ms</td><td>1,461.68 ms</td></tr>
+              <tr><td>agent-browser / Chrome</td><td>CLI + daemon</td><td>7,366.00 ms</td><td>16,838.12 ms</td></tr>
+              <tr><td>agent-browser / Lightpanda</td><td>CLI + daemon</td><td>1,693.90 ms</td><td>3,392.81 ms</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="benchmark-method">
+          <article><span>01</span><h3>Same fixture</h3><p>One deterministic loopback page.</p></article>
+          <article><span>02</span><h3>Warm session</h3><p>One reused session per adapter.</p></article>
+          <article><span>03</span><h3>Timed work</h3><p>Setup excluded. Engines run sequentially.</p></article>
+          <article><span>04</span><h3>Checked result</h3><p>Expected output required for every sample.</p></article>
+        </div>
+
+        <div class="benchmark-foot">
+          <p>
+            Full workflow: navigate, snapshot, mutate three controls, read state, follow a link,
+            and read its title. Browser-control timings, not engine rankings.
+          </p>
+          <a class="button button-dark" href="https://github.com/thoriqakbar0/browser.jr/blob/main/benchmarks/results/README.md">Read the complete result</a>
+        </div>
+      </section>
+
+      <section class="limits-section" aria-labelledby="limits-title">
+        <h2 id="limits-title">Deliberately small.</h2>
+        <div class="limits-grid">
+          <article>
+            <h3>Works today</h3>
+            <ul>
+              <li>Bounded public HTTP and HTTPS loading</li>
+              <li>Static HTML and a small CSS and layout engine</li>
+              <li>Role, text, CSS, XPath, and attribute locators</li>
+              <li>Typed actions with checks, effects, and generations</li>
+              <li>Agent snapshots and software-rendered screenshots</li>
+            </ul>
+          </article>
+          <article>
+            <h3>Current limits</h3>
+            <ul>
+              <li>No JavaScript runtime</li>
+              <li>No complete DOM, CSS cascade, or layout engine</li>
+              <li>No complete browser paint or compositor</li>
+              <li>No Playwright or agent-browser protocol compatibility</li>
+              <li>No browser window</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div>
+        <a class="wordmark" href="#top">browser.jr</a>
+        <span class="footer-warning">Warning / proof of concept / static web only</span>
+      </div>
+      <nav aria-label="Footer navigation">
+        <a href="https://github.com/thoriqakbar0/browser.jr">GitHub</a>
+        <a href="https://github.com/thoriqakbar0/browser.jr#browserjr">Documentation</a>
+        <a href="#benchmark">Benchmarks</a>
+      </nav>
+      <span>© <span id="year">2026</span> browser.jr</span>
+    </footer>
+  </body>
+</html>

@@ -2,11 +2,11 @@
 
 A Rust browser engine rethought around agents.
 
-browser.jr is my attempt to build a browser that feels native to agents. Instead of wrapping a consumer browser, I'm rebuilding the stack in Rust: HTML parsing, CSS, layout, rasterization, interactions, and the evidence an agent needs to verify its work.
+browser.jr is my attempt to build a browser that feels native to agents and can run as isolated workers in a swarm. Instead of wrapping a consumer browser, I'm rebuilding the stack in Rust: HTML parsing, CSS, layout, rasterization, interactions, and the evidence an agent needs to verify its work.
 
 It's still a proof of concept. Today it handles a deliberate slice of the web with static HTML, a small CSS and layout engine, agent-oriented snapshots, typed actions, and software-rendered screenshots. It has no JavaScript runtime or browser window.
 
-Playwright and `agent-browser` compatibility remain goals. Neither protocol is complete today.
+[Playwright](https://playwright.dev/) and [`agent-browser`](https://github.com/vercel-labs/agent-browser) compatibility remain goals. Neither protocol is complete today.
 
 ## Start with a page
 
@@ -94,7 +94,7 @@ printf 'open http://localhost:3000\nscreenshot page.png\nexit\n' \
 - complete stacking, clipping, transformed geometry, or dynamic receives-events hit testing
 - text, image, native-control, stylesheet, clip, effect, or complete browser paint
 - a separate screenshot helper process or complete browser compositor
-- Playwright or `agent-browser` protocol compatibility
+- [Playwright](https://playwright.dev/) or [`agent-browser`](https://github.com/vercel-labs/agent-browser) protocol compatibility
 - a browser window
 
 Unsupported evidence blocks a check. browser.jr does not turn missing evidence into a pass.
@@ -113,6 +113,12 @@ The crate does not yet use `#![forbid(unsafe_code)]`. Dependencies keep their ow
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets
+```
+
+Preview the static landing page:
+
+```sh
+python3 -m http.server 4173 --directory website
 ```
 
 Run the cross-engine browser-control benchmark separately:
