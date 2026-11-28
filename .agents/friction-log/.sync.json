@@ -1,0 +1,17 @@
+{
+  "mirrors": [
+    {
+      "issue": "thoriqakbar0/browser.jr#10",
+      "path": ".agents/friction-log/20260831213211-compiled-cli-navigation/friction.md"
+    },
+    {
+      "issue": "thoriqakbar0/browser.jr#15",
+      "path": ".agents/friction-log/20260831220233-readme-benchmark-values/friction.md"
+    },
+    {
+      "issue": "thoriqakbar0/browser.jr#4",
+      "path": ".agents/friction-log/20260831095549-semantic-and-reference/friction.md"
+    }
+  ],
+  "version": 1
+}
